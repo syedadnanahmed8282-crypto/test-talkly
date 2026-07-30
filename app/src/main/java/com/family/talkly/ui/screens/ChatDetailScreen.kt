@@ -88,6 +88,8 @@ import com.family.talkly.ui.theme.WhatsappDarkSurface
 import com.family.talkly.ui.theme.WhatsappLightGreen
 import com.family.talkly.ui.components.WallpaperSelectionDialog
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -99,6 +101,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -132,6 +135,7 @@ import androidx.compose.ui.window.Dialog
 import com.family.talkly.data.models.CallType
 import com.family.talkly.data.models.ChatMessage
 import com.family.talkly.data.models.FamilyMember
+import com.family.talkly.data.models.MessageRequest
 import com.family.talkly.data.models.MessageType
 import com.family.talkly.ui.components.ContactProfileDetailsDialog
 import com.family.talkly.ui.components.FullMediaViewerDialog
@@ -174,7 +178,14 @@ fun ChatDetailScreen(
     onReadMessages: () -> Unit = {},
     isInitiallyBlocked: Boolean = false,
     onBlockUser: (() -> Unit)? = null,
-    onUnblockUser: (() -> Unit)? = null
+    onUnblockUser: (() -> Unit)? = null,
+    isMutualContact: Boolean = true,
+    pendingMessageRequest: MessageRequest? = null,
+    isRequestSentByMe: Boolean = false,
+    onSendMessageRequest: (initialText: String) -> Unit = {},
+    onAcceptMessageRequest: (request: MessageRequest) -> Unit = {},
+    onDeclineMessageRequest: (requestId: String) -> Unit = {},
+    onClearChatHistory: () -> Unit = {}
 ) {
     var textInput by remember { mutableStateOf("") }
     var showAttachmentDialog by remember { mutableStateOf(false) }
@@ -545,8 +556,13 @@ fun ChatDetailScreen(
             onStartChat = { showContactProfile = false },
             onStartCall = { _, callType ->
                 showContactProfile = false
-                onStartCall(callType)
-            }
+                if (!isMutualContact) {
+                    Toast.makeText(context, "Cannot call: Message request must be accepted first", Toast.LENGTH_SHORT).show()
+                } else {
+                    onStartCall(callType)
+                }
+            },
+            isMutualContact = isMutualContact
         )
     }
 
@@ -693,8 +709,9 @@ fun ChatDetailScreen(
                 TextButton(
                     onClick = {
                         showClearChatConfirmDialog = false
+                        onClearChatHistory()
                         localClearedMessages = true
-                        Toast.makeText(context, "Chat messages cleared", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Chat messages permanently cleared", Toast.LENGTH_SHORT).show()
                     }
                 ) {
                     Text("Clear Chat", color = Color.Red, fontWeight = FontWeight.Bold)
@@ -791,7 +808,14 @@ fun ChatDetailScreen(
                                     .background(Color.White.copy(alpha = 0.2f), CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
-                                if (!member.avatarUrl.isNullOrBlank()) {
+                                if (!isMutualContact) {
+                                    Icon(
+                                        imageVector = Icons.Default.Lock,
+                                        contentDescription = "Masked Profile",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                } else if (!member.avatarUrl.isNullOrBlank()) {
                                     val mediaModel = remember(member.avatarUrl) {
                                         com.family.talkly.util.PhoneUtils.getCoilMediaModel(member.avatarUrl)
                                     }
@@ -830,6 +854,7 @@ fun ChatDetailScreen(
                                     }
                                 }
                                 val statusSubtext = when {
+                                    !isMutualContact -> "Message request required"
                                     !member.isRegisteredOnTalkly -> "User not registered on Talkly"
                                     isBlocked -> "Blocked"
                                     member.isTyping -> "typing..."
@@ -840,7 +865,7 @@ fun ChatDetailScreen(
                                     text = statusSubtext,
                                     fontSize = 11.sp,
                                     fontWeight = if (member.isTyping && !isBlocked) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (!member.isRegisteredOnTalkly || isBlocked) Color(0xFFFFCDD2) else if (member.isTyping) Color(0xFF25D366) else Color.White.copy(alpha = 0.8f)
+                                    color = if (!isMutualContact || !member.isRegisteredOnTalkly || isBlocked) Color(0xFFFFCDD2) else if (member.isTyping) Color(0xFF25D366) else Color.White.copy(alpha = 0.8f)
                                 )
                             }
                         }
@@ -867,23 +892,33 @@ fun ChatDetailScreen(
                             )
                         }
                         IconButton(onClick = {
-                            if (member.isRegisteredOnTalkly) onStartCall(CallType.AUDIO)
-                            else Toast.makeText(context, "User not registered on Talkly", Toast.LENGTH_SHORT).show()
+                            if (!isMutualContact) {
+                                Toast.makeText(context, "Cannot call: Message request must be accepted first", Toast.LENGTH_SHORT).show()
+                            } else if (member.isRegisteredOnTalkly) {
+                                onStartCall(CallType.AUDIO)
+                            } else {
+                                Toast.makeText(context, "User not registered on Talkly", Toast.LENGTH_SHORT).show()
+                            }
                         }) {
                             Icon(
                                 imageVector = Icons.Default.Call,
                                 contentDescription = "Audio Call",
-                                tint = if (member.isRegisteredOnTalkly) Color.White else Color.White.copy(alpha = 0.4f)
+                                tint = if (member.isRegisteredOnTalkly && isMutualContact) Color.White else Color.White.copy(alpha = 0.4f)
                             )
                         }
                         IconButton(onClick = {
-                            if (member.isRegisteredOnTalkly) onStartCall(CallType.VIDEO)
-                            else Toast.makeText(context, "User not registered on Talkly", Toast.LENGTH_SHORT).show()
+                            if (!isMutualContact) {
+                                Toast.makeText(context, "Cannot call: Message request must be accepted first", Toast.LENGTH_SHORT).show()
+                            } else if (member.isRegisteredOnTalkly) {
+                                onStartCall(CallType.VIDEO)
+                            } else {
+                                Toast.makeText(context, "User not registered on Talkly", Toast.LENGTH_SHORT).show()
+                            }
                         }) {
                             Icon(
                                 imageVector = Icons.Default.Videocam,
                                 contentDescription = "Video Call",
-                                tint = if (member.isRegisteredOnTalkly) Color.White else Color.White.copy(alpha = 0.4f)
+                                tint = if (member.isRegisteredOnTalkly && isMutualContact) Color.White else Color.White.copy(alpha = 0.4f)
                             )
                         }
                         Box {
@@ -1627,6 +1662,121 @@ fun ChatDetailScreen(
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold
                         )
+                    }
+                }
+            } else if (!isMutualContact) {
+                Surface(
+                    color = Color(0xFFF0F2F5),
+                    tonalElevation = 6.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        if (isRequestSentByMe) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.HourglassTop,
+                                    contentDescription = null,
+                                    tint = WhatsappTeal,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Message Request Sent",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = Color(0xFF111B21)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Waiting for ${member.name} to accept your request and save your contact.",
+                                fontSize = 13.sp,
+                                color = Color.Gray,
+                                textAlign = TextAlign.Center
+                            )
+                        } else if (pendingMessageRequest != null) {
+                            Text(
+                                text = "${member.name} sent you a message request",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = Color(0xFF111B21)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "\"${pendingMessageRequest.initialMessage}\"",
+                                fontSize = 13.sp,
+                                color = Color.DarkGray,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly
+                            ) {
+                                Button(
+                                    onClick = { onAcceptMessageRequest(pendingMessageRequest) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = WhatsappGreen),
+                                    shape = RoundedCornerShape(20.dp)
+                                ) {
+                                    Text("Accept & Save Contact", color = Color.White, fontWeight = FontWeight.Bold)
+                                }
+                                OutlinedButton(
+                                    onClick = { onDeclineMessageRequest(pendingMessageRequest.id) },
+                                    shape = RoundedCornerShape(20.dp)
+                                ) {
+                                    Text("Decline", color = Color.Red, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        } else {
+                            var requestInputText by remember { mutableStateOf("Hello, I would like to connect on Talkly!") }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = null,
+                                    tint = WhatsappTeal,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Send Message Request",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = Color(0xFF111B21)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "You and ${member.name} are not mutual contacts. Send a message request to unlock chat, calls, and status updates.",
+                                fontSize = 12.sp,
+                                color = Color.Gray,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            OutlinedTextField(
+                                value = requestInputText,
+                                onValueChange = { requestInputText = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                placeholder = { Text("Write message request...") },
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Button(
+                                onClick = { onSendMessageRequest(requestInputText) },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = WhatsappTeal),
+                                shape = RoundedCornerShape(20.dp)
+                            ) {
+                                Icon(imageVector = Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Send Message Request", color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
                 }
             } else if (isUploadingAudio) {

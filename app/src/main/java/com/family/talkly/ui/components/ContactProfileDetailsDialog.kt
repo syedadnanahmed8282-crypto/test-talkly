@@ -56,17 +56,20 @@ import com.family.talkly.data.models.FamilyMember
 import com.family.talkly.ui.theme.WhatsappGreen
 import com.family.talkly.ui.theme.WhatsappTeal
 
+import androidx.compose.material.icons.filled.Lock
+
 @Composable
 fun ContactProfileDetailsDialog(
     member: FamilyMember,
     onDismiss: () -> Unit,
     onStartChat: (FamilyMember) -> Unit,
     onStartCall: (FamilyMember, CallType) -> Unit,
-    onDeleteContact: ((String) -> Unit)? = null
+    onDeleteContact: ((String) -> Unit)? = null,
+    isMutualContact: Boolean = true
 ) {
     var showFullAvatarViewer by remember { mutableStateOf(false) }
 
-    if (showFullAvatarViewer) {
+    if (showFullAvatarViewer && isMutualContact) {
         Dialog(
             onDismissRequest = { showFullAvatarViewer = false },
             properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -173,11 +176,18 @@ fun ContactProfileDetailsDialog(
                         modifier = Modifier
                             .size(106.dp)
                             .clip(CircleShape)
-                            .background(WhatsappTeal)
-                            .clickable { showFullAvatarViewer = true },
+                            .background(if (isMutualContact) WhatsappTeal else Color.Gray)
+                            .clickable { if (isMutualContact) showFullAvatarViewer = true },
                         contentAlignment = Alignment.Center
                     ) {
-                        if (member.avatarUrl != null) {
+                        if (!isMutualContact) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = "Locked Profile Picture",
+                                tint = Color.White,
+                                modifier = Modifier.size(48.dp)
+                            )
+                        } else if (member.avatarUrl != null) {
                             val mediaModel = remember(member.avatarUrl) {
                                 com.family.talkly.util.PhoneUtils.getCoilMediaModel(member.avatarUrl)
                             }
@@ -201,7 +211,7 @@ fun ContactProfileDetailsDialog(
                     Box(
                         modifier = Modifier
                             .size(24.dp)
-                            .background(if (member.isRecentlyActive()) Color(0xFF25D366) else Color.Gray, CircleShape)
+                            .background(if (isMutualContact && member.isRecentlyActive()) Color(0xFF25D366) else Color.Gray, CircleShape)
                             .border(3.dp, Color.White, CircleShape)
                             .align(Alignment.BottomEnd)
                     )
@@ -421,10 +431,10 @@ fun ContactProfileDetailsDialog(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = member.status,
+                                text = if (isMutualContact) member.status else "Message request required to view bio",
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Medium,
-                                color = Color(0xFF111B21)
+                                color = if (isMutualContact) Color(0xFF111B21) else Color.Gray
                             )
                         }
                     }

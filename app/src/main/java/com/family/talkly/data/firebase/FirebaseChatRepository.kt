@@ -23,10 +23,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+import com.family.talkly.data.models.MessageRequest
 import com.family.talkly.data.models.StatusItem
 import com.family.talkly.data.models.UserStatusGroup
 import com.family.talkly.data.models.StatusViewer
 import com.family.talkly.data.models.StatusLiker
+import com.family.talkly.util.PhoneUtils
 
 class FirebaseChatRepository(private val context: Context) {
 
@@ -44,12 +46,22 @@ class FirebaseChatRepository(private val context: Context) {
     private var membersListener: ListenerRegistration? = null
     private var messagesListener: ListenerRegistration? = null
     private var statusesListener: ListenerRegistration? = null
+    private var messageRequestsListener: ListenerRegistration? = null
+    private var contactsSavedMeListener: ListenerRegistration? = null
     private var currentSyncedUserId: String? = null
     private val contactPrefs = context.getSharedPreferences(CONTACTS_PREFS, Context.MODE_PRIVATE)
 
     // Real-time family members presence and status
     private val _familyMembers = MutableStateFlow<List<FamilyMember>>(emptyList())
     val familyMembers: StateFlow<List<FamilyMember>> = _familyMembers.asStateFlow()
+
+    // Message Requests StateFlow
+    private val _messageRequests = MutableStateFlow<List<MessageRequest>>(emptyList())
+    val messageRequests: StateFlow<List<MessageRequest>> = _messageRequests.asStateFlow()
+
+    // Set of UIDs or phone suffixes of users who saved current user in their contacts
+    private val _contactsWhoSavedMe = MutableStateFlow<Set<String>>(emptySet())
+    val contactsWhoSavedMe: StateFlow<Set<String>> = _contactsWhoSavedMe.asStateFlow()
 
     // Blocked Users state
     private val _blockedUserIds = MutableStateFlow<Set<String>>(emptySet())
@@ -370,15 +382,101 @@ class FirebaseChatRepository(private val context: Context) {
     }
 
     fun deleteContact(memberId: String) {
-        val updatedList = _familyMembers.value.filter { it.id != memberId }
+        val canonicalId = getCanonicalMemberId(memberId)
+        val targetMember = _familyMembers.value.firstOrNull {
+            it.id == memberId || it.id == canonicalId || it.firebaseUid == memberId || it.firebaseUid == canonicalId
+        }
+        val targetPhone = targetMember?.phone ?: if (memberId.startsWith("+") || memberId.all { it.isDigit() }) memberId else ""
+        val targetSuffix = PhoneUtils.extractPhoneSuffix(targetPhone)
+        val targetFirebaseUid = targetMember?.firebaseUid ?: ""
+
+        // 1. Purge chat history and media for this contact permanently
+        deleteChatHistory(memberId)
+
+        // 2. Remove contact from _familyMembers and invalidate/purge local contact cache
+        val updatedList = _familyMembers.value.filter { member ->
+            member.id != memberId &&
+            member.id != canonicalId &&
+            (targetFirebaseUid.isBlank() || member.firebaseUid != targetFirebaseUid) &&
+            (targetSuffix.isBlank() || PhoneUtils.extractPhoneSuffix(member.phone) != targetSuffix)
+        }
         setFamilyMembersWithDeduplication(updatedList)
         saveContactsToPrefs()
 
+        // 3. Delete from Firestore 'family_members'
         try {
             firestore?.collection("family_members")?.document(memberId)?.delete()
+            if (canonicalId != memberId) {
+                firestore?.collection("family_members")?.document(canonicalId)?.delete()
+            }
+            if (targetFirebaseUid.isNotBlank()) {
+                firestore?.collection("family_members")?.document(targetFirebaseUid)?.delete()
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "Error deleting contact from Firestore: ${e.message}")
+            Log.w(TAG, "Error deleting contact from Firestore family_members: ${e.message}")
         }
+
+        // 4. Delete contact record from Firestore 'users/{uid}/contacts'
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val currentUid = currentSyncedUserId
+            ?: sessionPrefs.getString("user_uid", null)
+            ?: fallbackPrefs.getString("user_uid", null) ?: "self"
+        val myPhone = sessionPrefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", "") ?: ""
+        val mySuffix = PhoneUtils.extractPhoneSuffix(myPhone)
+
+        if (currentUid.isNotBlank() && currentUid != "self") {
+            try {
+                val userContactsRef = firestore?.collection("users")?.document(currentUid)?.collection("contacts")
+                userContactsRef?.document(memberId)?.delete()
+                if (canonicalId != memberId) userContactsRef?.document(canonicalId)?.delete()
+                if (targetSuffix.isNotBlank()) userContactsRef?.document(targetSuffix)?.delete()
+                if (targetFirebaseUid.isNotBlank()) userContactsRef?.document(targetFirebaseUid)?.delete()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error deleting contact from Firestore users/$currentUid/contacts: ${e.localizedMessage}")
+            }
+        }
+
+        // 5. PURGE & REVOKE MESSAGE REQUESTS to reset status to Message Request required
+        val remainingRequests = _messageRequests.value.filterNot { req ->
+            (req.senderId == memberId || req.senderId == canonicalId || (targetFirebaseUid.isNotBlank() && req.senderId == targetFirebaseUid) || (targetSuffix.isNotBlank() && req.senderPhoneSuffix == targetSuffix)) ||
+            (req.receiverId == memberId || req.receiverId == canonicalId || (targetFirebaseUid.isNotBlank() && req.receiverId == targetFirebaseUid) || (targetSuffix.isNotBlank() && req.receiverPhoneSuffix == targetSuffix))
+        }
+        _messageRequests.value = remainingRequests
+
+        // Remove from Firestore message_requests collection
+        try {
+            firestore?.collection("message_requests")
+                ?.get()
+                ?.addOnSuccessListener { snapshot ->
+                    for (doc in snapshot.documents) {
+                        val sId = doc.getString("senderId") ?: ""
+                        val rId = doc.getString("receiverId") ?: ""
+                        val sSuffix = doc.getString("senderPhoneSuffix") ?: ""
+                        val rSuffix = doc.getString("receiverPhoneSuffix") ?: ""
+
+                        val isSenderTarget = sId in listOf(memberId, canonicalId, targetFirebaseUid) || (targetSuffix.isNotBlank() && sSuffix == targetSuffix)
+                        val isReceiverTarget = rId in listOf(memberId, canonicalId, targetFirebaseUid) || (targetSuffix.isNotBlank() && rSuffix == targetSuffix)
+
+                        val isSenderMe = sId == currentUid || (mySuffix.isNotBlank() && sSuffix == mySuffix)
+                        val isReceiverMe = rId == currentUid || (mySuffix.isNotBlank() && rSuffix == mySuffix)
+
+                        if ((isSenderTarget && isReceiverMe) || (isReceiverTarget && isSenderMe)) {
+                            doc.reference.delete()
+                        }
+                    }
+                }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error deleting message requests from Firestore: ${e.localizedMessage}")
+        }
+
+        // 6. Purge from contactsWhoSavedMe
+        val currentSavedMe = _contactsWhoSavedMe.value.toMutableSet()
+        currentSavedMe.remove(memberId)
+        currentSavedMe.remove(canonicalId)
+        if (targetSuffix.isNotBlank()) currentSavedMe.remove(targetSuffix)
+        if (targetFirebaseUid.isNotBlank()) currentSavedMe.remove(targetFirebaseUid)
+        _contactsWhoSavedMe.value = currentSavedMe
     }
 
     fun clearDemoContacts() {
@@ -604,22 +702,100 @@ class FirebaseChatRepository(private val context: Context) {
     private fun String?.isNull_or_empty_str(s: String?): Boolean = s == null || s.isEmpty()
 
     fun deleteChatHistory(memberId: String) {
+        val canonicalId = getCanonicalMemberId(memberId)
+        val targetMember = _familyMembers.value.firstOrNull {
+            it.id == memberId || it.id == canonicalId || it.firebaseUid == memberId || it.firebaseUid == canonicalId
+        }
+        val targetPhone = targetMember?.phone ?: if (memberId.startsWith("+") || memberId.all { it.isDigit() }) memberId else ""
+        val targetSuffix = PhoneUtils.extractPhoneSuffix(targetPhone)
+        val targetFirebaseUid = targetMember?.firebaseUid ?: ""
+
+        // 1. Collect all messages for media deletion before removing from map
+        val messagesToDelete = mutableListOf<ChatMessage>()
+        _messagesMap.value[memberId]?.let { messagesToDelete.addAll(it) }
+        _messagesMap.value[canonicalId]?.let { messagesToDelete.addAll(it) }
+        if (targetFirebaseUid.isNotBlank()) {
+            _messagesMap.value[targetFirebaseUid]?.let { messagesToDelete.addAll(it) }
+        }
+        if (targetSuffix.isNotBlank()) {
+            _messagesMap.value[targetSuffix]?.let { messagesToDelete.addAll(it) }
+        }
+
+        // Delete associated media files from Firebase Storage bucket
+        messagesToDelete.distinctBy { it.id }.forEach { msg ->
+            val url = msg.mediaUrl
+            if (!url.isNullOrBlank() && (url.startsWith("http") || url.startsWith("gs://"))) {
+                try {
+                    val storageRef = com.google.firebase.storage.FirebaseStorage.getInstance().getReferenceFromUrl(url)
+                    storageRef.delete().addOnFailureListener { e ->
+                        Log.w(TAG, "Storage media delete failed: ${e.localizedMessage}")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing media URL for deletion: ${e.localizedMessage}")
+                }
+            }
+        }
+
+        // 2. Wipe from local messagesMap memory cache
         val updatedMap = _messagesMap.value.toMutableMap()
         updatedMap.remove(memberId)
+        updatedMap.remove(canonicalId)
+        if (targetFirebaseUid.isNotBlank()) updatedMap.remove(targetFirebaseUid)
+        if (targetSuffix.isNotBlank()) updatedMap.remove(targetSuffix)
         _messagesMap.value = updatedMap
 
-        try {
-            firestore?.collection("family_chats")
-                ?.document(memberId)
-                ?.collection("messages")
-                ?.get()
-                ?.addOnSuccessListener { snapshot ->
-                    for (doc in snapshot.documents) {
-                        doc.reference.delete()
+        // 3. Delete from Firestore collections 'family_chats'
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val currentUid = currentSyncedUserId
+            ?: sessionPrefs.getString("user_uid", null)
+            ?: fallbackPrefs.getString("user_uid", null) ?: "self"
+
+        val targetDocs = listOfNotNull(
+            memberId.ifBlank { null },
+            canonicalId.ifBlank { null },
+            targetFirebaseUid.ifBlank { null },
+            targetSuffix.ifBlank { null }
+        ).distinct()
+
+        targetDocs.forEach { docId ->
+            try {
+                firestore?.collection("family_chats")
+                    ?.document(docId)
+                    ?.collection("messages")
+                    ?.get()
+                    ?.addOnSuccessListener { snapshot ->
+                        for (doc in snapshot.documents) {
+                            doc.reference.delete()
+                        }
                     }
-                }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error clearing chat history in Firestore: ${e.localizedMessage}")
+            } catch (e: Exception) {
+                Log.w(TAG, "Error clearing family_chats/$docId/messages in Firestore: ${e.localizedMessage}")
+            }
+        }
+
+        // Also clear from current user's family_chats document
+        if (currentUid.isNotBlank() && currentUid != "self") {
+            try {
+                firestore?.collection("family_chats")
+                    ?.document(currentUid)
+                    ?.collection("messages")
+                    ?.get()
+                    ?.addOnSuccessListener { snapshot ->
+                        for (doc in snapshot.documents) {
+                            val rId = doc.getString("receiverId") ?: ""
+                            val sId = doc.getString("senderId") ?: ""
+                            val rSuffix = PhoneUtils.extractPhoneSuffix(doc.getString("receiverPhone") ?: "")
+                            val sSuffix = PhoneUtils.extractPhoneSuffix(doc.getString("senderPhone") ?: "")
+                            if (rId in targetDocs || sId in targetDocs ||
+                                (targetSuffix.isNotBlank() && (rSuffix == targetSuffix || sSuffix == targetSuffix))) {
+                                doc.reference.delete()
+                            }
+                        }
+                    }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error clearing currentUid messages in Firestore: ${e.localizedMessage}")
+            }
         }
     }
 
@@ -959,6 +1135,9 @@ class FirebaseChatRepository(private val context: Context) {
                     ?.collection("messages")
                     ?.addSnapshotListener { snapshot, error -> handleMessageSnapshot(snapshot, error) }
             }
+
+            // Realtime listener for message requests & mutual contact sync
+            setupFirestoreMessageRequestsListener(currentUserId)
         } catch (e: Exception) {
             Log.w(TAG, "Error starting realtime message sync: ${e.localizedMessage}")
         }
@@ -1723,22 +1902,330 @@ class FirebaseChatRepository(private val context: Context) {
         saveStatusesToPrefs()
     }
 
+    // --- MESSAGE REQUEST & STRICT MUTUAL CONTACT PRIVACY METHODS ---
+
+    fun setupFirestoreMessageRequestsListener(currentUid: String) {
+        if (currentUid.isBlank()) return
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val userPhone = sessionPrefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", "") ?: ""
+        val userSuffix = PhoneUtils.extractPhoneSuffix(userPhone)
+
+        try {
+            messageRequestsListener?.remove()
+            messageRequestsListener = firestore?.collection("message_requests")
+                ?.addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.w(TAG, "Message requests snapshot listener error: ${error.localizedMessage}")
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        val list = mutableListOf<MessageRequest>()
+                        for (doc in snapshot.documents) {
+                            try {
+                                val id = doc.id
+                                val sId = doc.getString("senderId") ?: ""
+                                val sPhone = doc.getString("senderPhone") ?: ""
+                                val sSuffix = doc.getString("senderPhoneSuffix") ?: PhoneUtils.extractPhoneSuffix(sPhone)
+                                val sName = doc.getString("senderName") ?: "Talkly User"
+                                val sAvatar = doc.getString("senderAvatar") ?: ""
+
+                                val rId = doc.getString("receiverId") ?: ""
+                                val rPhone = doc.getString("receiverPhone") ?: ""
+                                val rSuffix = doc.getString("receiverPhoneSuffix") ?: PhoneUtils.extractPhoneSuffix(rPhone)
+                                val rName = doc.getString("receiverName") ?: "Talkly User"
+
+                                val status = doc.getString("status") ?: "PENDING"
+                                val initialMsg = doc.getString("initialMessage") ?: "Hello, I would like to connect on Talkly!"
+                                val ts = doc.getLong("timestamp") ?: System.currentTimeMillis()
+
+                                val isForMe = rId == currentUid ||
+                                        (rSuffix.isNotBlank() && rSuffix == userSuffix) ||
+                                        (userPhone.isNotBlank() && rPhone == userPhone)
+
+                                val isByMe = sId == currentUid ||
+                                        (sSuffix.isNotBlank() && sSuffix == userSuffix) ||
+                                        (userPhone.isNotBlank() && sPhone == userPhone)
+
+                                if (isForMe || isByMe) {
+                                    list.add(
+                                        MessageRequest(
+                                            id = id,
+                                            senderId = sId,
+                                            senderPhone = sPhone,
+                                            senderPhoneSuffix = sSuffix,
+                                            senderName = sName,
+                                            senderAvatar = sAvatar,
+                                            receiverId = rId,
+                                            receiverPhone = rPhone,
+                                            receiverPhoneSuffix = rSuffix,
+                                            receiverName = rName,
+                                            status = status,
+                                            initialMessage = initialMsg,
+                                            timestamp = ts
+                                        )
+                                    )
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Error parsing message request doc: ${e.localizedMessage}")
+                            }
+                        }
+                        _messageRequests.value = list
+                    }
+                }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to setup message requests listener: ${e.localizedMessage}")
+        }
+
+        try {
+            contactsSavedMeListener?.remove()
+            contactsSavedMeListener = firestore?.collectionGroup("contacts")
+                ?.addSnapshotListener { snap, _ ->
+                    if (snap != null && !snap.isEmpty) {
+                        val savedMeSet = mutableSetOf<String>()
+                        for (doc in snap.documents) {
+                            val cSuffix = doc.getString("phoneSuffix") ?: ""
+                            val cPhone = doc.getString("phone") ?: ""
+                            if ((userSuffix.isNotBlank() && cSuffix == userSuffix) || (userPhone.isNotBlank() && cPhone == userPhone)) {
+                                val uploaderUid = doc.reference.parent.parent?.id ?: ""
+                                if (uploaderUid.isNotBlank()) {
+                                    savedMeSet.add(uploaderUid)
+                                }
+                            }
+                        }
+                        _contactsWhoSavedMe.value = savedMeSet
+                    }
+                }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to setup contactsSavedMeListener: ${e.localizedMessage}")
+        }
+    }
+
+    fun isMutualContact(currentUserUid: String?, targetMember: FamilyMember?): Boolean {
+        if (targetMember == null) return false
+        val currentUid = currentUserUid ?: currentSyncedUserId ?: "self"
+
+        // 1. Self is always mutual
+        if (targetMember.id == "self" || targetMember.id == currentUid || targetMember.firebaseUid == currentUid) {
+            return true
+        }
+
+        val targetPhone = targetMember.phone
+        val targetSuffix = PhoneUtils.extractPhoneSuffix(targetPhone)
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val myPhone = sessionPrefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", "") ?: ""
+        val mySuffix = PhoneUtils.extractPhoneSuffix(myPhone)
+
+        // 2. Demo contacts remain mutual for initial out-of-the-box app functionality
+        if (targetMember.id.startsWith("demo_") || targetMember.id in demoIdsSet) {
+            return true
+        }
+
+        // 3. Check if there is an ACCEPTED message request between current user and target member
+        val hasAcceptedRequest = _messageRequests.value.any { req ->
+            req.status == "ACCEPTED" && (
+                (req.senderId == currentUid && (req.receiverId == targetMember.id || req.receiverId == targetMember.firebaseUid || (targetSuffix.isNotBlank() && req.receiverPhoneSuffix == targetSuffix))) ||
+                (req.receiverId == currentUid && (req.senderId == targetMember.id || req.senderId == targetMember.firebaseUid || (targetSuffix.isNotBlank() && req.senderPhoneSuffix == targetSuffix))) ||
+                (mySuffix.isNotBlank() && targetSuffix.isNotBlank() && 
+                    ((req.senderPhoneSuffix == mySuffix && req.receiverPhoneSuffix == targetSuffix) ||
+                     (req.senderPhoneSuffix == targetSuffix && req.receiverPhoneSuffix == mySuffix)))
+            )
+        }
+
+        if (hasAcceptedRequest) {
+            return true
+        }
+
+        // 4. Check if both have each other saved in contact book
+        val iHaveTargetSaved = _familyMembers.value.any { m ->
+            m.id == targetMember.id ||
+            (!targetMember.firebaseUid.isNullOrBlank() && (m.id == targetMember.firebaseUid || m.firebaseUid == targetMember.firebaseUid)) ||
+            (targetSuffix.isNotBlank() && PhoneUtils.extractPhoneSuffix(m.phone) == targetSuffix)
+        }
+
+        val targetHasMeSaved = _contactsWhoSavedMe.value.contains(targetSuffix) ||
+                _contactsWhoSavedMe.value.contains(targetMember.id) ||
+                (targetMember.firebaseUid != null && _contactsWhoSavedMe.value.contains(targetMember.firebaseUid))
+
+        return iHaveTargetSaved && targetHasMeSaved
+    }
+
+    fun sendNextMessageRequest(
+        targetMember: FamilyMember,
+        initialText: String = "Hello, I would like to connect on Talkly!",
+        onComplete: ((Boolean) -> Unit)? = null
+    ) {
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val senderUid = currentSyncedUserId
+            ?: sessionPrefs.getString("user_uid", null)
+            ?: fallbackPrefs.getString("user_uid", null) ?: "self"
+        val senderPhone = sessionPrefs.getString("user_phone", null)
+            ?: fallbackPrefs.getString("user_phone", null) ?: ""
+        val senderSuffix = PhoneUtils.extractPhoneSuffix(senderPhone)
+        val senderName = sessionPrefs.getString("user_name", null)
+            ?: fallbackPrefs.getString("user_name", null) ?: "Talkly User"
+        val senderAvatar = sessionPrefs.getString("user_profile_pic", null) ?: ""
+
+        val receiverPhone = targetMember.phone
+        val receiverSuffix = PhoneUtils.extractPhoneSuffix(receiverPhone)
+        val receiverUid = if (!targetMember.firebaseUid.isNullOrBlank()) targetMember.firebaseUid!! else targetMember.id
+
+        val docId = "req_${senderSuffix.ifBlank { senderUid }}_${receiverSuffix.ifBlank { receiverUid }}"
+
+        val requestMap = mapOf(
+            "id" to docId,
+            "senderId" to senderUid,
+            "senderPhone" to senderPhone,
+            "senderPhoneSuffix" to senderSuffix,
+            "senderName" to senderName,
+            "senderAvatar" to senderAvatar,
+            "receiverId" to receiverUid,
+            "receiverPhone" to receiverPhone,
+            "receiverPhoneSuffix" to receiverSuffix,
+            "receiverName" to targetMember.name,
+            "status" to "PENDING",
+            "initialMessage" to initialText,
+            "timestamp" to System.currentTimeMillis()
+        )
+
+        try {
+            firestore?.collection("message_requests")
+                ?.document(docId)
+                ?.set(requestMap, com.google.firebase.firestore.SetOptions.merge())
+                ?.addOnSuccessListener {
+                    onComplete?.invoke(true)
+                }
+                ?.addOnFailureListener {
+                    onComplete?.invoke(false)
+                }
+
+            sendMessage(
+                memberId = targetMember.id,
+                textContent = "📩 Message Request: $initialText",
+                type = MessageType.TEXT
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Error sending message request: ${e.localizedMessage}")
+            onComplete?.invoke(false)
+        }
+    }
+
+    fun acceptMessageRequest(request: MessageRequest, onComplete: (() -> Unit)? = null) {
+        val reqId = request.id
+        try {
+            firestore?.collection("message_requests")
+                ?.document(reqId)
+                ?.update("status", "ACCEPTED")
+                ?.addOnSuccessListener {
+                    Log.d(TAG, "Message request $reqId accepted")
+                }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error updating message request status: ${e.localizedMessage}")
+        }
+
+        val currentRequests = _messageRequests.value.map {
+            if (it.id == reqId) it.copy(status = "ACCEPTED") else it
+        }
+        _messageRequests.value = currentRequests
+
+        val senderName = request.senderName.ifBlank { "Talkly User" }
+        val senderPhone = request.senderPhone.ifBlank { request.senderPhoneSuffix }
+        addNewContact(
+            name = senderName,
+            phone = senderPhone,
+            avatarUrl = request.senderAvatar.ifBlank { null },
+            relation = "Contact"
+        )
+
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val currentUid = currentSyncedUserId
+            ?: sessionPrefs.getString("user_uid", null)
+            ?: fallbackPrefs.getString("user_uid", null) ?: "self"
+
+        val sSuffix = request.senderPhoneSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(senderPhone) }
+        if (currentUid.isNotBlank() && currentUid != "self" && sSuffix.isNotBlank()) {
+            try {
+                firestore?.collection("users")
+                    ?.document(currentUid)
+                    ?.collection("contacts")
+                    ?.document(sSuffix)
+                    ?.set(
+                        mapOf(
+                            "phoneSuffix" to sSuffix,
+                            "phone" to senderPhone,
+                            "name" to senderName,
+                            "savedAt" to System.currentTimeMillis()
+                        )
+                    )
+            } catch (e: Exception) {
+                Log.w(TAG, "Error saving contact to Firestore subcollection: ${e.localizedMessage}")
+            }
+        }
+
+        onComplete?.invoke()
+    }
+
+    fun declineMessageRequest(requestId: String, onComplete: (() -> Unit)? = null) {
+        try {
+            firestore?.collection("message_requests")
+                ?.document(requestId)
+                ?.update("status", "DECLINED")
+        } catch (e: Exception) {
+            Log.w(TAG, "Error declining message request: ${e.localizedMessage}")
+        }
+        val currentRequests = _messageRequests.value.map {
+            if (it.id == requestId) it.copy(status = "DECLINED") else it
+        }
+        _messageRequests.value = currentRequests
+        onComplete?.invoke()
+    }
+
     fun getGroupedActiveStatuses(currentUserId: String = "self"): List<UserStatusGroup> {
         val activeStatuses = _statuses.value.filter { !it.isExpired(_simulatedTimeOffsetMs.value) }
 
         val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
         val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
         val userPhone = sessionPrefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", "") ?: ""
-        val userSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(userPhone)
+        val userSuffix = PhoneUtils.extractPhoneSuffix(userPhone)
         val realCurrentUid = if (currentUserId != "self") currentUserId else (currentSyncedUserId ?: "self")
 
-        // Normalize statuses so all stories belonging to self/duplicate accounts merge into realCurrentUid
-        val normalizedStatuses = activeStatuses.map { item ->
+        // 1. Filter out statuses from users who are NOT mutual contacts with current user (unless self)
+        val privacyFilteredStatuses = activeStatuses.filter { statusItem ->
+            val isSelf = statusItem.userId == "self" ||
+                    statusItem.userId == realCurrentUid ||
+                    (currentSyncedUserId != null && statusItem.userId == currentSyncedUserId) ||
+                    (userPhone.isNotBlank() && statusItem.userId == userPhone) ||
+                    (userSuffix.isNotBlank() && PhoneUtils.extractPhoneSuffix(statusItem.userId) == userSuffix)
+            if (isSelf) {
+                true
+            } else {
+                val uploaderPhoneSuffix = PhoneUtils.extractPhoneSuffix(statusItem.userId)
+                val matchingMember = _familyMembers.value.firstOrNull { m ->
+                    m.id == statusItem.userId ||
+                    m.firebaseUid == statusItem.userId ||
+                    (uploaderPhoneSuffix.isNotBlank() && PhoneUtils.extractPhoneSuffix(m.phone) == uploaderPhoneSuffix)
+                } ?: FamilyMember(
+                    id = statusItem.userId,
+                    name = statusItem.userName,
+                    phone = statusItem.userId,
+                    status = "",
+                    relation = "Contact"
+                )
+
+                isMutualContact(realCurrentUid, matchingMember)
+            }
+        }
+
+        // 2. Normalize statuses so all stories belonging to self/duplicate accounts merge into realCurrentUid
+        val normalizedStatuses = privacyFilteredStatuses.map { item ->
             val isSelf = item.userId == "self" ||
                     item.userId == realCurrentUid ||
                     (currentSyncedUserId != null && item.userId == currentSyncedUserId) ||
                     (userPhone.isNotBlank() && item.userId == userPhone) ||
-                    (userSuffix.isNotBlank() && com.family.talkly.util.PhoneUtils.extractPhoneSuffix(item.userId) == userSuffix)
+                    (userSuffix.isNotBlank() && PhoneUtils.extractPhoneSuffix(item.userId) == userSuffix)
             if (isSelf) {
                 item.copy(userId = realCurrentUid)
             } else {

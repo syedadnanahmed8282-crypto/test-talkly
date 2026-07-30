@@ -149,6 +149,25 @@ class MediaCompressorAndUploader(private val context: Context) {
         outputFile
     }
 
+    private fun getFirebaseStorageInstance(): FirebaseStorage {
+        return try {
+            val defaultStorage = FirebaseStorage.getInstance()
+            val bucket = defaultStorage.app.options.storageBucket
+            if (bucket.isNullOrBlank()) {
+                FirebaseStorage.getInstance("gs://familycallapp-e6b21.firebasestorage.app")
+            } else {
+                defaultStorage
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Default FirebaseStorage.getInstance() failed (${e.localizedMessage}). Retrying with explicit bucket URL...")
+            try {
+                FirebaseStorage.getInstance("gs://familycallapp-e6b21.firebasestorage.app")
+            } catch (e2: Exception) {
+                FirebaseStorage.getInstance("gs://familycallapp-e6b21.appspot.com")
+            }
+        }
+    }
+
     /**
      * Uploads compressed file to Firebase Storage with progress tracking and safe coroutine await.
      */
@@ -158,7 +177,7 @@ class MediaCompressorAndUploader(private val context: Context) {
         onProgress: (Int, String) -> Unit
     ): String = withContext(Dispatchers.IO) {
         onProgress(5, "Connecting to Firebase Storage...")
-        val storageRef = FirebaseStorage.getInstance().reference.child(remotePath)
+        val storageRef = getFirebaseStorageInstance().reference.child(remotePath)
         val uploadTask = storageRef.putFile(Uri.fromFile(file))
 
         uploadTask.addOnProgressListener { snapshot ->

@@ -73,9 +73,11 @@ fun MainScreen(
     val statuses by chatRepository.statuses.collectAsState()
     val simulatedTimeOffsetMs by chatRepository.simulatedTimeOffsetMs.collectAsState()
     val messagesMap by chatRepository.messagesMap.collectAsState()
+    val messageRequests by chatRepository.messageRequests.collectAsState()
+    val contactsWhoSavedMe by chatRepository.contactsWhoSavedMe.collectAsState()
 
     val currentUid = currentUserProfile?.uid?.ifBlank { "self" } ?: "self"
-    val statusGroups = remember(statuses, familyMembers, simulatedTimeOffsetMs, currentUserProfile) {
+    val statusGroups = remember(statuses, familyMembers, messageRequests, contactsWhoSavedMe, simulatedTimeOffsetMs, currentUserProfile) {
         chatRepository.getGroupedActiveStatuses(currentUid)
     }
 
@@ -226,6 +228,23 @@ fun MainScreen(
         val currentMember = familyMembers.firstOrNull { it.id == memberId } ?: activeChatMember!!
         val currentMessages = messagesMap[currentMember.id] ?: emptyList()
 
+        val isMutual = chatRepository.isMutualContact(currentUid, currentMember)
+        val targetSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(currentMember.phone)
+        val pendingReq = messageRequests.firstOrNull { req ->
+            req.status == "PENDING" && (
+                req.senderId == currentMember.id ||
+                req.senderId == currentMember.firebaseUid ||
+                (targetSuffix.isNotBlank() && req.senderPhoneSuffix == targetSuffix)
+            )
+        }
+        val sentByMeReq = messageRequests.firstOrNull { req ->
+            req.status == "PENDING" && (
+                req.receiverId == currentMember.id ||
+                req.receiverId == currentMember.firebaseUid ||
+                (targetSuffix.isNotBlank() && req.receiverPhoneSuffix == targetSuffix)
+            )
+        }
+
         ChatDetailScreen(
             member = currentMember,
             messages = currentMessages,
@@ -272,6 +291,29 @@ fun MainScreen(
             },
             onUnblockUser = {
                 chatRepository.unblockUser(currentMember.id)
+            },
+            isMutualContact = isMutual,
+            pendingMessageRequest = pendingReq,
+            isRequestSentByMe = sentByMeReq != null,
+            onSendMessageRequest = { initialText ->
+                chatRepository.sendNextMessageRequest(currentMember, initialText) { success ->
+                    if (success) {
+                        Toast.makeText(context, "Message request sent successfully!", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            onAcceptMessageRequest = { req ->
+                chatRepository.acceptMessageRequest(req) {
+                    Toast.makeText(context, "Request accepted! Contact saved.", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDeclineMessageRequest = { reqId ->
+                chatRepository.declineMessageRequest(reqId) {
+                    Toast.makeText(context, "Message request declined", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onClearChatHistory = {
+                chatRepository.deleteChatHistory(currentMember.id)
             }
         )
         return
@@ -305,6 +347,9 @@ fun MainScreen(
         },
         onDeleteContact = { memberId ->
             chatRepository.deleteContact(memberId)
+        },
+        onDeleteChatHistory = { memberId ->
+            chatRepository.deleteChatHistory(memberId)
         },
         onClearDemoContacts = {
             chatRepository.clearDemoContacts()

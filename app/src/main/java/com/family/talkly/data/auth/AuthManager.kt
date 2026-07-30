@@ -67,6 +67,7 @@ class AuthManager(private val context: Context) {
                         .setApplicationId("1:688875089801:android:07f27e3cf40ca2af913b58")
                         .setGcmSenderId("688875089801")
                         .setProjectId("familycallapp-e6b21")
+                        .setStorageBucket("familycallapp-e6b21.firebasestorage.app")
                         .setApiKey(firebaseApiKey)
                         .build()
                     com.google.firebase.FirebaseApp.initializeApp(context, options)
