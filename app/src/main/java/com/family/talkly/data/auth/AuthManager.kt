@@ -11,6 +11,7 @@ import com.family.talkly.util.MediaCompressorAndUploader
 import com.family.talkly.util.PhoneUtils
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
 import java.io.File
 import java.io.FileOutputStream
@@ -20,6 +21,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 sealed class AuthState {
     object InitialCheck : AuthState()
@@ -642,10 +644,44 @@ class AuthManager(private val context: Context) {
         cleanupDuplicateUserDocsAndSave(uid, profileMap, onSuccess)
     }
 
+    private var currentUserSnapshotListener: ListenerRegistration? = null
+
+    fun setupCurrentUserSnapshotListener(uid: String) {
+        if (uid.isBlank()) return
+        currentUserSnapshotListener?.remove()
+        try {
+            currentUserSnapshotListener = getFirestore().collection("users").document(uid)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                    val name = snapshot.getString("name") ?: ""
+                    val pic = snapshot.getString("profilePicUrl") ?: snapshot.getString("photoUrl") ?: ""
+                    val bio = snapshot.getString("bio") ?: "Available on Talkly 💬"
+                    val phone = snapshot.getString("phoneNumber") ?: ""
+
+                    if (name.isNotBlank()) {
+                        val currentProfile = (_authState.value as? AuthState.Authenticated)?.profile
+                        val updatedProfile = UserProfile(
+                            uid = uid,
+                            name = name,
+                            phoneNumber = if (phone.isNotBlank()) phone else (currentProfile?.phoneNumber ?: ""),
+                            phoneSuffix = PhoneUtils.extractPhoneSuffix(phone),
+                            profilePicUrl = if (pic.isNotBlank()) pic else (currentProfile?.profilePicUrl ?: ""),
+                            bio = bio
+                        )
+                        saveLocalSession(uid, updatedProfile.name, updatedProfile.phoneNumber, updatedProfile.profilePicUrl, updatedProfile.bio)
+                        _authState.value = AuthState.Authenticated(updatedProfile)
+                    }
+                }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error in setupCurrentUserSnapshotListener: ${e.localizedMessage}")
+        }
+    }
+
     /**
      * Checks Firestore 'users/{uid}' collection to see if user has completed profile setup
      */
     private fun checkUserProfileInFirestore(uid: String, phoneNumber: String) {
+        setupCurrentUserSnapshotListener(uid)
         performAutomaticAccountMerge(uid, phoneNumber)
     }
 
@@ -757,32 +793,81 @@ class AuthManager(private val context: Context) {
         }
 
         val phoneSuffix = PhoneUtils.extractPhoneSuffix(phone)
-        val (localPicUrl, firestorePicUrl) = processProfileAvatarImage(uid, profilePicUrl)
 
-        // Save local session immediately
-        saveLocalSession(uid, name, phone, localPicUrl, bio)
-        val profile = UserProfile(
-            uid = uid,
-            name = name,
-            phoneNumber = phone,
-            phoneSuffix = phoneSuffix,
-            profilePicUrl = localPicUrl,
-            bio = bio
-        )
-        _authState.value = AuthState.Authenticated(profile)
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            var finalPicUrl = profilePicUrl
 
-        val profileMap = mapOf(
-            "uid" to uid,
-            "name" to name,
-            "phoneNumber" to phone,
-            "phoneSuffix" to phoneSuffix,
-            "email" to getInternalEmail(phone),
-            "profilePicUrl" to firestorePicUrl,
-            "bio" to bio,
-            "updatedAt" to System.currentTimeMillis()
-        )
+            if (profilePicUrl.startsWith("content://") || profilePicUrl.startsWith("file://")) {
+                try {
+                    val uri = Uri.parse(profilePicUrl)
+                    val uploader = MediaCompressorAndUploader(context)
+                    val compressedFile = uploader.compressImage(uri) { _, _ -> }
+                    val remotePath = "profile_avatars/${uid}_${System.currentTimeMillis()}.jpg"
+                    finalPicUrl = uploader.uploadToFirebaseStorage(compressedFile, remotePath) { _, _ -> }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Firebase Storage avatar upload error: ${e.localizedMessage}")
+                    val (localPicUrl, firestorePicUrl) = processProfileAvatarImage(uid, profilePicUrl)
+                    finalPicUrl = if (firestorePicUrl.isNotBlank()) firestorePicUrl else localPicUrl
+                }
+            }
 
-        cleanupDuplicateUserDocsAndSave(uid, profileMap, onSuccess)
+            // Force clear Coil image memory & disk caches to prevent stale image rendering
+            try {
+                val imageLoader = coil.Coil.imageLoader(context)
+                imageLoader.memoryCache?.clear()
+                imageLoader.diskCache?.clear()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed clearing Coil image cache: ${e.localizedMessage}")
+            }
+
+            saveLocalSession(uid, name, phone, finalPicUrl, bio)
+            val profile = UserProfile(
+                uid = uid,
+                name = name,
+                phoneNumber = phone,
+                phoneSuffix = phoneSuffix,
+                profilePicUrl = finalPicUrl,
+                bio = bio
+            )
+
+            withContext(Dispatchers.Main) {
+                _authState.value = AuthState.Authenticated(profile)
+            }
+
+            val profileMap = mapOf(
+                "uid" to uid,
+                "name" to name,
+                "phoneNumber" to phone,
+                "phoneSuffix" to phoneSuffix,
+                "email" to getInternalEmail(phone),
+                "profilePicUrl" to finalPicUrl,
+                "photoUrl" to finalPicUrl,
+                "avatarUrl" to finalPicUrl,
+                "bio" to bio,
+                "updatedAt" to System.currentTimeMillis()
+            )
+
+            cleanupDuplicateUserDocsAndSave(uid, profileMap) {
+                try {
+                    getFirestore().collection("family_members").document(uid).set(
+                        mapOf(
+                            "avatarUrl" to finalPicUrl,
+                            "photoUrl" to finalPicUrl,
+                            "name" to name,
+                            "status" to bio,
+                            "updatedAt" to System.currentTimeMillis()
+                        ),
+                        com.google.firebase.firestore.SetOptions.merge()
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error updating family_members doc for avatar: ${e.localizedMessage}")
+                }
+                setupCurrentUserSnapshotListener(uid)
+                kotlinx.coroutines.CoroutineScope(Dispatchers.Main).launch {
+                    onSuccess()
+                }
+            }
+        }
     }
 
     private fun saveLocalSession(uid: String, name: String, phone: String, pic: String, bio: String = "Available on Talkly 💬") {

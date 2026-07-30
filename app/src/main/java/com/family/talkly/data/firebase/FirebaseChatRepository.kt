@@ -1009,6 +1009,7 @@ class FirebaseChatRepository(private val context: Context) {
     }
 
     private var secondaryMessagesListener: ListenerRegistration? = null
+    private var isInitialMessageSyncDone = false
 
     fun startRealtimeMessageSync(currentUserId: String?) {
         if (currentUserId.isNullOrBlank()) return
@@ -1017,6 +1018,7 @@ class FirebaseChatRepository(private val context: Context) {
         messagesListener?.remove()
         secondaryMessagesListener?.remove()
         currentSyncedUserId = currentUserId
+        isInitialMessageSyncDone = false
 
         val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
         val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
@@ -1105,6 +1107,24 @@ class FirebaseChatRepository(private val context: Context) {
                             )
                         } else {
                             existingMsgs.add(message)
+                            if (isInitialMessageSyncDone && senderId != "self" && senderId != currentUserId && !isRead) {
+                                val displayContent = when (type) {
+                                    MessageType.TEXT -> textContent
+                                    MessageType.IMAGE -> "📷 Photo"
+                                    MessageType.VIDEO -> "📹 Video"
+                                    MessageType.AUDIO -> "🎵 Voice message"
+                                    MessageType.DOCUMENT -> "📄 Document"
+                                    MessageType.LOCATION -> "📍 Location"
+                                    MessageType.CONTACT -> "👤 Contact"
+                                    else -> textContent.ifBlank { "New message" }
+                                }
+                                com.family.talkly.util.TalklyNotificationHelper.postIncomingMessageNotification(
+                                    context = context,
+                                    senderName = if (senderName.isNotBlank() && senderName != "Talkly User") senderName else "New Message",
+                                    messageText = displayContent,
+                                    chatMemberId = canonicalOtherPartyId
+                                )
+                            }
                         }
                         existingMsgs.sortBy { it.timestamp }
                         currentMap[canonicalOtherPartyId] = existingMsgs
@@ -1118,6 +1138,7 @@ class FirebaseChatRepository(private val context: Context) {
                 }
 
                 _messagesMap.value = currentMap
+                isInitialMessageSyncDone = true
             }
         }
 

@@ -8,6 +8,7 @@ import com.family.talkly.data.models.CallLog
 import com.family.talkly.data.models.CallType
 import com.family.talkly.data.models.FamilyMember
 import com.family.talkly.data.models.UserProfile
+import com.family.talkly.util.CallSoundManager
 import com.family.talkly.util.PhoneUtils
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
@@ -62,6 +63,8 @@ class ZegoCallEngineManager(private val context: Context) {
         const val FIREBASE_PROJECT_ID: String = "familycallapp-e6b21"
     }
 
+    private val callSoundManager = CallSoundManager(context)
+
     private val firestore: FirebaseFirestore? by lazy {
         try { FirebaseFirestore.getInstance() } catch (e: Exception) { null }
     }
@@ -111,6 +114,7 @@ class ZegoCallEngineManager(private val context: Context) {
 
     fun clearSession() {
         try {
+            callSoundManager.stopAllSounds()
             activeCallListener?.remove()
             activeCallListener = null
             secondaryCallListener?.remove()
@@ -197,6 +201,7 @@ class ZegoCallEngineManager(private val context: Context) {
                 if (isMeReceiver && !isMeCaller) {
                     val currentState = _callState.value.state
                     if (currentState == CallState.IDLE || currentState == CallState.ENDED) {
+                        callSoundManager.startIncomingRingtone()
                         val incomingCaller = FamilyMember(
                             id = if (callerSuffix.isNotBlank()) callerSuffix else callerUid,
                             name = if (callerName.isNotBlank()) callerName else "Talkly User",
@@ -223,6 +228,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     val currentState = _callState.value.state
                     if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) {
                         ringingTimeoutJob?.cancel()
+                        callSoundManager.stopAllSounds()
                         _callState.value = _callState.value.copy(state = CallState.ACTIVE)
                         startCallTimer()
                     }
@@ -281,6 +287,7 @@ class ZegoCallEngineManager(private val context: Context) {
             isFrontCamera = true,
             isSpeakerOn = true
         )
+        callSoundManager.startOutgoingRingbackTone()
         Log.d(TAG, "Starting outgoing ${callType.name} call to ${member.name} (targetUid: $targetUid, suffix: $targetSuffix)")
 
         val callData = mapOf(
@@ -389,6 +396,7 @@ class ZegoCallEngineManager(private val context: Context) {
 
     fun triggerIncomingCall(member: FamilyMember, callType: CallType) {
         val roomID = "incoming_room_${member.id}"
+        callSoundManager.startIncomingRingtone()
         _callState.value = CurrentCallInfo(
             state = CallState.INCOMING_RINGING,
             callType = callType,
@@ -400,6 +408,7 @@ class ZegoCallEngineManager(private val context: Context) {
 
     fun acceptCall() {
         ringingTimeoutJob?.cancel()
+        callSoundManager.stopAllSounds()
         val current = _callState.value
         val member = current.targetMember
         val myProfile = currentUserProfile ?: getLocalUserProfile()
@@ -415,6 +424,7 @@ class ZegoCallEngineManager(private val context: Context) {
 
     fun declineCall() {
         ringingTimeoutJob?.cancel()
+        callSoundManager.stopAllSounds()
         val current = _callState.value
         val member = current.targetMember
         val myProfile = currentUserProfile ?: getLocalUserProfile()
@@ -449,6 +459,7 @@ class ZegoCallEngineManager(private val context: Context) {
 
     fun endCall() {
         ringingTimeoutJob?.cancel()
+        callSoundManager.stopAllSounds()
         val current = _callState.value
         val member = current.targetMember
         val myProfile = currentUserProfile ?: getLocalUserProfile()
@@ -478,6 +489,7 @@ class ZegoCallEngineManager(private val context: Context) {
     private fun endCallInternal(reason: String) {
         ringingTimeoutJob?.cancel()
         timerJob?.cancel()
+        callSoundManager.stopAllSounds()
         _callState.value = _callState.value.copy(state = CallState.ENDED)
 
         val profile = currentUserProfile ?: getLocalUserProfile()

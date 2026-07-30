@@ -9,6 +9,7 @@ class TalklyApp : Application() {
     override fun onCreate() {
         super.onCreate()
         ensureFirebaseInitialized()
+        com.family.talkly.util.TalklyNotificationHelper.initNotificationChannels(this)
     }
 
     private fun ensureFirebaseInitialized() {

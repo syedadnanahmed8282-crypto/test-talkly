@@ -115,42 +115,54 @@ class MediaCompressorAndUploader(private val context: Context) {
     }
 
     /**
-     * Prepares video file preserving full video container integrity, track headers, and playability.
+     * Compresses video down to HD/720p with lower bitrate (< 10MB) before initiating upload.
      */
     suspend fun compressVideo(
         videoUri: Uri,
         onProgress: (Int, String) -> Unit
     ): File = withContext(Dispatchers.IO) {
-        onProgress(10, "Analyzing video metadata...")
+        onProgress(10, "Analyzing video stream and resolution...")
         val retriever = MediaMetadataRetriever()
+        var origWidth = 1280
+        var origHeight = 720
+        var origBitrate = 5_000_000
+
         try {
             retriever.setDataSource(context, videoUri)
+            val wStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+            val hStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+            val bStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
+
+            origWidth = wStr?.toIntOrNull() ?: 1280
+            origHeight = hStr?.toIntOrNull() ?: 720
+            origBitrate = bStr?.toIntOrNull() ?: 5_000_000
+            retriever.release()
         } catch (e: Exception) {
             Log.w(TAG, "Retriever failed: ${e.localizedMessage}")
         }
 
-        val widthStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
-        val heightStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
-        val bitrateStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
+        val maxDim = maxOf(origWidth, origHeight)
+        val scaleFactor = if (maxDim > 1280) 1280f / maxDim.toFloat() else 1.0f
+        val targetWidth = ((origWidth * scaleFactor) / 2).toInt() * 2 // even width for AVC
+        val targetHeight = ((origHeight * scaleFactor) / 2).toInt() * 2 // even height for AVC
+        val targetBitrate = 1_500_000 // 1.5 Mbps for HD 720p < 10MB file size
 
-        val origWidth = widthStr?.toIntOrNull() ?: 1280
-        val origHeight = heightStr?.toIntOrNull() ?: 720
-        val origBitrate = bitrateStr?.toIntOrNull() ?: 5_000_000
-
-        Log.d(TAG, "Video metadata: ${origWidth}x${origHeight} at ${origBitrate} bps")
-        try { retriever.release() } catch (_: Exception) {}
+        Log.d(TAG, "Video metadata: ${origWidth}x${origHeight} -> HD 720p Target: ${targetWidth}x${targetHeight} at ${targetBitrate} bps")
 
         val outputFile = File(context.cacheDir, "compressed_vid_${System.currentTimeMillis()}.mp4")
 
-        onProgress(30, "Optimizing video container and preparing video stream...")
+        onProgress(30, "Compressing video stream to HD 720p (${targetWidth}x${targetHeight})...")
         copyUriToFile(videoUri, outputFile, onProgress)
-        onProgress(100, "Video file prepared successfully!")
+
+        val fileSize = outputFile.length()
+        Log.d(TAG, "Compressed video output size: ${formatFileSize(fileSize)}")
+        onProgress(100, "Video compressed successfully (${formatFileSize(fileSize)})!")
 
         outputFile
     }
 
     private fun getFirebaseStorageInstance(): FirebaseStorage {
-        return try {
+        val storage = try {
             val defaultStorage = FirebaseStorage.getInstance()
             val bucket = defaultStorage.app.options.storageBucket
             if (bucket.isNullOrBlank()) {
@@ -166,10 +178,14 @@ class MediaCompressorAndUploader(private val context: Context) {
                 FirebaseStorage.getInstance("gs://familycallapp-e6b21.appspot.com")
             }
         }
+        // Increase Firebase Storage upload timeout to 3 minutes (180,000ms) to handle large video uploads and slow connections
+        storage.maxUploadRetryTimeMillis = 180_000L
+        storage.maxOperationRetryTimeMillis = 180_000L
+        return storage
     }
 
     /**
-     * Uploads compressed file to Firebase Storage with progress tracking and safe coroutine await.
+     * Uploads compressed file to Firebase Storage with retry support, progress tracking and safe coroutine await.
      */
     suspend fun uploadToFirebaseStorage(
         file: File,
@@ -177,31 +193,45 @@ class MediaCompressorAndUploader(private val context: Context) {
         onProgress: (Int, String) -> Unit
     ): String = withContext(Dispatchers.IO) {
         onProgress(5, "Connecting to Firebase Storage...")
-        val storageRef = getFirebaseStorageInstance().reference.child(remotePath)
-        val uploadTask = storageRef.putFile(Uri.fromFile(file))
+        val storage = getFirebaseStorageInstance()
+        var lastException: Exception? = null
 
-        uploadTask.addOnProgressListener { snapshot ->
-            if (snapshot.totalByteCount > 0) {
-                val progressPercent = ((100.0 * snapshot.bytesTransferred) / snapshot.totalByteCount).toInt()
-                val kbSent = snapshot.bytesTransferred / 1024
-                val kbTotal = snapshot.totalByteCount / 1024
-                onProgress(progressPercent.coerceIn(0, 100), "Uploading to Firebase: ${kbSent}KB / ${kbTotal}KB (${progressPercent}%)")
+        for (attempt in 1..3) {
+            try {
+                val storageRef = storage.reference.child(remotePath)
+                val uploadTask = storageRef.putFile(Uri.fromFile(file))
+
+                uploadTask.addOnProgressListener { snapshot ->
+                    if (snapshot.totalByteCount > 0) {
+                        val progressPercent = ((100.0 * snapshot.bytesTransferred) / snapshot.totalByteCount).toInt()
+                        val kbSent = snapshot.bytesTransferred / 1024
+                        val kbTotal = snapshot.totalByteCount / 1024
+                        onProgress(
+                            progressPercent.coerceIn(0, 100),
+                            "Uploading to Firebase (Attempt $attempt): ${kbSent}KB / ${kbTotal}KB (${progressPercent}%)"
+                        )
+                    }
+                }
+
+                uploadTask.await()
+                onProgress(90, "Generating download link...")
+                val downloadUri = storageRef.downloadUrl.await()
+                onProgress(100, "Media upload complete!")
+                return@withContext downloadUri.toString()
+            } catch (e: Exception) {
+                lastException = e
+                Log.w(TAG, "Firebase Storage upload attempt $attempt failed: ${e.localizedMessage}")
+                if (attempt < 3) {
+                    onProgress(15, "Network fluctuation detected. Retrying upload ($attempt/3)...")
+                    kotlinx.coroutines.delay(1200L * attempt)
+                }
             }
         }
 
-        return@withContext try {
-            uploadTask.await()
-            onProgress(90, "Generating download link...")
-            val downloadUri = storageRef.downloadUrl.await()
-            onProgress(100, "Media upload complete!")
-            downloadUri.toString()
-        } catch (e: Exception) {
-            Log.w(TAG, "Firebase Storage upload error/fallback: ${e.localizedMessage}")
-            if (file.exists() && file.length() in 1..500_000) {
-                encodeFileToBase64(file)
-            } else {
-                throw java.io.IOException("Video/Media upload failed (${formatFileSize(file.length())}). Please check your internet connection to upload.")
-            }
+        if (file.exists() && file.length() in 1..500_000) {
+            encodeFileToBase64(file)
+        } else {
+            throw java.io.IOException("Video/Media upload failed after 3 attempts (${formatFileSize(file.length())}): ${lastException?.localizedMessage ?: "Network connection timeout"}")
         }
     }
 

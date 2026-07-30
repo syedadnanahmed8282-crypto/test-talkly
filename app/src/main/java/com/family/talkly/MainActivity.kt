@@ -64,6 +64,8 @@ class MainActivity : ComponentActivity() {
         zegoManager = ZegoCallEngineManager(applicationContext)
         themePreferences = ThemePreferences(applicationContext)
 
+        com.family.talkly.util.TalklyNotificationHelper.initNotificationChannels(applicationContext)
+
         // Schedule WorkManager job for deleting expired Firestore messages (>48 hours old)
         DeleteExpiredMessagesWorker.schedulePeriodicCleanup(applicationContext)
 
