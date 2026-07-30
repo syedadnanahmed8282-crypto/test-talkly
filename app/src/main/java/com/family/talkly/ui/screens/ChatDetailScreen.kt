@@ -253,25 +253,32 @@ fun ChatDetailScreen(
 
         isUploadingAudio = true
         scope.launch(Dispatchers.IO) {
-            val remotePath = "family_chats/${member.id}/voice_notes/vn_${System.currentTimeMillis()}.m4a"
-            val finalUrl = uploader.uploadToFirebaseStorage(file, remotePath) { progress, status ->
-                android.util.Log.d("ChatDetailScreen", "Voice note upload progress: $progress% - $status")
-            }
+            try {
+                val remotePath = "family_chats/${member.id}/voice_notes/vn_${System.currentTimeMillis()}.m4a"
+                val finalUrl = uploader.uploadToFirebaseStorage(file, remotePath) { progress, status ->
+                    android.util.Log.d("ChatDetailScreen", "Voice note upload progress: $progress% - $status")
+                }
 
-            scope.launch(Dispatchers.Main) {
-                isUploadingAudio = false
-                val durationText = "${recordingDurationSec}s"
-                onSendMessage(
-                    "Voice Message ($durationText)",
-                    MessageType.VOICE_NOTE,
-                    finalUrl,
-                    replyingToMessage?.id,
-                    replyingToMessage?.senderName,
-                    replyingToMessage?.textContent?.ifEmpty { "Voice Message" }
-                )
-                replyingToMessage = null
-                recordingDurationSec = 0
-                Toast.makeText(context, "Voice note sent!", Toast.LENGTH_SHORT).show()
+                scope.launch(Dispatchers.Main) {
+                    isUploadingAudio = false
+                    val durationText = "${recordingDurationSec}s"
+                    onSendMessage(
+                        "Voice Message ($durationText)",
+                        MessageType.VOICE_NOTE,
+                        finalUrl,
+                        replyingToMessage?.id,
+                        replyingToMessage?.senderName,
+                        replyingToMessage?.textContent?.ifEmpty { "Voice Message" }
+                    )
+                    replyingToMessage = null
+                    recordingDurationSec = 0
+                    Toast.makeText(context, "Voice note sent!", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                scope.launch(Dispatchers.Main) {
+                    isUploadingAudio = false
+                    Toast.makeText(context, "ভয়েস মেসেজ পাঠাতে ব্যর্থ হয়েছে: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }

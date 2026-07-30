@@ -42,7 +42,6 @@ import androidx.core.content.ContextCompat
 import com.family.talkly.data.firebase.FirebaseChatRepository
 import com.family.talkly.data.models.CallDirection
 import com.family.talkly.data.models.CallType
-import com.family.talkly.data.models.DEFAULT_FAMILY_MEMBERS
 import com.family.talkly.data.models.FamilyMember
 import com.family.talkly.data.models.MessageType
 import com.family.talkly.data.zego.CallState

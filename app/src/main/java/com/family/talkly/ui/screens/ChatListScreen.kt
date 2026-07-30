@@ -81,7 +81,6 @@ import com.family.talkly.ui.theme.WhatsappGreen
 import com.family.talkly.ui.theme.WhatsappTeal
 import com.family.talkly.data.models.CallType
 import com.family.talkly.data.models.ChatMessage
-import com.family.talkly.data.models.DEFAULT_FAMILY_MEMBERS
 import com.family.talkly.data.models.FamilyMember
 import com.family.talkly.data.models.UserProfile
 import androidx.compose.material.icons.filled.Block
@@ -154,6 +153,28 @@ fun ChatListScreen(
     var memberToDeleteHistory by remember { mutableStateOf<FamilyMember?>(null) }
 
     val isDark = LocalIsDarkTheme.current
+
+    val currentUid = currentUserProfile?.uid ?: ""
+    val currentPhone = currentUserProfile?.phoneNumber ?: ""
+    val currentSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(currentPhone)
+
+    val deduplicatedMembers = remember(familyMembers, currentUid, currentPhone, currentSuffix) {
+        familyMembers
+            .filter { member ->
+                val memberSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone)
+                val isSelfByUid = (currentUid.isNotBlank() && (member.id == currentUid || member.firebaseUid == currentUid))
+                val isSelfByPhone = (currentPhone.isNotBlank() && member.phone == currentPhone)
+                val isSelfBySuffix = (currentSuffix.isNotBlank() && memberSuffix.isNotBlank() && memberSuffix == currentSuffix)
+                !(isSelfByUid || isSelfByPhone || isSelfBySuffix)
+            }
+            .distinctBy { member ->
+                val digits = member.phone.filter { it.isDigit() }
+                val suffix = if (digits.length >= 10) digits.takeLast(10) else digits
+                if (suffix.isNotBlank()) "suffix_$suffix"
+                else if (!member.firebaseUid.isNullOrBlank()) "uid_${member.firebaseUid}"
+                else "id_${member.id}"
+            }
+    }
 
     if (showAddContactDialog && onSearchUserByPhone != null && onAddContact != null) {
         AddContactDialog(
@@ -710,8 +731,8 @@ fun ChatListScreen(
                     Divider(color = SecondaryLightSage.copy(alpha = 0.2f))
 
                     // Family Conversations List
-                    val sortedMembers = remember(familyMembers, messagesMap) {
-                        familyMembers.sortedWith(
+                    val sortedMembers = remember(deduplicatedMembers, messagesMap) {
+                        deduplicatedMembers.sortedWith(
                             compareByDescending<FamilyMember> { it.isPinned }
                                 .thenByDescending { member ->
                                     messagesMap[member.id]?.lastOrNull()?.timestamp ?: 0L
@@ -747,7 +768,7 @@ fun ChatListScreen(
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(vertical = 2.dp)
                         ) {
-                            items(sortedMembers) { member ->
+                            items(sortedMembers, key = { member -> member.id }) { member ->
                                 val memberMessages = messagesMap[member.id] ?: emptyList()
                                 val lastMessage = memberMessages.lastOrNull()
 
@@ -816,7 +837,7 @@ fun ChatListScreen(
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
                                         Text(
-                                            text = "${familyMembers.size} contacts available",
+                                            text = "${deduplicatedMembers.size} contacts available",
                                             fontSize = 12.sp,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -844,7 +865,7 @@ fun ChatListScreen(
                         }
 
                         // Contacts List
-                        if (familyMembers.isEmpty()) {
+                        if (deduplicatedMembers.isEmpty()) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -881,7 +902,7 @@ fun ChatListScreen(
                                 modifier = Modifier.fillMaxSize(),
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
                             ) {
-                                items(familyMembers) { member ->
+                                items(deduplicatedMembers, key = { member -> member.id }) { member ->
                                     val isUserBlocked = blockedUserIds.contains(member.id)
                                     Card(
                                         modifier = Modifier

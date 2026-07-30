@@ -679,50 +679,59 @@ fun MediaPreviewAndTagDialog(
                         onClick = {
                             isProcessing = true
                             coroutineScope.launch {
-                                val compressor = MediaCompressorAndUploader(context)
-                                val finalUrl: String
+                                try {
+                                    val compressor = MediaCompressorAndUploader(context)
+                                    val finalUrl: String
 
-                                if (mediaUrl.startsWith("content://") || mediaUrl.startsWith("file://")) {
-                                    val uri = Uri.parse(mediaUrl)
-                                    val compressedFile = if (mediaType == MessageType.IMAGE) {
-                                        compressor.compressImage(uri) { progress, detail ->
-                                            progressPercent = (progress * 0.5).toInt()
+                                    if (mediaUrl.startsWith("content://") || mediaUrl.startsWith("file://")) {
+                                        val uri = Uri.parse(mediaUrl)
+                                        val compressedFile = if (mediaType == MessageType.IMAGE) {
+                                            compressor.compressImage(uri) { progress, detail ->
+                                                progressPercent = (progress * 0.5).toInt()
+                                                progressText = detail
+                                            }
+                                        } else {
+                                            compressor.compressVideo(uri) { progress, detail ->
+                                                progressPercent = (progress * 0.5).toInt()
+                                                progressText = detail
+                                            }
+                                        }
+
+                                        val compressedSizeStr = compressor.formatFileSize(compressedFile.length())
+                                        savingsInfoText = "Compressed File Size: $compressedSizeStr"
+
+                                        val remotePath = "chats/media/${System.currentTimeMillis()}_${if (mediaType == MessageType.IMAGE) "img.jpg" else "vid.mp4"}"
+                                        finalUrl = compressor.uploadToFirebaseStorage(compressedFile, remotePath) { progress, detail ->
+                                            progressPercent = 50 + (progress * 0.5).toInt()
                                             progressText = detail
                                         }
                                     } else {
-                                        compressor.compressVideo(uri) { progress, detail ->
-                                            progressPercent = (progress * 0.5).toInt()
-                                            progressText = detail
-                                        }
+                                        // Preset sample media - perform compression and upload pipeline demo pass
+                                        progressText = "Compressing media (1080p, 75% quality)..."
+                                        progressPercent = 25
+                                        kotlinx.coroutines.delay(400)
+                                        progressPercent = 55
+                                        progressText = "Optimizing container & bitrate..."
+                                        savingsInfoText = "Estimated Size Reduction: ~65%"
+                                        kotlinx.coroutines.delay(400)
+                                        progressPercent = 85
+                                        progressText = "Uploading to Firebase Storage..."
+                                        kotlinx.coroutines.delay(400)
+                                        progressPercent = 100
+                                        progressText = "Media upload complete!"
+                                        kotlinx.coroutines.delay(200)
+                                        finalUrl = mediaUrl
                                     }
 
-                                    val compressedSizeStr = compressor.formatFileSize(compressedFile.length())
-                                    savingsInfoText = "Compressed File Size: $compressedSizeStr"
-
-                                    val remotePath = "chats/media/${System.currentTimeMillis()}_${if (mediaType == MessageType.IMAGE) "img.jpg" else "vid.mp4"}"
-                                    finalUrl = compressor.uploadToFirebaseStorage(compressedFile, remotePath) { progress, detail ->
-                                        progressPercent = 50 + (progress * 0.5).toInt()
-                                        progressText = detail
-                                    }
-                                } else {
-                                    // Preset sample media - perform compression and upload pipeline demo pass
-                                    progressText = "Compressing media (1080p, 75% quality)..."
-                                    progressPercent = 25
-                                    kotlinx.coroutines.delay(400)
-                                    progressPercent = 55
-                                    progressText = "Optimizing container & bitrate..."
-                                    savingsInfoText = "Estimated Size Reduction: ~65%"
-                                    kotlinx.coroutines.delay(400)
-                                    progressPercent = 85
-                                    progressText = "Uploading to Firebase Storage..."
-                                    kotlinx.coroutines.delay(400)
-                                    progressPercent = 100
-                                    progressText = "Media upload complete!"
-                                    kotlinx.coroutines.delay(200)
-                                    finalUrl = mediaUrl
+                                    onSend(captionInput, mediaType, finalUrl)
+                                } catch (e: Exception) {
+                                    isProcessing = false
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "মিডিয়া পাঠানো যায়নি: ${e.localizedMessage ?: "Upload failed"}",
+                                        android.widget.Toast.LENGTH_LONG
+                                    ).show()
                                 }
-
-                                onSend(captionInput, mediaType, finalUrl)
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = WhatsappGreen),

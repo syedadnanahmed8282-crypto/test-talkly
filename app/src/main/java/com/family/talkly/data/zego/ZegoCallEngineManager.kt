@@ -89,12 +89,14 @@ class ZegoCallEngineManager(private val context: Context) {
     }
 
     fun getLocalUserProfile(): UserProfile {
-        val prefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
-        val uid = prefs.getString("user_uid", "self") ?: "self"
-        val name = prefs.getString("user_name", "Me") ?: "Me"
-        val phone = prefs.getString("user_phone", "") ?: ""
-        val pic = prefs.getString("user_profile_pic", "") ?: ""
-        val bio = prefs.getString("user_bio", "Available on Talkly 💬") ?: "Available on Talkly 💬"
+        val prefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+
+        val uid = prefs.getString("user_uid", null) ?: fallbackPrefs.getString("user_uid", "self") ?: "self"
+        val name = prefs.getString("user_name", null) ?: fallbackPrefs.getString("user_name", "Me") ?: "Me"
+        val phone = prefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", "") ?: ""
+        val pic = prefs.getString("user_profile_pic", null) ?: fallbackPrefs.getString("user_profile_pic", "") ?: ""
+        val bio = prefs.getString("user_bio", null) ?: fallbackPrefs.getString("user_bio", "Available on Talkly 💬") ?: "Available on Talkly 💬"
         val suffix = PhoneUtils.extractPhoneSuffix(phone)
 
         return UserProfile(
@@ -105,6 +107,21 @@ class ZegoCallEngineManager(private val context: Context) {
             profilePicUrl = pic,
             bio = bio
         )
+    }
+
+    fun clearSession() {
+        try {
+            activeCallListener?.remove()
+            activeCallListener = null
+            secondaryCallListener?.remove()
+            secondaryCallListener = null
+            currentSyncedUserId = null
+            currentUserProfile = null
+            _callState.value = CurrentCallInfo(state = CallState.IDLE)
+            _callLogs.value = emptyList()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error clearing Zego session: ${e.localizedMessage}")
+        }
     }
 
     fun startRealtimeCallSync(userProfile: UserProfile, repository: FirebaseChatRepository) {

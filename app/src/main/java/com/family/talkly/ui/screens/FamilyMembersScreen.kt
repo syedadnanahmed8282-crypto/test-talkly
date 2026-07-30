@@ -113,6 +113,16 @@ fun FamilyMembersScreen(
         )
     }
 
+    val uniqueFamilyMembers = remember(familyMembers) {
+        familyMembers.distinctBy { member ->
+            val digits = member.phone.filter { it.isDigit() }
+            val suffix = if (digits.length >= 10) digits.takeLast(10) else digits
+            if (suffix.isNotBlank()) "suffix_$suffix"
+            else if (!member.firebaseUid.isNullOrBlank()) "uid_${member.firebaseUid}"
+            else "id_${member.id}"
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -219,7 +229,7 @@ fun FamilyMembersScreen(
                             fontSize = 16.sp
                         )
                         Text(
-                            text = "${familyMembers.size} connected family members • Tap profile to view details",
+                            text = "${uniqueFamilyMembers.size} connected family members • Tap profile to view details",
                             fontSize = 11.sp,
                             color = Color.Gray
                         )
@@ -231,7 +241,7 @@ fun FamilyMembersScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp)
             ) {
-                items(familyMembers) { member ->
+                items(uniqueFamilyMembers, key = { member -> member.id }) { member ->
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()

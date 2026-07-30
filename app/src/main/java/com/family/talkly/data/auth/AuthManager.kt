@@ -386,6 +386,48 @@ class AuthManager(private val context: Context) {
         return Pair(rawProfilePicUrl, rawProfilePicUrl)
     }
 
+    private fun cleanupDuplicateUserDocsAndSave(
+        uid: String,
+        profileMap: Map<String, Any?>,
+        onComplete: (() -> Unit)? = null
+    ) {
+        val db = getFirestore()
+        val phone = profileMap["phoneNumber"] as? String ?: ""
+        val suffix = PhoneUtils.extractPhoneSuffix(phone)
+
+        try {
+            db.collection("users").document(uid)
+                .set(profileMap, SetOptions.merge())
+                .addOnSuccessListener {
+                    Log.d(TAG, "User profile saved to users/$uid successfully")
+                    onComplete?.invoke()
+                }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "Failed to save user profile to users/$uid: ${e.localizedMessage}")
+                    onComplete?.invoke()
+                }
+
+            if (suffix.isNotBlank()) {
+                db.collection("users")
+                    .whereEqualTo("phoneSuffix", suffix)
+                    .get()
+                    .addOnSuccessListener { querySnap ->
+                        if (querySnap != null) {
+                            for (doc in querySnap.documents) {
+                                if (doc.id != uid) {
+                                    Log.d(TAG, "Deleting duplicate user document ${doc.id} for phone suffix $suffix")
+                                    db.collection("users").document(doc.id).delete()
+                                }
+                            }
+                        }
+                    }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error in cleanupDuplicateUserDocsAndSave: ${e.localizedMessage}")
+            onComplete?.invoke()
+        }
+    }
+
     private fun saveUserProfileAndAuthenticate(
         uid: String,
         name: String,
@@ -408,7 +450,6 @@ class AuthManager(private val context: Context) {
             bio = bio
         )
         _authState.value = AuthState.Authenticated(profile)
-        onSuccess()
 
         val profileMap = mapOf(
             "uid" to uid,
@@ -422,18 +463,7 @@ class AuthManager(private val context: Context) {
             "updatedAt" to System.currentTimeMillis()
         )
 
-        try {
-            getFirestore().collection("users").document(uid)
-                .set(profileMap, SetOptions.merge())
-                .addOnSuccessListener {
-                    Log.d(TAG, "User profile saved to Firestore successfully")
-                }
-                .addOnFailureListener { e ->
-                    Log.w(TAG, "Failed to write user profile to Firestore: ${e.localizedMessage}")
-                }
-        } catch (e: Exception) {
-            Log.w(TAG, "Firestore write exception: ${e.localizedMessage}")
-        }
+        cleanupDuplicateUserDocsAndSave(uid, profileMap, onSuccess)
     }
 
     /**
@@ -472,7 +502,7 @@ class AuthManager(private val context: Context) {
                         )
                         saveLocalSession(uid, name, phone, finalPic, bio)
 
-                        // Safely update last login details in Firestore
+                        // Safely update last login details in Firestore and clean up duplicate documents
                         db.collection("users").document(uid).set(
                             mapOf(
                                 "uid" to uid,
@@ -482,6 +512,21 @@ class AuthManager(private val context: Context) {
                             ),
                             SetOptions.merge()
                         )
+
+                        if (docSuffix.isNotBlank()) {
+                            db.collection("users")
+                                .whereEqualTo("phoneSuffix", docSuffix)
+                                .get()
+                                .addOnSuccessListener { querySnap ->
+                                    if (querySnap != null) {
+                                        for (d in querySnap.documents) {
+                                            if (d.id != uid) {
+                                                db.collection("users").document(d.id).delete()
+                                            }
+                                        }
+                                    }
+                                }
+                        }
 
                         _authState.value = AuthState.Authenticated(profile)
                     } else {
@@ -551,20 +596,26 @@ class AuthManager(private val context: Context) {
         )
         saveLocalSession(uid, name, phone, docPic, bio)
 
-        // Persist/link to current UID document in Firestore
-        getFirestore().collection("users").document(uid).set(
-            mapOf(
-                "uid" to uid,
-                "name" to name,
-                "phoneNumber" to phone,
-                "phoneSuffix" to suffix,
-                "email" to getInternalEmail(phone),
-                "profilePicUrl" to docPic,
-                "bio" to bio,
-                "updatedAt" to System.currentTimeMillis()
-            ),
-            SetOptions.merge()
+        val profileMap = mapOf(
+            "uid" to uid,
+            "name" to name,
+            "phoneNumber" to phone,
+            "phoneSuffix" to suffix,
+            "email" to getInternalEmail(phone),
+            "profilePicUrl" to docPic,
+            "bio" to bio,
+            "updatedAt" to System.currentTimeMillis()
         )
+
+        cleanupDuplicateUserDocsAndSave(uid, profileMap)
+
+        if (doc.id != uid) {
+            try {
+                getFirestore().collection("users").document(doc.id).delete()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed deleting old user document ${doc.id}: ${e.localizedMessage}")
+            }
+        }
 
         _authState.value = AuthState.Authenticated(profile)
     }
@@ -586,19 +637,18 @@ class AuthManager(private val context: Context) {
                 bio = bio
             )
 
-            getFirestore().collection("users").document(uid).set(
-                mapOf(
-                    "uid" to uid,
-                    "name" to localName,
-                    "phoneNumber" to phone,
-                    "phoneSuffix" to suffix,
-                    "email" to getInternalEmail(phone),
-                    "profilePicUrl" to pic,
-                    "bio" to bio,
-                    "updatedAt" to System.currentTimeMillis()
-                ),
-                SetOptions.merge()
+            val profileMap = mapOf(
+                "uid" to uid,
+                "name" to localName,
+                "phoneNumber" to phone,
+                "phoneSuffix" to suffix,
+                "email" to getInternalEmail(phone),
+                "profilePicUrl" to pic,
+                "bio" to bio,
+                "updatedAt" to System.currentTimeMillis()
             )
+
+            cleanupDuplicateUserDocsAndSave(uid, profileMap)
 
             _authState.value = AuthState.Authenticated(profile)
         } else {
@@ -650,9 +700,7 @@ class AuthManager(private val context: Context) {
             bio = bio
         )
         _authState.value = AuthState.Authenticated(profile)
-        onSuccess()
 
-        // Write document to Firestore using universally accessible firestorePicUrl
         val profileMap = mapOf(
             "uid" to uid,
             "name" to name,
@@ -664,18 +712,7 @@ class AuthManager(private val context: Context) {
             "updatedAt" to System.currentTimeMillis()
         )
 
-        try {
-            getFirestore().collection("users").document(uid)
-                .set(profileMap, SetOptions.merge())
-                .addOnSuccessListener {
-                    Log.d(TAG, "Saved user profile to Firestore successfully")
-                }
-                .addOnFailureListener { e ->
-                    Log.w(TAG, "Firestore user profile write failed: ${e.localizedMessage}")
-                }
-        } catch (e: Exception) {
-            Log.w(TAG, "Firestore user save exception: ${e.localizedMessage}")
-        }
+        cleanupDuplicateUserDocsAndSave(uid, profileMap, onSuccess)
     }
 
     private fun saveLocalSession(uid: String, name: String, phone: String, pic: String, bio: String = "Available on Talkly 💬") {
@@ -687,6 +724,18 @@ class AuthManager(private val context: Context) {
             .putString(KEY_PROFILE_PIC, pic)
             .putString(KEY_BIO, bio)
             .apply()
+
+        try {
+            context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE).edit()
+                .putString("user_uid", uid)
+                .putString("user_name", name)
+                .putString("user_phone", phone)
+                .putString("user_profile_pic", pic)
+                .putString("user_bio", bio)
+                .apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed writing talkly_user_session prefs: ${e.message}")
+        }
     }
 
     fun logout() {
@@ -696,6 +745,11 @@ class AuthManager(private val context: Context) {
             Log.w(TAG, "Sign out exception: ${e.localizedMessage}")
         }
         prefs.edit().clear().apply()
+        try {
+            context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE).edit().clear().apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed clearing talkly_user_session prefs: ${e.message}")
+        }
         _authState.value = AuthState.Unauthenticated
     }
 }

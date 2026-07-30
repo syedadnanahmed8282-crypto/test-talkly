@@ -111,23 +111,70 @@ class FirebaseChatRepository(private val context: Context) {
         return _blockedUserIds.value.contains(userId)
     }
 
+    private val demoIdsSet = setOf(
+        "safwan", "israfel", "jolil", "samim", "akhter", "osman", "mohammad_raiu",
+        "dr_rashed", "monju", "sk_farid", "mom", "dad", "grandma", "brother", "sister"
+    )
+
+    private fun setFamilyMembersWithDeduplication(newList: List<FamilyMember>) {
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+
+        val currentUid = currentSyncedUserId
+            ?: sessionPrefs.getString("user_uid", null)
+            ?: fallbackPrefs.getString("user_uid", null)
+        val currentPhone = sessionPrefs.getString("user_phone", null)
+            ?: fallbackPrefs.getString("user_phone", null) ?: ""
+        val currentSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(currentPhone)
+
+        val filteredAndDeduplicated = newList
+            .filter { member -> member.id !in demoIdsSet && !member.id.startsWith("demo_") }
+            .filter { member ->
+                val memberSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone)
+                val cleanMemberPhone = member.phone.filter { it.isDigit() }
+                val cleanCurrentPhone = currentPhone.filter { it.isDigit() }
+
+                val isSelfByUid = (!currentUid.isNullOrBlank() && (member.id == currentUid || member.firebaseUid == currentUid))
+                val isSelfByPhone = (cleanCurrentPhone.isNotBlank() && cleanMemberPhone.isNotBlank() && cleanMemberPhone == cleanCurrentPhone)
+                val isSelfBySuffix = (currentSuffix.isNotBlank() && memberSuffix.isNotBlank() && memberSuffix == currentSuffix)
+
+                !(isSelfByUid || isSelfByPhone || isSelfBySuffix)
+            }
+            .sortedWith(
+                compareByDescending<FamilyMember> { it.isRegisteredOnTalkly }
+                    .thenByDescending { !it.firebaseUid.isNullOrBlank() }
+                    .thenByDescending { !it.avatarUrl.isNullOrBlank() }
+                    .thenByDescending { it.lastActiveTimestamp }
+            )
+            .distinctBy { member ->
+                val digits = member.phone.filter { it.isDigit() }
+                val suffix = if (digits.length >= 10) digits.takeLast(10) else digits
+                if (suffix.isNotBlank()) {
+                    "suffix_$suffix"
+                } else if (!member.firebaseUid.isNullOrBlank()) {
+                    "uid_${member.firebaseUid}"
+                } else {
+                    "id_${member.id}"
+                }
+            }
+
+        _familyMembers.value = filteredAndDeduplicated
+    }
+
     private fun loadInitialFamilyMembers() {
         val savedJson = contactPrefs.getString(KEY_SAVED_CONTACTS_JSON, null)
-        val demoCleared = contactPrefs.getBoolean(KEY_DEMO_CLEARED, false)
-
         val list = mutableListOf<FamilyMember>()
-
-        if (!demoCleared) {
-            list.addAll(DEFAULT_FAMILY_MEMBERS)
-        }
 
         if (!savedJson.isNullOrBlank()) {
             try {
                 val jsonArray = org.json.JSONArray(savedJson)
                 for (i in 0 until jsonArray.length()) {
                     val obj = jsonArray.getJSONObject(i)
+                    val memberId = obj.getString("id")
+                    if (memberId in demoIdsSet || memberId.startsWith("demo_")) continue
+
                     val member = FamilyMember(
-                        id = obj.getString("id"),
+                        id = memberId,
                         name = obj.getString("name"),
                         relation = obj.optString("relation", "Contact"),
                         avatarUrl = if (obj.has("avatarUrl") && !obj.isNull("avatarUrl")) obj.getString("avatarUrl") else null,
@@ -142,7 +189,6 @@ class FirebaseChatRepository(private val context: Context) {
                         isRegisteredOnTalkly = obj.optBoolean("isRegisteredOnTalkly", false),
                         firebaseUid = if (obj.has("firebaseUid") && !obj.isNull("firebaseUid")) obj.getString("firebaseUid") else null
                     )
-                    // Avoid duplicate IDs
                     if (list.none { it.id == member.id }) {
                         list.add(member)
                     }
@@ -152,7 +198,9 @@ class FirebaseChatRepository(private val context: Context) {
             }
         }
 
-        _familyMembers.value = list
+        setFamilyMembersWithDeduplication(list)
+        contactPrefs.edit().putBoolean(KEY_DEMO_CLEARED, true).apply()
+        saveContactsToPrefs()
     }
 
     private fun saveContactsToPrefs() {
@@ -198,7 +246,7 @@ class FirebaseChatRepository(private val context: Context) {
                 ?.get()
                 ?.addOnSuccessListener { snapshot ->
                     if (snapshot != null && !snapshot.isEmpty) {
-                        val doc = snapshot.documents.first()
+                        val doc = snapshot.documents.maxByOrNull { it.getLong("updatedAt") ?: 0L } ?: snapshot.documents.first()
                         val docUid = doc.id
                         val name = doc.getString("name") ?: "Talkly User"
                         val rawPhone = doc.getString("phoneNumber") ?: phone
@@ -294,7 +342,7 @@ class FirebaseChatRepository(private val context: Context) {
             (phoneSuffix.isNotBlank() && com.family.talkly.util.PhoneUtils.extractPhoneSuffix(it.phone) == phoneSuffix)
         }
         currentList.add(0, newMember) // Put at top
-        _familyMembers.value = currentList
+        setFamilyMembersWithDeduplication(currentList)
 
         saveContactsToPrefs()
 
@@ -323,7 +371,7 @@ class FirebaseChatRepository(private val context: Context) {
 
     fun deleteContact(memberId: String) {
         val updatedList = _familyMembers.value.filter { it.id != memberId }
-        _familyMembers.value = updatedList
+        setFamilyMembersWithDeduplication(updatedList)
         saveContactsToPrefs()
 
         try {
@@ -335,9 +383,8 @@ class FirebaseChatRepository(private val context: Context) {
 
     fun clearDemoContacts() {
         contactPrefs.edit().putBoolean(KEY_DEMO_CLEARED, true).apply()
-        val demoIds = setOf("mom", "dad", "grandma", "brother", "sister")
-        val filteredList = _familyMembers.value.filter { it.id !in demoIds }
-        _familyMembers.value = filteredList
+        val filteredList = _familyMembers.value.filter { it.id !in demoIdsSet && !it.id.startsWith("demo_") }
+        setFamilyMembersWithDeduplication(filteredList)
         saveContactsToPrefs()
     }
 
@@ -368,7 +415,7 @@ class FirebaseChatRepository(private val context: Context) {
                                 member
                             }
                         }
-                        _familyMembers.value = updatedMembers
+                        setFamilyMembersWithDeduplication(updatedMembers)
                     }
                 }
         } catch (e: Exception) {
@@ -384,7 +431,7 @@ class FirebaseChatRepository(private val context: Context) {
                 member
             }
         }
-        _familyMembers.value = currentList
+        setFamilyMembersWithDeduplication(currentList)
 
         try {
             firestore?.collection("family_members")
@@ -413,7 +460,7 @@ class FirebaseChatRepository(private val context: Context) {
                 member
             }
         }
-        _familyMembers.value = currentList
+        setFamilyMembersWithDeduplication(currentList)
 
         try {
             val presenceMap = mapOf(
@@ -455,18 +502,22 @@ class FirebaseChatRepository(private val context: Context) {
                         val registeredDocsBySuffix = mutableMapOf<String, com.google.firebase.firestore.DocumentSnapshot>()
                         val registeredDocsByFullPhone = mutableMapOf<String, com.google.firebase.firestore.DocumentSnapshot>()
 
-                        for (doc in snapshot.documents) {
+                        val sortedDocs = snapshot.documents.sortedByDescending { it.getLong("updatedAt") ?: 0L }
+
+                        for (doc in sortedDocs) {
                             val rawPhone = doc.getString("phoneNumber") ?: ""
                             val suffix = doc.getString("phoneSuffix") ?: com.family.talkly.util.PhoneUtils.extractPhoneSuffix(rawPhone)
                             val cleanPhone = com.family.talkly.util.PhoneUtils.cleanPhoneNumber(rawPhone)
 
-                            if (suffix.isNotBlank()) {
+                            if (suffix.isNotBlank() && !registeredDocsBySuffix.containsKey(suffix)) {
                                 registeredDocsBySuffix[suffix] = doc
                             }
-                            if (cleanPhone.isNotBlank()) {
+                            if (cleanPhone.isNotBlank() && !registeredDocsByFullPhone.containsKey(cleanPhone)) {
                                 registeredDocsByFullPhone[cleanPhone] = doc
                             }
-                            registeredDocsByFullPhone[doc.id] = doc
+                            if (!registeredDocsByFullPhone.containsKey(doc.id)) {
+                                registeredDocsByFullPhone[doc.id] = doc
+                            }
                         }
 
                         val updatedMembers = _familyMembers.value.map { member ->
@@ -541,7 +592,7 @@ class FirebaseChatRepository(private val context: Context) {
                                 )
                             }
                         }
-                        _familyMembers.value = updatedMembers
+                        setFamilyMembersWithDeduplication(updatedMembers)
                         saveContactsToPrefs()
                     }
                 }
@@ -791,8 +842,9 @@ class FirebaseChatRepository(private val context: Context) {
         secondaryMessagesListener?.remove()
         currentSyncedUserId = currentUserId
 
-        val sessionPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
-        val userPhone = sessionPrefs.getString("user_phone", "") ?: ""
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val userPhone = sessionPrefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", "") ?: ""
         val userSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(userPhone)
 
         val handleMessageSnapshot: (com.google.firebase.firestore.QuerySnapshot?, com.google.firebase.firestore.FirebaseFirestoreException?) -> Unit = { snapshot, error ->
@@ -805,7 +857,7 @@ class FirebaseChatRepository(private val context: Context) {
                     try {
                         val id = doc.getString("id") ?: doc.id
                         val senderId = doc.getString("senderId") ?: ""
-                        val senderName = doc.getString("senderName") ?: "Talkly User"
+                        val senderName = doc.getString("senderName")?.ifBlank { null } ?: "Talkly User"
                         val receiverId = doc.getString("receiverId") ?: ""
                         val textContent = doc.getString("textContent") ?: ""
                         val mediaUrl = doc.getString("mediaUrl")
@@ -861,7 +913,7 @@ class FirebaseChatRepository(private val context: Context) {
                         if (rawOtherPartyId.isBlank()) continue
 
                         val canonicalOtherPartyId = getCanonicalMemberId(rawOtherPartyId)
-                        ensureContactInChatList(canonicalOtherPartyId)
+                        ensureContactInChatList(canonicalOtherPartyId, fallbackName = senderName)
 
                         val existingMsgs = (currentMap[canonicalOtherPartyId] ?: currentMap[rawOtherPartyId] ?: emptyList()).toMutableList()
                         val existingIndex = existingMsgs.indexOfFirst { it.id == id }
@@ -912,91 +964,177 @@ class FirebaseChatRepository(private val context: Context) {
         }
     }
 
-    fun ensureContactInChatList(memberOrUidOrPhone: String) {
-        if (memberOrUidOrPhone.isBlank()) return
+    fun resetSessionOnLogout() {
+        try {
+            messagesListener?.remove()
+            messagesListener = null
+            secondaryMessagesListener?.remove()
+            secondaryMessagesListener = null
+            currentSyncedUserId = null
+            _messagesMap.value = emptyMap()
+            _familyMembers.value = emptyList()
+            _statuses.value = emptyList()
+            contactPrefs.edit().clear().apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error resetting session on logout: ${e.localizedMessage}")
+        }
+    }
+
+    fun ensureContactInChatList(memberOrUidOrPhone: String, fallbackName: String? = null) {
+        if (memberOrUidOrPhone.isBlank() || memberOrUidOrPhone == "self") return
         val suffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(memberOrUidOrPhone)
-        val existing = _familyMembers.value.firstOrNull { member ->
+        val validFallback = if (!fallbackName.isNullOrBlank() && fallbackName != "Talkly User" && fallbackName != "You") fallbackName else null
+
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val currentUid = currentSyncedUserId
+            ?: sessionPrefs.getString("user_uid", null)
+            ?: fallbackPrefs.getString("user_uid", null)
+        val currentPhone = sessionPrefs.getString("user_phone", null)
+            ?: fallbackPrefs.getString("user_phone", null) ?: ""
+        val currentSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(currentPhone)
+
+        // Exclude self explicitly
+        if ((!currentUid.isNullOrBlank() && memberOrUidOrPhone == currentUid) ||
+            (currentPhone.isNotBlank() && memberOrUidOrPhone == currentPhone) ||
+            (currentSuffix.isNotBlank() && suffix.isNotBlank() && suffix == currentSuffix)) {
+            return
+        }
+
+        val existingIndex = _familyMembers.value.indexOfFirst { member ->
             member.id == memberOrUidOrPhone ||
             member.firebaseUid == memberOrUidOrPhone ||
             member.phone == memberOrUidOrPhone ||
             (suffix.isNotBlank() && com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone) == suffix)
         }
 
-        if (existing == null) {
-            firestore?.collection("users")
-                ?.document(memberOrUidOrPhone)
-                ?.get()
-                ?.addOnSuccessListener { doc ->
-                    if (doc != null && doc.exists()) {
-                        val uid = doc.id
-                        val name = doc.getString("name") ?: "Talkly User"
-                        val phone = doc.getString("phoneNumber") ?: memberOrUidOrPhone
-                        val pic = doc.getString("profilePicUrl")
-                        val bio = doc.getString("bio") ?: "Available on Talkly 💬"
+        if (existingIndex >= 0) {
+            val existing = _familyMembers.value[existingIndex]
+            if (existing.name == "Talkly User" && validFallback != null) {
+                val updatedList = _familyMembers.value.toMutableList()
+                updatedList[existingIndex] = existing.copy(name = validFallback)
+                setFamilyMembersWithDeduplication(updatedList)
+                saveContactsToPrefs()
+            }
+            return
+        }
 
-                        val newMember = FamilyMember(
-                            id = uid,
-                            name = name,
-                            relation = "Contact",
-                            avatarUrl = pic,
-                            status = bio,
-                            phone = phone,
-                            isOnline = true,
-                            isRegisteredOnTalkly = true,
-                            firebaseUid = uid
-                        )
+        firestore?.collection("users")
+            ?.document(memberOrUidOrPhone)
+            ?.get()
+            ?.addOnSuccessListener { doc ->
+                if (doc != null && doc.exists() && !doc.getString("name").isNullOrBlank()) {
+                    val uid = doc.id
+                    val name = doc.getString("name") ?: validFallback ?: memberOrUidOrPhone
+                    val phone = doc.getString("phoneNumber") ?: memberOrUidOrPhone
+                    val pic = doc.getString("profilePicUrl")
+                    val bio = doc.getString("bio") ?: "Available on Talkly 💬"
 
-                        val currentList = _familyMembers.value.toMutableList()
-                        if (currentList.none { it.id == uid || it.firebaseUid == uid }) {
-                            currentList.add(0, newMember)
-                            _familyMembers.value = currentList
-                            saveContactsToPrefs()
-                        }
-                    } else {
-                        val fallbackMember = FamilyMember(
-                            id = memberOrUidOrPhone,
-                            name = if (memberOrUidOrPhone.startsWith("+") || memberOrUidOrPhone.all { it.isDigit() }) memberOrUidOrPhone else "Talkly User",
-                            relation = "Contact",
-                            phone = memberOrUidOrPhone,
-                            isOnline = true,
-                            isRegisteredOnTalkly = true,
-                            firebaseUid = if (!memberOrUidOrPhone.startsWith("contact_") && !memberOrUidOrPhone.contains(" ")) memberOrUidOrPhone else null
-                        )
-                        val currentList = _familyMembers.value.toMutableList()
-                        if (currentList.none { it.id == memberOrUidOrPhone }) {
-                            currentList.add(0, fallbackMember)
-                            _familyMembers.value = currentList
-                            saveContactsToPrefs()
-                        }
-                    }
-                }
-                ?.addOnFailureListener {
-                    val fallbackMember = FamilyMember(
-                        id = memberOrUidOrPhone,
-                        name = memberOrUidOrPhone,
+                    val newMember = FamilyMember(
+                        id = uid,
+                        name = name,
                         relation = "Contact",
-                        phone = memberOrUidOrPhone,
+                        avatarUrl = pic,
+                        status = bio,
+                        phone = phone,
                         isOnline = true,
-                        isRegisteredOnTalkly = true
+                        isRegisteredOnTalkly = true,
+                        firebaseUid = uid
                     )
+
                     val currentList = _familyMembers.value.toMutableList()
-                    if (currentList.none { it.id == memberOrUidOrPhone }) {
-                        currentList.add(0, fallbackMember)
-                        _familyMembers.value = currentList
+                    if (currentList.none { it.id == uid || it.firebaseUid == uid }) {
+                        currentList.add(0, newMember)
+                        setFamilyMembersWithDeduplication(currentList)
                         saveContactsToPrefs()
                     }
+                } else if (suffix.isNotBlank()) {
+                    firestore?.collection("users")
+                        ?.whereEqualTo("phoneSuffix", suffix)
+                        ?.get()
+                        ?.addOnSuccessListener { querySnap ->
+                            val foundDoc = querySnap?.documents?.firstOrNull { !it.getString("name").isNullOrBlank() }
+                            if (foundDoc != null) {
+                                val uid = foundDoc.id
+                                val name = foundDoc.getString("name") ?: validFallback ?: memberOrUidOrPhone
+                                val phone = foundDoc.getString("phoneNumber") ?: memberOrUidOrPhone
+                                val pic = foundDoc.getString("profilePicUrl")
+                                val bio = foundDoc.getString("bio") ?: "Available on Talkly 💬"
+
+                                val newMember = FamilyMember(
+                                    id = uid,
+                                    name = name,
+                                    relation = "Contact",
+                                    avatarUrl = pic,
+                                    status = bio,
+                                    phone = phone,
+                                    isOnline = true,
+                                    isRegisteredOnTalkly = true,
+                                    firebaseUid = uid
+                                )
+
+                                val currentList = _familyMembers.value.toMutableList()
+                                if (currentList.none { it.id == uid || it.firebaseUid == uid }) {
+                                    currentList.add(0, newMember)
+                                    setFamilyMembersWithDeduplication(currentList)
+                                    saveContactsToPrefs()
+                                }
+                            } else {
+                                createFallbackContact(memberOrUidOrPhone, validFallback)
+                            }
+                        }
+                        ?.addOnFailureListener {
+                            createFallbackContact(memberOrUidOrPhone, validFallback)
+                        }
+                } else {
+                    createFallbackContact(memberOrUidOrPhone, validFallback)
                 }
+            }
+            ?.addOnFailureListener {
+                createFallbackContact(memberOrUidOrPhone, validFallback)
+            }
+    }
+
+    private fun createFallbackContact(memberOrUidOrPhone: String, validFallbackName: String?) {
+        val displayName = validFallbackName
+            ?: if (memberOrUidOrPhone.startsWith("+") || memberOrUidOrPhone.all { it.isDigit() }) memberOrUidOrPhone
+            else if (memberOrUidOrPhone.length > 6) "User " + memberOrUidOrPhone.takeLast(4)
+            else memberOrUidOrPhone
+
+        val fallbackMember = FamilyMember(
+            id = memberOrUidOrPhone,
+            name = displayName,
+            relation = "Contact",
+            phone = memberOrUidOrPhone,
+            isOnline = true,
+            isRegisteredOnTalkly = true,
+            firebaseUid = if (!memberOrUidOrPhone.startsWith("contact_") && !memberOrUidOrPhone.contains(" ")) memberOrUidOrPhone else null
+        )
+        val currentList = _familyMembers.value.toMutableList()
+        if (currentList.none { it.id == memberOrUidOrPhone }) {
+            currentList.add(0, fallbackMember)
+            setFamilyMembersWithDeduplication(currentList)
+            saveContactsToPrefs()
         }
     }
 
     private fun writeMessageToCollection(targetDocId: String, message: ChatMessage) {
         if (targetDocId.isBlank()) return
+        val safeMessage = if ((message.mediaUrl?.length ?: 0) > 800_000) {
+            Log.e(TAG, "Preventing Firestore write: mediaUrl length (${message.mediaUrl?.length}) exceeds safe 800KB size limit.")
+            message.copy(
+                mediaUrl = null,
+                textContent = message.textContent + " (মিডিয়া ফাইলের সাইজ অতিরিক্ত বড় হওয়ার কারণে পাঠানো সম্ভব হয়নি)"
+            )
+        } else {
+            message
+        }
         try {
             firestore?.collection("family_chats")
                 ?.document(targetDocId)
                 ?.collection("messages")
-                ?.document(message.id)
-                ?.set(message)
+                ?.document(safeMessage.id)
+                ?.set(safeMessage)
         } catch (e: Exception) {
             Log.w(TAG, "Error writing message to $targetDocId: ${e.localizedMessage}")
         }
@@ -1013,7 +1151,6 @@ class FirebaseChatRepository(private val context: Context) {
         replyToText: String? = null
     ) {
         val canonicalId = getCanonicalMemberId(memberId)
-        ensureContactInChatList(canonicalId)
 
         val targetMember = _familyMembers.value.firstOrNull {
             it.id == canonicalId || it.id == memberId || it.firebaseUid == canonicalId || it.firebaseUid == memberId
@@ -1021,11 +1158,24 @@ class FirebaseChatRepository(private val context: Context) {
         val targetPhone = targetMember?.phone ?: if (memberId.startsWith("+") || memberId.all { it.isDigit() }) memberId else ""
         val targetSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(targetPhone)
 
-        val senderUid = currentSyncedUserId ?: "self"
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+
+        val senderUid = currentSyncedUserId
+            ?: sessionPrefs.getString("user_uid", null)
+            ?: fallbackPrefs.getString("user_uid", null)
+            ?: "self"
+
+        val senderName = sessionPrefs.getString("user_name", null)
+            ?: fallbackPrefs.getString("user_name", null)
+            ?: "Talkly User"
+
+        ensureContactInChatList(canonicalId, fallbackName = targetMember?.name)
+
         val newMessage = ChatMessage(
             id = "msg_${System.currentTimeMillis()}",
             senderId = senderUid,
-            senderName = "You",
+            senderName = senderName,
             receiverId = canonicalId,
             messageType = type,
             textContent = textContent,
@@ -1082,7 +1232,7 @@ class FirebaseChatRepository(private val context: Context) {
                                     m.copy(firebaseUid = foundUid, isRegisteredOnTalkly = true)
                                 } else m
                             }
-                            _familyMembers.value = updatedMembers
+                            setFamilyMembersWithDeduplication(updatedMembers)
                             saveContactsToPrefs()
                         }
                     }
@@ -1266,56 +1416,13 @@ class FirebaseChatRepository(private val context: Context) {
                         viewers = viewers,
                         likes = likes
                     )
-                    if (!status.isExpired(_simulatedTimeOffsetMs.value)) {
+                    if (!status.isExpired(_simulatedTimeOffsetMs.value) && status.userId !in demoIdsSet) {
                         loadedList.add(status)
                     }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error parsing saved statuses: ${e.message}")
             }
-        }
-
-        // Seed initial sample statuses if none exist
-        if (loadedList.isEmpty()) {
-            val now = System.currentTimeMillis()
-            val twoHoursAgo = now - (2 * 60 * 60 * 1000L)
-            val fourHoursAgo = now - (4 * 60 * 60 * 1000L)
-            val sixHoursAgo = now - (6 * 60 * 60 * 1000L)
-
-            val seedStatuses = listOf(
-                StatusItem(
-                    id = "status_safwan_1",
-                    userId = "safwan",
-                    userName = "Safwan",
-                    userAvatarUrl = null,
-                    textContent = "শুভ সকাল সবাইকে! 🌸 হ্যাভ আ গ্রেট ডে!",
-                    backgroundColorHex = "#321C3B",
-                    timestamp = twoHoursAgo,
-                    isSeen = false
-                ),
-                StatusItem(
-                    id = "status_dr_rashed_1",
-                    userId = "dr_rashed",
-                    userName = "Dr. Rashed",
-                    userAvatarUrl = null,
-                    textContent = "In medical consultation today. Stay safe & healthy! 🩺",
-                    photoUrl = "https://images.unsplash.com/photo-1505751172876-fa1923c5c528?w=800&auto=format&fit=crop&q=80",
-                    backgroundColorHex = "#004D40",
-                    timestamp = fourHoursAgo,
-                    isSeen = false
-                ),
-                StatusItem(
-                    id = "status_sk_farid_1",
-                    userId = "sk_farid",
-                    userName = "Sk F A R I D",
-                    userAvatarUrl = null,
-                    textContent = "Working on new mobile app features! 💼💻",
-                    backgroundColorHex = "#1A237E",
-                    timestamp = sixHoursAgo,
-                    isSeen = false
-                )
-            )
-            loadedList.addAll(seedStatuses)
         }
 
         _statuses.value = loadedList

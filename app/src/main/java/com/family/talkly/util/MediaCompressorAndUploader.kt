@@ -14,6 +14,7 @@ import android.net.Uri
 import android.util.Log
 import com.google.firebase.storage.FirebaseStorage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -149,7 +150,7 @@ class MediaCompressorAndUploader(private val context: Context) {
     }
 
     /**
-     * Uploads compressed file to Firebase Storage with progress tracking.
+     * Uploads compressed file to Firebase Storage with progress tracking and safe coroutine await.
      */
     suspend fun uploadToFirebaseStorage(
         file: File,
@@ -157,48 +158,39 @@ class MediaCompressorAndUploader(private val context: Context) {
         onProgress: (Int, String) -> Unit
     ): String = withContext(Dispatchers.IO) {
         onProgress(5, "Connecting to Firebase Storage...")
-        try {
-            val storageRef = FirebaseStorage.getInstance().reference.child(remotePath)
-            val uploadTask = storageRef.putFile(Uri.fromFile(file))
+        val storageRef = FirebaseStorage.getInstance().reference.child(remotePath)
+        val uploadTask = storageRef.putFile(Uri.fromFile(file))
 
-            uploadTask.addOnProgressListener { snapshot ->
+        uploadTask.addOnProgressListener { snapshot ->
+            if (snapshot.totalByteCount > 0) {
                 val progressPercent = ((100.0 * snapshot.bytesTransferred) / snapshot.totalByteCount).toInt()
                 val kbSent = snapshot.bytesTransferred / 1024
                 val kbTotal = snapshot.totalByteCount / 1024
                 onProgress(progressPercent.coerceIn(0, 100), "Uploading to Firebase: ${kbSent}KB / ${kbTotal}KB (${progressPercent}%)")
             }
+        }
 
-            // Await completion or fallback
-            var downloadUrlStr: String? = null
-            uploadTask.continueWithTask { task ->
-                if (!task.isSuccessful) {
-                    task.exception?.let { throw it }
-                }
-                storageRef.downloadUrl
-            }.addOnSuccessListener { uri ->
-                downloadUrlStr = uri.toString()
-            }
-
-            // Wait briefly for task
-            val startTime = System.currentTimeMillis()
-            while (!uploadTask.isComplete && System.currentTimeMillis() - startTime < 12000) {
-                kotlinx.coroutines.delay(100)
-            }
-
-            if (uploadTask.isSuccessful && downloadUrlStr != null) {
-                downloadUrlStr!!
-            } else {
-                Log.w(TAG, "Firebase Storage offline or incomplete. Encoding compressed file to Base64 data string.")
-                encodeFileToBase64(file)
-            }
+        return@withContext try {
+            uploadTask.await()
+            onProgress(90, "Generating download link...")
+            val downloadUri = storageRef.downloadUrl.await()
+            onProgress(100, "Media upload complete!")
+            downloadUri.toString()
         } catch (e: Exception) {
-            Log.w(TAG, "Firebase Storage upload error fallback: ${e.localizedMessage}")
-            encodeFileToBase64(file)
+            Log.w(TAG, "Firebase Storage upload error/fallback: ${e.localizedMessage}")
+            if (file.exists() && file.length() in 1..500_000) {
+                encodeFileToBase64(file)
+            } else {
+                throw java.io.IOException("Video/Media upload failed (${formatFileSize(file.length())}). Please check your internet connection to upload.")
+            }
         }
     }
 
     fun encodeFileToBase64(file: File): String {
         return try {
+            if (!file.exists() || file.length() > 500_000) {
+                throw IllegalStateException("File too large for Base64 (${formatFileSize(file.length())})")
+            }
             val bytes = file.readBytes()
             val base64Str = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
             val mime = if (file.name.endsWith(".mp4", ignoreCase = true)) "video/mp4" else "image/jpeg"

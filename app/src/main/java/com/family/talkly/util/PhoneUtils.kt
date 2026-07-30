@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 
@@ -82,33 +83,39 @@ object PhoneUtils {
     }
 
     /**
-     * Extracts a frame thumbnail from video URL, Uri or base64 stream.
+     * Extracts a frame thumbnail from video URL, Uri or base64 stream safely.
      */
     fun getVideoThumbnail(context: Context, videoUrl: String?): Bitmap? {
         if (videoUrl.isNullOrBlank()) return null
         val retriever = MediaMetadataRetriever()
+        var tempCreatedFile: File? = null
         return try {
             if (videoUrl.startsWith("http://") || videoUrl.startsWith("https://")) {
                 retriever.setDataSource(videoUrl, HashMap<String, String>())
             } else if (videoUrl.startsWith("content://") || videoUrl.startsWith("file://")) {
                 retriever.setDataSource(context, Uri.parse(videoUrl))
             } else if (videoUrl.startsWith("data:") || videoUrl.startsWith("base64:")) {
+                if (videoUrl.length > 800_000) return null
                 val commaIndex = videoUrl.indexOf(",")
                 val base64Str = if (commaIndex != -1) videoUrl.substring(commaIndex + 1) else videoUrl.removePrefix("base64:")
                 val bytes = android.util.Base64.decode(base64Str, android.util.Base64.DEFAULT)
                 val tempFile = File.createTempFile("v_thumb_${videoUrl.hashCode()}", ".mp4", context.cacheDir)
                 FileOutputStream(tempFile).use { it.write(bytes) }
+                tempCreatedFile = tempFile
                 retriever.setDataSource(tempFile.absolutePath)
-                tempFile.delete()
             } else {
                 retriever.setDataSource(videoUrl)
             }
             val frame = retriever.frameAtTime
-            retriever.release()
             frame
-        } catch (e: Exception) {
-            try { retriever.release() } catch (_: Exception) {}
+        } catch (e: Throwable) {
+            Log.w("PhoneUtils", "Error getting video thumbnail: ${e.localizedMessage}")
             null
+        } finally {
+            try { retriever.release() } catch (_: Exception) {}
+            tempCreatedFile?.let {
+                try { it.delete() } catch (_: Exception) {}
+            }
         }
     }
 
