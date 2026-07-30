@@ -84,7 +84,7 @@ fun MainScreen(
 
     androidx.compose.runtime.LaunchedEffect(currentUserProfile) {
         if (currentUserProfile != null && currentUserProfile.uid.isNotBlank()) {
-            chatRepository.startRealtimeMessageSync(currentUserProfile.uid)
+            chatRepository.invalidateLocalCacheAndSyncPrimaryProfile(currentUserProfile.uid)
             zegoManager.startRealtimeCallSync(currentUserProfile, chatRepository)
         }
     }

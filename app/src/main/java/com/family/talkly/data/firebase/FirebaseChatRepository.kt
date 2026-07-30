@@ -964,6 +964,52 @@ class FirebaseChatRepository(private val context: Context) {
         }
     }
 
+    fun invalidateLocalCacheAndSyncPrimaryProfile(primaryUid: String) {
+        if (primaryUid.isBlank()) return
+
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val userPhone = sessionPrefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", "") ?: ""
+        val userSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(userPhone)
+
+        // Purge local contacts cache entries associated with self/duplicate UIDs
+        val currentList = _familyMembers.value.toMutableList()
+        val filteredList = currentList.filter { member ->
+            val mSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone)
+            val isSelfUid = (member.id == primaryUid || member.firebaseUid == primaryUid)
+            val isSelfPhone = (userPhone.isNotBlank() && member.phone == userPhone)
+            val isSelfSuffix = (userSuffix.isNotBlank() && mSuffix.isNotBlank() && mSuffix == userSuffix)
+            !(isSelfUid || isSelfPhone || isSelfSuffix)
+        }
+        setFamilyMembersWithDeduplication(filteredList)
+        saveContactsToPrefs()
+
+        // Purge messages map entry for self key
+        val currentMap = _messagesMap.value.toMutableMap()
+        currentMap.remove(primaryUid)
+        currentMap.remove("self")
+        if (userSuffix.isNotBlank()) currentMap.remove(userSuffix)
+        _messagesMap.value = currentMap
+
+        // Merge & normalize local statuses for self profile
+        val updatedStatuses = _statuses.value.map { item ->
+            val isSelf = item.userId == "self" ||
+                    item.userId == primaryUid ||
+                    (userPhone.isNotBlank() && item.userId == userPhone) ||
+                    (userSuffix.isNotBlank() && com.family.talkly.util.PhoneUtils.extractPhoneSuffix(item.userId) == userSuffix)
+            if (isSelf) {
+                item.copy(userId = primaryUid)
+            } else {
+                item
+            }
+        }
+        _statuses.value = updatedStatuses
+        saveStatusesToPrefs()
+
+        // Restart realtime message listener with primary user ID
+        startRealtimeMessageSync(primaryUid)
+    }
+
     fun resetSessionOnLogout() {
         try {
             messagesListener?.remove()
@@ -1679,9 +1725,28 @@ class FirebaseChatRepository(private val context: Context) {
 
     fun getGroupedActiveStatuses(currentUserId: String = "self"): List<UserStatusGroup> {
         val activeStatuses = _statuses.value.filter { !it.isExpired(_simulatedTimeOffsetMs.value) }
-        val groupedMap = activeStatuses.groupBy { it.userId }
 
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val userPhone = sessionPrefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", "") ?: ""
+        val userSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(userPhone)
         val realCurrentUid = if (currentUserId != "self") currentUserId else (currentSyncedUserId ?: "self")
+
+        // Normalize statuses so all stories belonging to self/duplicate accounts merge into realCurrentUid
+        val normalizedStatuses = activeStatuses.map { item ->
+            val isSelf = item.userId == "self" ||
+                    item.userId == realCurrentUid ||
+                    (currentSyncedUserId != null && item.userId == currentSyncedUserId) ||
+                    (userPhone.isNotBlank() && item.userId == userPhone) ||
+                    (userSuffix.isNotBlank() && com.family.talkly.util.PhoneUtils.extractPhoneSuffix(item.userId) == userSuffix)
+            if (isSelf) {
+                item.copy(userId = realCurrentUid)
+            } else {
+                item
+            }
+        }
+
+        val groupedMap = normalizedStatuses.groupBy { it.userId }
 
         val groups = groupedMap.map { (uId, statusList) ->
             val firstItem = statusList.first()

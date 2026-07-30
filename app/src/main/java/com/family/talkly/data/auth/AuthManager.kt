@@ -386,44 +386,218 @@ class AuthManager(private val context: Context) {
         return Pair(rawProfilePicUrl, rawProfilePicUrl)
     }
 
+    /**
+     * Consolidates duplicate user accounts under a single Primary User document and session.
+     */
+    fun performAutomaticAccountMerge(
+        authUid: String,
+        loginPhone: String,
+        onComplete: ((UserProfile) -> Unit)? = null
+    ) {
+        val db = getFirestore()
+        val suffix = PhoneUtils.extractPhoneSuffix(loginPhone)
+
+        if (suffix.isBlank()) {
+            checkUserProfileInFirestore(authUid, loginPhone)
+            return
+        }
+
+        try {
+            db.collection("users")
+                .whereEqualTo("phoneSuffix", suffix)
+                .get()
+                .addOnSuccessListener { querySnap ->
+                    val documents = querySnap?.documents ?: emptyList()
+
+                    if (documents.isEmpty()) {
+                        // Document not found by phoneSuffix - search by authUid
+                        db.collection("users").document(authUid).get()
+                            .addOnSuccessListener { doc ->
+                                if (doc != null && doc.exists() && !doc.getString("name").isNullOrBlank()) {
+                                    val profile = extractUserProfileFromDoc(authUid, loginPhone, doc)
+                                    saveLocalSession(profile.uid, profile.name, profile.phoneNumber, profile.profilePicUrl, profile.bio)
+                                    _authState.value = AuthState.Authenticated(profile)
+                                    onComplete?.invoke(profile)
+                                } else {
+                                    handleMissingProfile(authUid, loginPhone)
+                                }
+                            }
+                            .addOnFailureListener {
+                                handleMissingProfile(authUid, loginPhone)
+                            }
+                        return@addOnSuccessListener
+                    }
+
+                    // 1. DUPLICATE ACCOUNT DETECTION & SELECTION:
+                    // Sort the documents by lastLoginAt, updatedAt, or createdAt timestamp DESCENDING
+                    val sortedDocs = documents.sortedByDescending { doc ->
+                        doc.getLong("lastLoginAt")
+                            ?: doc.getLong("updatedAt")
+                            ?: doc.getLong("createdAt")
+                            ?: 0L
+                    }
+
+                    // Set the NEWEST / MOST RECENT document as the Primary User Account source
+                    val newestDoc = sortedDocs.first()
+                    val primaryName = newestDoc.getString("name")?.takeIf { it.isNotBlank() }
+                        ?: prefs.getString(KEY_NAME, "")?.takeIf { it.isNotBlank() }
+                        ?: "Talkly User"
+                    val primaryPhone = newestDoc.getString("phoneNumber")?.takeIf { it.isNotBlank() } ?: loginPhone
+                    val docPic = newestDoc.getString("profilePicUrl") ?: ""
+                    val localPic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
+                    val primaryPic = if (docPic.startsWith("http://") || docPic.startsWith("https://") || docPic.startsWith("data:")) {
+                        docPic
+                    } else if (localPic.isNotBlank() && !localPic.startsWith("content://")) {
+                        localPic
+                    } else {
+                        docPic
+                    }
+                    val primaryBio = newestDoc.getString("bio")?.takeIf { it.isNotBlank() } ?: "Available on Talkly 💬"
+                    val primaryCreated = newestDoc.getLong("createdAt") ?: System.currentTimeMillis()
+
+                    val primaryUid = authUid
+                    val now = System.currentTimeMillis()
+
+                    val primaryProfile = UserProfile(
+                        uid = primaryUid,
+                        name = primaryName,
+                        phoneNumber = primaryPhone,
+                        phoneSuffix = suffix,
+                        profilePicUrl = primaryPic,
+                        bio = primaryBio
+                    )
+
+                    // 3. PERSIST SINGLE PRIMARY SESSION:
+                    val primaryProfileMap = mapOf(
+                        "uid" to primaryUid,
+                        "name" to primaryName,
+                        "phoneNumber" to primaryPhone,
+                        "phoneSuffix" to suffix,
+                        "email" to getInternalEmail(primaryPhone),
+                        "profilePicUrl" to primaryPic,
+                        "bio" to primaryBio,
+                        "createdAt" to primaryCreated,
+                        "lastLoginAt" to now,
+                        "updatedAt" to now,
+                        "isMerged" to false
+                    )
+
+                    db.collection("users").document(primaryUid)
+                        .set(primaryProfileMap, SetOptions.merge())
+
+                    saveLocalSession(primaryUid, primaryName, primaryPhone, primaryPic, primaryBio)
+
+                    // 2. DATA MIGRATION & CLEANUP:
+                    val olderDuplicateDocs = documents.filter { it.id != primaryUid }
+                    for (dupDoc in olderDuplicateDocs) {
+                        val dupUid = dupDoc.id
+                        Log.d(TAG, "Merging duplicate user account $dupUid into primary account $primaryUid")
+
+                        db.collection("users").document(dupUid).set(
+                            mapOf("isMerged" to true, "mergedIntoUid" to primaryUid),
+                            SetOptions.merge()
+                        )
+
+                        migrateDuplicateAccountData(dupUid, primaryUid)
+
+                        db.collection("users").document(dupUid).delete()
+                    }
+
+                    _authState.value = AuthState.Authenticated(primaryProfile)
+                    onComplete?.invoke(primaryProfile)
+                }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "Error querying users by phoneSuffix for merge: ${e.localizedMessage}")
+                    checkUserProfileInFirestore(authUid, loginPhone)
+                }
+        } catch (e: Exception) {
+            Log.w(TAG, "Exception in performAutomaticAccountMerge: ${e.localizedMessage}")
+            checkUserProfileInFirestore(authUid, loginPhone)
+        }
+    }
+
+    private fun migrateDuplicateAccountData(fromUid: String, toUid: String) {
+        if (fromUid == toUid) return
+        val db = getFirestore()
+        try {
+            // Re-link existing chat threads and messages
+            db.collection("family_chats").document(fromUid).collection("messages").get()
+                .addOnSuccessListener { snap ->
+                    if (snap != null && !snap.isEmpty) {
+                        for (doc in snap.documents) {
+                            val msgData = doc.data?.toMutableMap() ?: mutableMapOf()
+                            val msgId = doc.id
+                            if (msgData["senderId"] == fromUid) msgData["senderId"] = toUid
+                            if (msgData["receiverId"] == fromUid) msgData["receiverId"] = toUid
+
+                            db.collection("family_chats").document(toUid)
+                                .collection("messages").document(msgId)
+                                .set(msgData)
+
+                            doc.reference.delete()
+                        }
+                    }
+                    db.collection("family_chats").document(fromUid).delete()
+                }
+
+            // Re-link contact references in family_members
+            db.collection("family_members").document(fromUid).get()
+                .addOnSuccessListener { doc ->
+                    if (doc != null && doc.exists()) {
+                        val memberData = doc.data?.toMutableMap() ?: mutableMapOf()
+                        memberData["id"] = toUid
+                        memberData["firebaseUid"] = toUid
+                        db.collection("family_members").document(toUid).set(memberData)
+                        doc.reference.delete()
+                    }
+                }
+
+            // Re-link / Merge Statuses & Stories in Firestore "statuses" collection
+            db.collection("statuses").whereEqualTo("userId", fromUid).get()
+                .addOnSuccessListener { snap ->
+                    if (snap != null && !snap.isEmpty) {
+                        for (doc in snap.documents) {
+                            doc.reference.update("userId", toUid)
+                        }
+                    }
+                }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error migrating duplicate data from $fromUid to $toUid: ${e.localizedMessage}")
+        }
+    }
+
+    private fun extractUserProfileFromDoc(uid: String, fallbackPhone: String, doc: com.google.firebase.firestore.DocumentSnapshot): UserProfile {
+        val name = doc.getString("name") ?: ""
+        val phone = doc.getString("phoneNumber") ?: fallbackPhone
+        val suffix = doc.getString("phoneSuffix") ?: PhoneUtils.extractPhoneSuffix(phone)
+        val docPic = doc.getString("profilePicUrl") ?: ""
+        val localPic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
+        val finalPic = if (docPic.startsWith("http://") || docPic.startsWith("https://") || docPic.startsWith("data:")) {
+            docPic
+        } else if (localPic.isNotBlank() && !localPic.startsWith("content://")) {
+            localPic
+        } else {
+            docPic
+        }
+        val bio = doc.getString("bio") ?: "Available on Talkly 💬"
+
+        return UserProfile(
+            uid = uid,
+            name = name,
+            phoneNumber = phone,
+            phoneSuffix = suffix,
+            profilePicUrl = finalPic,
+            bio = bio
+        )
+    }
+
     private fun cleanupDuplicateUserDocsAndSave(
         uid: String,
         profileMap: Map<String, Any?>,
         onComplete: (() -> Unit)? = null
     ) {
-        val db = getFirestore()
         val phone = profileMap["phoneNumber"] as? String ?: ""
-        val suffix = PhoneUtils.extractPhoneSuffix(phone)
-
-        try {
-            db.collection("users").document(uid)
-                .set(profileMap, SetOptions.merge())
-                .addOnSuccessListener {
-                    Log.d(TAG, "User profile saved to users/$uid successfully")
-                    onComplete?.invoke()
-                }
-                .addOnFailureListener { e ->
-                    Log.w(TAG, "Failed to save user profile to users/$uid: ${e.localizedMessage}")
-                    onComplete?.invoke()
-                }
-
-            if (suffix.isNotBlank()) {
-                db.collection("users")
-                    .whereEqualTo("phoneSuffix", suffix)
-                    .get()
-                    .addOnSuccessListener { querySnap ->
-                        if (querySnap != null) {
-                            for (doc in querySnap.documents) {
-                                if (doc.id != uid) {
-                                    Log.d(TAG, "Deleting duplicate user document ${doc.id} for phone suffix $suffix")
-                                    db.collection("users").document(doc.id).delete()
-                                }
-                            }
-                        }
-                    }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error in cleanupDuplicateUserDocsAndSave: ${e.localizedMessage}")
+        performAutomaticAccountMerge(uid, phone) {
             onComplete?.invoke()
         }
     }
@@ -460,6 +634,7 @@ class AuthManager(private val context: Context) {
             "profilePicUrl" to firestorePicUrl,
             "bio" to bio,
             "createdAt" to System.currentTimeMillis(),
+            "lastLoginAt" to System.currentTimeMillis(),
             "updatedAt" to System.currentTimeMillis()
         )
 
@@ -470,113 +645,7 @@ class AuthManager(private val context: Context) {
      * Checks Firestore 'users/{uid}' collection to see if user has completed profile setup
      */
     private fun checkUserProfileInFirestore(uid: String, phoneNumber: String) {
-        val db = getFirestore()
-        val suffix = PhoneUtils.extractPhoneSuffix(phoneNumber)
-
-        try {
-            db.collection("users").document(uid).get()
-                .addOnSuccessListener { doc ->
-                    if (doc != null && doc.exists() && !doc.getString("name").isNullOrBlank()) {
-                        val name = doc.getString("name") ?: ""
-                        val phone = doc.getString("phoneNumber") ?: phoneNumber
-                        val docSuffix = doc.getString("phoneSuffix") ?: PhoneUtils.extractPhoneSuffix(phone)
-                        val docPic = doc.getString("profilePicUrl") ?: ""
-                        val bio = doc.getString("bio") ?: "Available on Talkly 💬"
-
-                        val localStoredPic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
-                        val finalPic = if (docPic.startsWith("http://") || docPic.startsWith("https://") || docPic.startsWith("data:")) {
-                            docPic
-                        } else if (localStoredPic.isNotBlank() && !localStoredPic.startsWith("content://")) {
-                            localStoredPic
-                        } else {
-                            docPic
-                        }
-
-                        val profile = UserProfile(
-                            uid = uid,
-                            name = name,
-                            phoneNumber = phone,
-                            phoneSuffix = docSuffix,
-                            profilePicUrl = finalPic,
-                            bio = bio
-                        )
-                        saveLocalSession(uid, name, phone, finalPic, bio)
-
-                        // Safely update last login details in Firestore and clean up duplicate documents
-                        db.collection("users").document(uid).set(
-                            mapOf(
-                                "uid" to uid,
-                                "phoneNumber" to phone,
-                                "phoneSuffix" to docSuffix,
-                                "updatedAt" to System.currentTimeMillis()
-                            ),
-                            SetOptions.merge()
-                        )
-
-                        if (docSuffix.isNotBlank()) {
-                            db.collection("users")
-                                .whereEqualTo("phoneSuffix", docSuffix)
-                                .get()
-                                .addOnSuccessListener { querySnap ->
-                                    if (querySnap != null) {
-                                        for (d in querySnap.documents) {
-                                            if (d.id != uid) {
-                                                db.collection("users").document(d.id).delete()
-                                            }
-                                        }
-                                    }
-                                }
-                        }
-
-                        _authState.value = AuthState.Authenticated(profile)
-                    } else {
-                        // UID document not found or lacks name - search users by phoneSuffix
-                        if (suffix.isNotBlank()) {
-                            db.collection("users")
-                                .whereEqualTo("phoneSuffix", suffix)
-                                .get()
-                                .addOnSuccessListener { querySnap ->
-                                    val foundDoc = querySnap?.documents?.firstOrNull {
-                                        !it.getString("name").isNullOrBlank()
-                                    }
-                                    if (foundDoc != null) {
-                                        restoreAndAuthenticateUser(uid, phoneNumber, foundDoc)
-                                    } else {
-                                        // Fallback search across all users
-                                        db.collection("users").get()
-                                            .addOnSuccessListener { allSnap ->
-                                                val matched = allSnap?.documents?.firstOrNull { d ->
-                                                    val p = d.getString("phoneNumber") ?: ""
-                                                    val s = d.getString("phoneSuffix") ?: PhoneUtils.extractPhoneSuffix(p)
-                                                    (s.isNotBlank() && s == suffix) && !d.getString("name").isNullOrBlank()
-                                                }
-                                                if (matched != null) {
-                                                    restoreAndAuthenticateUser(uid, phoneNumber, matched)
-                                                } else {
-                                                    handleMissingProfile(uid, phoneNumber)
-                                                }
-                                            }
-                                            .addOnFailureListener {
-                                                handleMissingProfile(uid, phoneNumber)
-                                            }
-                                    }
-                                }
-                                .addOnFailureListener {
-                                    handleMissingProfile(uid, phoneNumber)
-                                }
-                        } else {
-                            handleMissingProfile(uid, phoneNumber)
-                        }
-                    }
-                }
-                .addOnFailureListener { e ->
-                    Log.w(TAG, "Firestore user profile read failed: ${e.localizedMessage}")
-                    handleMissingProfile(uid, phoneNumber)
-                }
-        } catch (e: Exception) {
-            Log.w(TAG, "Firestore user profile exception: ${e.localizedMessage}")
-            handleMissingProfile(uid, phoneNumber)
-        }
+        performAutomaticAccountMerge(uid, phoneNumber)
     }
 
     private fun restoreAndAuthenticateUser(uid: String, loginPhone: String, doc: com.google.firebase.firestore.DocumentSnapshot) {
