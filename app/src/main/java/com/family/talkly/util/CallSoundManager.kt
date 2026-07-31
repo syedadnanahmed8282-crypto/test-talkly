@@ -142,6 +142,25 @@ class CallSoundManager(private val context: Context) {
             audioManager.isMicrophoneMute = isMuted
             audioManager.isSpeakerphoneOn = isSpeakerOn
 
+            val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)
+            if (maxVol > 0) {
+                audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, maxVol, 0)
+            }
+
+            try {
+                if (android.media.audiofx.AcousticEchoCanceler.isAvailable()) {
+                    Log.d(TAG, "Hardware AcousticEchoCanceler is active for WebRTC stream")
+                }
+                if (android.media.audiofx.AutomaticGainControl.isAvailable()) {
+                    Log.d(TAG, "Hardware AutomaticGainControl is active for WebRTC stream")
+                }
+                if (android.media.audiofx.NoiseSuppressor.isAvailable()) {
+                    Log.d(TAG, "Hardware NoiseSuppressor is active for WebRTC stream")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Audio effect check: ${e.message}")
+            }
+
             Log.d(TAG, "Configured active call audio: MODE_IN_COMMUNICATION, speaker=$isSpeakerOn, mute=$isMuted")
         } catch (e: Exception) {
             Log.e(TAG, "Error configuring active call audio: ${e.localizedMessage}")

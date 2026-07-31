@@ -43,13 +43,21 @@ data class CurrentCallInfo(
     val isFrontCamera: Boolean = true,
     val isSpeakerOn: Boolean = true,
     val zegoAppId: Long = ZegoCallEngineManager.ZEGO_APP_ID,
-    val isZegoInitialized: Boolean = true
+    val isZegoInitialized: Boolean = true,
+    val stunServers: List<String> = ZegoCallEngineManager.PUBLIC_STUN_SERVERS,
+    val isRemoteAudioTrackAttached: Boolean = true,
+    val isRemoteVideoTrackAttached: Boolean = true
 )
 
 class ZegoCallEngineManager(private val context: Context) {
 
     companion object {
         const val TAG = "Talkly_ZegoEngine"
+        val PUBLIC_STUN_SERVERS: List<String> = listOf(
+            "stun:stun.l.google.com:19302",
+            "stun:stun1.l.google.com:19302",
+            "stun:stun2.l.google.com:19302"
+        )
         val ZEGO_APP_ID: Long = try {
             com.family.talkly.BuildConfig.ZEGO_APP_ID.toString().toLongOrNull() ?: 2119647829L
         } catch (e: Exception) {
