@@ -211,7 +211,11 @@ class CallForegroundService : Service() {
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePendingIntent)
             .addAction(android.R.drawable.ic_menu_call, "Answer", fullScreenPendingIntent)
 
-        startForeground(NOTIFICATION_ID, notificationBuilder.build())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notificationBuilder.build(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
+        } else {
+            startForeground(NOTIFICATION_ID, notificationBuilder.build())
+        }
     }
 
     private fun declineCallInFirestore(roomId: String) {
