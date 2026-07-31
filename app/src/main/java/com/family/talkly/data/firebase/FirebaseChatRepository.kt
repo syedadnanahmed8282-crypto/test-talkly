@@ -1459,6 +1459,27 @@ class FirebaseChatRepository(private val context: Context) {
             writeMessageToCollection(senderUid, newMessage)
         }
 
+        // Send high priority FCM push notification to recipient
+        val previewText = when (type) {
+            MessageType.TEXT -> textContent
+            MessageType.IMAGE -> "📷 Photo"
+            MessageType.VIDEO -> "📹 Video"
+            MessageType.VOICE_NOTE -> "🎵 Voice message"
+            MessageType.CALL_LOG -> "📞 Call"
+        }
+        val fcmPayload = mapOf(
+            "type" to "CHAT_MESSAGE",
+            "senderName" to senderName,
+            "messageText" to previewText,
+            "senderUid" to (senderUid ?: ""),
+            "chatMemberId" to canonicalId
+        )
+        com.family.talkly.util.FcmTokenManager.sendHighPriorityPush(
+            targetUid = resolvedTargetUid,
+            targetPhoneSuffix = targetSuffix,
+            dataPayload = fcmPayload
+        )
+
         // Async lookup if firebaseUid wasn't known yet
         if (resolvedTargetUid.isBlank() && targetSuffix.isNotBlank()) {
             try {

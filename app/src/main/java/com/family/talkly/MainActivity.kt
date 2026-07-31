@@ -65,9 +65,12 @@ class MainActivity : ComponentActivity() {
         themePreferences = ThemePreferences(applicationContext)
 
         com.family.talkly.util.TalklyNotificationHelper.initNotificationChannels(applicationContext)
+        com.family.talkly.util.FcmTokenManager.syncFcmToken(applicationContext)
 
         // Schedule WorkManager job for deleting expired Firestore messages (>48 hours old)
         DeleteExpiredMessagesWorker.schedulePeriodicCleanup(applicationContext)
+
+        handleIncomingCallIntent(intent)
 
         setContent {
             val currentThemeMode by themePreferences.themeMode.collectAsState()
@@ -189,6 +192,47 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingCallIntent(intent)
+    }
+
+    private fun handleIncomingCallIntent(intent: android.content.Intent?) {
+        if (intent == null) return
+        val isOpenCall = intent.getBooleanExtra("open_incoming_call", false)
+        if (isOpenCall) {
+            val callerName = intent.getStringExtra("caller_name") ?: "Talkly User"
+            val callerUid = intent.getStringExtra("caller_uid") ?: ""
+            val callerPhone = intent.getStringExtra("caller_phone") ?: ""
+            val callerAvatar = intent.getStringExtra("caller_avatar") ?: ""
+            val roomId = intent.getStringExtra("room_id") ?: ""
+            val callTypeStr = intent.getStringExtra("call_type") ?: "VIDEO"
+
+            com.family.talkly.service.CallForegroundService.stopCallService(applicationContext)
+
+            if (roomId.isNotBlank()) {
+                val callType = try {
+                    com.family.talkly.data.models.CallType.valueOf(callTypeStr)
+                } catch (e: Exception) {
+                    com.family.talkly.data.models.CallType.VIDEO
+                }
+                val incomingMember = com.family.talkly.data.models.FamilyMember(
+                    id = if (callerPhone.isNotBlank()) com.family.talkly.util.PhoneUtils.extractPhoneSuffix(callerPhone) else callerUid,
+                    name = callerName,
+                    phone = callerPhone,
+                    relation = "Family Member",
+                    status = "Incoming call...",
+                    avatarUrl = callerAvatar.ifBlank { null },
+                    isOnline = true,
+                    firebaseUid = callerUid,
+                    isRegisteredOnTalkly = true
+                )
+                zegoManager.setIncomingCallFromKilledState(incomingMember, roomId, callType)
             }
         }
     }

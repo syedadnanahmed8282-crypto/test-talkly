@@ -229,7 +229,9 @@ class ZegoCallEngineManager(private val context: Context) {
                     if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) {
                         ringingTimeoutJob?.cancel()
                         callSoundManager.stopAllSounds()
-                        _callState.value = _callState.value.copy(state = CallState.ACTIVE)
+                        val isVideo = (_callState.value.callType == CallType.VIDEO)
+                        callSoundManager.configureAudioForActiveCall(isSpeakerOn = isVideo, isMuted = _callState.value.isMuted)
+                        _callState.value = _callState.value.copy(state = CallState.ACTIVE, isSpeakerOn = isVideo)
                         startCallTimer()
                     }
                 }
@@ -276,6 +278,7 @@ class ZegoCallEngineManager(private val context: Context) {
 
         val roomID = "talkly_room_${callerProfile.uid}_${System.currentTimeMillis()}"
 
+        val isVideo = (callType == CallType.VIDEO)
         _callState.value = CurrentCallInfo(
             state = CallState.OUTGOING_CALLING,
             callType = callType,
@@ -285,7 +288,7 @@ class ZegoCallEngineManager(private val context: Context) {
             isMuted = false,
             isCameraOff = false,
             isFrontCamera = true,
-            isSpeakerOn = true
+            isSpeakerOn = isVideo
         )
         callSoundManager.startOutgoingRingbackTone()
         Log.d(TAG, "Starting outgoing ${callType.name} call to ${member.name} (targetUid: $targetUid, suffix: $targetSuffix)")
@@ -360,9 +363,40 @@ class ZegoCallEngineManager(private val context: Context) {
             if (callerProfile.phoneSuffix.isNotBlank() && callerProfile.phoneSuffix != callerProfile.uid) {
                 db.collection("active_calls").document("user_${callerProfile.phoneSuffix}").set(data)
             }
+
+            // Send high priority FCM push for incoming calls
+            val status = data["status"] as? String ?: ""
+            if (status.equals("RINGING", ignoreCase = true)) {
+                val fcmPayload = mapOf(
+                    "type" to "INCOMING_CALL",
+                    "callerName" to callerProfile.name,
+                    "callerUid" to callerProfile.uid,
+                    "callerPhone" to callerProfile.phoneNumber,
+                    "callerAvatarUrl" to callerProfile.profilePicUrl,
+                    "roomID" to (data["roomID"] as? String ?: ""),
+                    "callType" to (data["callType"] as? String ?: "VIDEO"),
+                    "status" to "RINGING"
+                )
+                com.family.talkly.util.FcmTokenManager.sendHighPriorityPush(
+                    targetUid = targetUid,
+                    targetPhoneSuffix = targetSuffix,
+                    dataPayload = fcmPayload
+                )
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Error publishing call signal to Firestore: ${e.localizedMessage}")
         }
+    }
+
+    fun setIncomingCallFromKilledState(member: FamilyMember, roomID: String, callType: CallType) {
+        callSoundManager.stopAllSounds()
+        _callState.value = CurrentCallInfo(
+            state = CallState.INCOMING_RINGING,
+            callType = callType,
+            targetMember = member,
+            roomID = roomID,
+            durationSeconds = 0
+        )
     }
 
     private fun publishCallUpdateToTargets(
@@ -416,9 +450,12 @@ class ZegoCallEngineManager(private val context: Context) {
         val targetUid = member?.firebaseUid ?: if (!member?.id.orEmpty().startsWith("contact_")) member?.id.orEmpty() else ""
         val targetSuffix = PhoneUtils.extractPhoneSuffix(member?.phone ?: "")
 
+        val isVideo = (current.callType == CallType.VIDEO)
+        callSoundManager.configureAudioForActiveCall(isSpeakerOn = isVideo, isMuted = current.isMuted)
+
         publishCallUpdateToTargets(myProfile, targetUid, targetSuffix, "ACCEPTED")
 
-        _callState.value = current.copy(state = CallState.ACTIVE)
+        _callState.value = current.copy(state = CallState.ACTIVE, isSpeakerOn = isVideo)
         startCallTimer()
     }
 
@@ -490,6 +527,7 @@ class ZegoCallEngineManager(private val context: Context) {
         ringingTimeoutJob?.cancel()
         timerJob?.cancel()
         callSoundManager.stopAllSounds()
+        callSoundManager.resetAudioMode()
         _callState.value = _callState.value.copy(state = CallState.ENDED)
 
         val profile = currentUserProfile ?: getLocalUserProfile()
@@ -512,7 +550,9 @@ class ZegoCallEngineManager(private val context: Context) {
 
     fun toggleMute() {
         val current = _callState.value
-        _callState.value = current.copy(isMuted = !current.isMuted)
+        val newMuted = !current.isMuted
+        _callState.value = current.copy(isMuted = newMuted)
+        callSoundManager.setMicrophoneMute(newMuted)
     }
 
     fun toggleCamera() {
@@ -527,7 +567,9 @@ class ZegoCallEngineManager(private val context: Context) {
 
     fun toggleSpeaker() {
         val current = _callState.value
-        _callState.value = current.copy(isSpeakerOn = !current.isSpeakerOn)
+        val newSpeaker = !current.isSpeakerOn
+        _callState.value = current.copy(isSpeakerOn = newSpeaker)
+        callSoundManager.setSpeakerphoneOn(newSpeaker)
     }
 
     private fun startCallTimer() {

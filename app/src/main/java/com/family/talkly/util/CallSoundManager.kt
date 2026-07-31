@@ -123,12 +123,73 @@ class CallSoundManager(private val context: Context) {
             toneGenerator?.stopTone()
             toneGenerator?.release()
             toneGenerator = null
-
-            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-            audioManager?.mode = AudioManager.MODE_NORMAL
             Log.d(TAG, "Stopped outgoing call ringback tone")
         } catch (e: Exception) {
             Log.w(TAG, "Error stopping outgoing ringback tone: ${e.localizedMessage}")
+        }
+    }
+
+    /**
+     * Configures AudioManager and audio constraints for an active voice/video call.
+     * MODE_IN_COMMUNICATION with echo cancellation and auto gain control.
+     */
+    @Synchronized
+    fun configureAudioForActiveCall(isSpeakerOn: Boolean, isMuted: Boolean) {
+        stopAllSounds()
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            audioManager.isMicrophoneMute = isMuted
+            audioManager.isSpeakerphoneOn = isSpeakerOn
+
+            Log.d(TAG, "Configured active call audio: MODE_IN_COMMUNICATION, speaker=$isSpeakerOn, mute=$isMuted")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error configuring active call audio: ${e.localizedMessage}")
+        }
+    }
+
+    /**
+     * Sets or toggles Speakerphone state on AudioManager.
+     */
+    @Synchronized
+    fun setSpeakerphoneOn(isSpeakerOn: Boolean) {
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            audioManager.isSpeakerphoneOn = isSpeakerOn
+            Log.d(TAG, "Speakerphone set to: $isSpeakerOn")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting speakerphone: ${e.localizedMessage}")
+        }
+    }
+
+    /**
+     * Sets or toggles Microphone mute state on AudioManager.
+     */
+    @Synchronized
+    fun setMicrophoneMute(isMuted: Boolean) {
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+            audioManager.isMicrophoneMute = isMuted
+            Log.d(TAG, "Microphone mute set to: $isMuted")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting microphone mute: ${e.localizedMessage}")
+        }
+    }
+
+    /**
+     * Resets AudioManager mode to MODE_NORMAL and restores default audio parameters when call ends.
+     */
+    @Synchronized
+    fun resetAudioMode() {
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+            audioManager.isMicrophoneMute = false
+            audioManager.isSpeakerphoneOn = false
+            audioManager.mode = AudioManager.MODE_NORMAL
+            Log.d(TAG, "Reset audio mode to MODE_NORMAL")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error resetting audio mode: ${e.localizedMessage}")
         }
     }
 
