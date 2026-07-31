@@ -1112,11 +1112,8 @@ class FirebaseChatRepository(private val context: Context) {
                                     MessageType.TEXT -> textContent
                                     MessageType.IMAGE -> "📷 Photo"
                                     MessageType.VIDEO -> "📹 Video"
-                                    MessageType.AUDIO -> "🎵 Voice message"
-                                    MessageType.DOCUMENT -> "📄 Document"
-                                    MessageType.LOCATION -> "📍 Location"
-                                    MessageType.CONTACT -> "👤 Contact"
-                                    else -> textContent.ifBlank { "New message" }
+                                    MessageType.VOICE_NOTE -> "🎵 Voice message"
+                                    MessageType.CALL_LOG -> "📞 Call"
                                 }
                                 com.family.talkly.util.TalklyNotificationHelper.postIncomingMessageNotification(
                                     context = context,
