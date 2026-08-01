@@ -43,6 +43,7 @@ data class CurrentCallInfo(
     val isFrontCamera: Boolean = true,
     val isSpeakerOn: Boolean = true,
     val zegoAppId: Long = ZegoCallEngineManager.ZEGO_APP_ID,
+    val zegoAppSign: String = ZegoCallEngineManager.ZEGO_APP_SIGN,
     val isZegoInitialized: Boolean = true,
     val stunServers: List<String> = ZegoCallEngineManager.PUBLIC_STUN_SERVERS,
     val turnUsername: String = "openrelayproject",
@@ -50,7 +51,9 @@ data class CurrentCallInfo(
     val offerToReceiveAudio: Boolean = true,
     val offerToReceiveVideo: Boolean = true,
     val isRemoteAudioTrackAttached: Boolean = true,
-    val isRemoteVideoTrackAttached: Boolean = true
+    val isRemoteVideoTrackAttached: Boolean = true,
+    val isMicrophoneMuted: Boolean = false,
+    val isPublishAudioMuted: Boolean = false
 )
 
 class ZegoCallEngineManager(private val context: Context) {
@@ -64,16 +67,8 @@ class ZegoCallEngineManager(private val context: Context) {
             "turn:openrelay.metered.ca:443",
             "turn:openrelay.metered.ca:443?transport=tcp"
         )
-        val ZEGO_APP_ID: Long = try {
-            com.family.talkly.BuildConfig.ZEGO_APP_ID.toString().toLongOrNull() ?: 2119647829L
-        } catch (e: Exception) {
-            2119647829L
-        }
-        val ZEGO_APP_SIGN: String = try {
-            com.family.talkly.BuildConfig.ZEGO_APP_SIGN.ifEmpty { "f7b21c961d9ae91fc3ca9ee453c6ff4027c451e93e59ceaeeecfcafd29bdc872" }
-        } catch (e: Exception) {
-            "f7b21c961d9ae91fc3ca9ee453c6ff4027c451e93e59ceaeeecfcafd29bdc872"
-        }
+        val ZEGO_APP_ID: Long = 2119647829L
+        val ZEGO_APP_SIGN: String = "f7b21c961d9ae91fc3ca9ee453c6ff4027c451e93e59ceaeeecfcafd29bdc872"
         const val FIREBASE_PROJECT_ID: String = "familycallapp-e6b21"
     }
 
@@ -290,7 +285,8 @@ class ZegoCallEngineManager(private val context: Context) {
         val targetPhone = member.phone
         val targetSuffix = PhoneUtils.extractPhoneSuffix(targetPhone)
 
-        val roomID = "talkly_room_${callerProfile.uid}_${System.currentTimeMillis()}"
+        val combinedUserIds = listOf(callerProfile.uid, targetUid.ifBlank { targetSuffix }).filter { it.isNotBlank() }.sorted().joinToString("_")
+        val roomID = "call_room_${combinedUserIds}"
 
         val isVideo = (callType == CallType.VIDEO)
         _callState.value = CurrentCallInfo(
