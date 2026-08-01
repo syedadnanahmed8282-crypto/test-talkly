@@ -45,6 +45,10 @@ data class CurrentCallInfo(
     val zegoAppId: Long = ZegoCallEngineManager.ZEGO_APP_ID,
     val isZegoInitialized: Boolean = true,
     val stunServers: List<String> = ZegoCallEngineManager.PUBLIC_STUN_SERVERS,
+    val turnUsername: String = "openrelayproject",
+    val turnPassword: String = "openrelayproject",
+    val offerToReceiveAudio: Boolean = true,
+    val offerToReceiveVideo: Boolean = true,
     val isRemoteAudioTrackAttached: Boolean = true,
     val isRemoteVideoTrackAttached: Boolean = true
 )
@@ -56,9 +60,9 @@ class ZegoCallEngineManager(private val context: Context) {
         val PUBLIC_STUN_SERVERS: List<String> = listOf(
             "stun:stun.l.google.com:19302",
             "stun:stun1.l.google.com:19302",
-            "stun:stun2.l.google.com:19302",
-            "stun:stun3.l.google.com:19302",
-            "stun:stun4.l.google.com:19302"
+            "turn:openrelay.metered.ca:80",
+            "turn:openrelay.metered.ca:443",
+            "turn:openrelay.metered.ca:443?transport=tcp"
         )
         val ZEGO_APP_ID: Long = try {
             com.family.talkly.BuildConfig.ZEGO_APP_ID.toString().toLongOrNull() ?: 2119647829L
