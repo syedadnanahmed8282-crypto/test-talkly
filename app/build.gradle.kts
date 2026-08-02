@@ -121,6 +121,7 @@ dependencies {
   implementation(libs.firebase.storage)
   implementation(libs.firebase.messaging)
   implementation(libs.firebase.appcheck.recaptcha)
+  implementation("im.zego:express-video:3.15.0")
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)

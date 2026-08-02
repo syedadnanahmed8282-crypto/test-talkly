@@ -217,7 +217,9 @@ fun MainScreen(
             onToggleMute = { zegoManager.toggleMute() },
             onToggleCamera = { zegoManager.toggleCamera() },
             onFlipCamera = { zegoManager.flipCamera() },
-            onToggleSpeaker = { zegoManager.toggleSpeaker() }
+            onToggleSpeaker = { zegoManager.toggleSpeaker() },
+            onBindLocalView = { zegoManager.setLocalVideoView(it) },
+            onBindRemoteView = { zegoManager.setRemoteVideoView(it) }
         )
         return
     }

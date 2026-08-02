@@ -80,143 +80,104 @@ import kotlin.math.roundToInt
 
 @Composable
 fun CameraPreviewView(
-    isFrontCamera: Boolean,
+    onBindLocalView: (android.view.View?) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    key(isFrontCamera) {
-        val context = LocalContext.current
-
-        AndroidView(
-            factory = { ctx ->
-                TextureView(ctx).apply {
-                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                        private var cameraDevice: CameraDevice? = null
-                        private var captureSession: CameraCaptureSession? = null
-                        private var backgroundThread: HandlerThread? = null
-                        private var backgroundHandler: Handler? = null
-
-                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                            try {
-                                backgroundThread = HandlerThread("CameraBackground_${System.currentTimeMillis()}").also { it.start() }
-                                backgroundHandler = Handler(backgroundThread!!.looper)
-
-                                val cameraManager = ctx.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-                                val targetFacing = if (isFrontCamera) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
-
-                                val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
-                                    val facing = cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING)
-                                    facing == targetFacing
-                                } ?: cameraManager.cameraIdList.firstOrNull() ?: return
-
-                                if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                                    return
-                                }
-
-                                cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
-                                    override fun onOpened(camera: CameraDevice) {
-                                        cameraDevice = camera
-                                        val surface = Surface(st)
-                                        val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-                                        requestBuilder.addTarget(surface)
-
-                                        camera.createCaptureSession(listOf(surface), object : CameraCaptureSession.StateCallback() {
-                                            override fun onConfigured(session: CameraCaptureSession) {
-                                                captureSession = session
-                                                try {
-                                                    requestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                                                    session.setRepeatingRequest(requestBuilder.build(), null, backgroundHandler)
-                                                } catch (e: Exception) {
-                                                    Log.e("CameraPreviewView", "Error setting repeating request: ${e.message}")
-                                                }
-                                            }
-
-                                            override fun onConfigureFailed(session: CameraCaptureSession) {}
-                                        }, backgroundHandler)
-                                    }
-
-                                    override fun onDisconnected(camera: CameraDevice) {
-                                        try { camera.close() } catch (_: Exception) {}
-                                        cameraDevice = null
-                                    }
-
-                                    override fun onError(camera: CameraDevice, error: Int) {
-                                        try { camera.close() } catch (_: Exception) {}
-                                        cameraDevice = null
-                                    }
-                                }, backgroundHandler)
-                            } catch (e: Exception) {
-                                Log.e("CameraPreviewView", "Error opening camera: ${e.message}")
-                            }
-                        }
-
-                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
-
-                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                            try {
-                                captureSession?.close()
-                                cameraDevice?.close()
-                                backgroundThread?.quitSafely()
-                            } catch (e: Exception) {
-                                Log.e("CameraPreviewView", "Error releasing camera: ${e.message}")
-                            }
-                            return true
-                        }
-
-                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+    AndroidView(
+        factory = { ctx ->
+            TextureView(ctx).apply {
+                surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                    override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+                        onBindLocalView(this@apply)
                     }
+                    override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+                    override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                        onBindLocalView(null)
+                        return true
+                    }
+                    override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
                 }
-            },
-            modifier = modifier
-        )
-    }
+            }
+        },
+        modifier = modifier
+    )
 }
 
 @Composable
 fun RemoteVideoView(
     member: FamilyMember?,
+    isRemotePlaying: Boolean,
+    onBindRemoteView: (android.view.View?) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
-        modifier = modifier
-            .background(Color(0xFF101D25)),
+        modifier = modifier.background(Color(0xFF101D25)),
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
+        AndroidView(
+            factory = { ctx ->
+                TextureView(ctx).apply {
+                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+                            onBindRemoteView(this@apply)
+                        }
+                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                            onBindRemoteView(null)
+                            return true
+                        }
+                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        if (!isRemotePlaying) {
             Box(
                 modifier = Modifier
-                    .size(90.dp)
-                    .background(WhatsappGreen, CircleShape),
+                    .fillMaxSize()
+                    .background(Color(0xFF101D25).copy(alpha = 0.95f)),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = member?.name?.take(2)?.uppercase() ?: "FA",
-                    color = Color.White,
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = member?.name ?: "Partner",
-                color = Color.White,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Surface(
-                color = WhatsappGreen.copy(alpha = 0.2f),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text(
-                    text = "HD Video Live",
-                    color = WhatsappGreen,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(90.dp)
+                            .background(WhatsappGreen, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = member?.name?.take(2)?.uppercase() ?: "FA",
+                            color = Color.White,
+                            fontSize = 32.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = member?.name ?: "Partner",
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Surface(
+                        color = WhatsappGreen.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = "Connecting video stream...",
+                            color = WhatsappGreen,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+                }
             }
         }
     }
@@ -229,7 +190,9 @@ fun CallScreen(
     onToggleMute: () -> Unit,
     onToggleCamera: () -> Unit,
     onFlipCamera: () -> Unit,
-    onToggleSpeaker: () -> Unit
+    onToggleSpeaker: () -> Unit,
+    onBindLocalView: (android.view.View?) -> Unit = {},
+    onBindRemoteView: (android.view.View?) -> Unit = {}
 ) {
     val member = callInfo.targetMember
     val isVideo = callInfo.callType == CallType.VIDEO
@@ -268,7 +231,12 @@ fun CallScreen(
                             .weight(1f)
                             .border(1.dp, Color.White.copy(alpha = 0.2f))
                     ) {
-                        RemoteVideoView(member = member, modifier = Modifier.fillMaxSize())
+                        RemoteVideoView(
+                            member = member,
+                            isRemotePlaying = callInfo.isRemoteStreamPlaying,
+                            onBindRemoteView = onBindRemoteView,
+                            modifier = Modifier.fillMaxSize()
+                        )
                         Surface(
                             color = Color.Black.copy(alpha = 0.6f),
                             shape = RoundedCornerShape(8.dp),
@@ -293,7 +261,7 @@ fun CallScreen(
                             .border(1.dp, Color.White.copy(alpha = 0.2f))
                     ) {
                         CameraPreviewView(
-                            isFrontCamera = callInfo.isFrontCamera,
+                            onBindLocalView = onBindLocalView,
                             modifier = Modifier.fillMaxSize()
                         )
                         Surface(
@@ -337,10 +305,15 @@ fun CallScreen(
                 ) {
                     // Main Background Feed
                     if (!isSwapped) {
-                        RemoteVideoView(member = member, modifier = Modifier.fillMaxSize())
+                        RemoteVideoView(
+                            member = member,
+                            isRemotePlaying = callInfo.isRemoteStreamPlaying,
+                            onBindRemoteView = onBindRemoteView,
+                            modifier = Modifier.fillMaxSize()
+                        )
                     } else {
                         CameraPreviewView(
-                            isFrontCamera = callInfo.isFrontCamera,
+                            onBindLocalView = onBindLocalView,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -382,11 +355,16 @@ fun CallScreen(
                         Box(modifier = Modifier.fillMaxSize()) {
                             if (!isSwapped) {
                                 CameraPreviewView(
-                                    isFrontCamera = callInfo.isFrontCamera,
+                                    onBindLocalView = onBindLocalView,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             } else {
-                                RemoteVideoView(member = member, modifier = Modifier.fillMaxSize())
+                                RemoteVideoView(
+                                    member = member,
+                                    isRemotePlaying = callInfo.isRemoteStreamPlaying,
+                                    onBindRemoteView = onBindRemoteView,
+                                    modifier = Modifier.fillMaxSize()
+                                )
                             }
 
                             // Bottom Label Tag
