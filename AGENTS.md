@@ -17,3 +17,8 @@
 ## 4. Self-Verification Before Push
 - Double-check that all updated Kotlin files compile cleanly without any syntax or build errors (e.g., verify `ChatListScreen` and main build tasks).
 - Keep code backward-compatible and stable.
+
+## 5. Non-Destructive Code & UI Preservation (Injection Only)
+- **Preserve Existing Code & Layouts**: Never rewrite or modify existing core layout wrappers, custom styling, colors, or existing input/output functionalities unless explicitly requested.
+- **Additive / Injection Only**: Treat new feature requests strictly as incremental additions or injections into their designated places.
+- **No Unsolicited Redesigns**: Do not redesign existing components, alter layout positions, or remove existing features during updates.

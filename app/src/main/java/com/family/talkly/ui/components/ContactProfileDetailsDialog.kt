@@ -68,6 +68,7 @@ fun ContactProfileDetailsDialog(
     isMutualContact: Boolean = true
 ) {
     var showFullAvatarViewer by remember { mutableStateOf(false) }
+    var showFullCoverViewer by remember { mutableStateOf(false) }
 
     if (showFullAvatarViewer && isMutualContact) {
         Dialog(
@@ -125,6 +126,44 @@ fun ContactProfileDetailsDialog(
         }
     }
 
+    if (showFullCoverViewer && isMutualContact && !member.coverPhotoUrl.isNullOrBlank()) {
+        Dialog(
+            onDismissRequest = { showFullCoverViewer = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = Color.Black
+            ) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    val mediaModel = remember(member.coverPhotoUrl) {
+                        com.family.talkly.util.PhoneUtils.getCoilMediaModel(member.coverPhotoUrl)
+                    }
+                    AsyncImage(
+                        model = mediaModel,
+                        contentDescription = "Cover Photo",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    IconButton(
+                        onClick = { showFullCoverViewer = false },
+                        modifier = Modifier
+                            .padding(16.dp)
+                            .align(Alignment.TopEnd)
+                            .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = Color.White
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -132,7 +171,7 @@ fun ContactProfileDetailsDialog(
         Surface(
             modifier = Modifier
                 .fillMaxWidth(0.92f)
-                .padding(vertical = 24.dp),
+                .padding(vertical = 20.dp),
             shape = RoundedCornerShape(24.dp),
             color = Color.White,
             shadowElevation = 12.dp
@@ -140,20 +179,21 @@ fun ContactProfileDetailsDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp)
                     .verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // Header Bar
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         text = "Contact Info",
                         fontWeight = FontWeight.Bold,
-                        fontSize = 20.sp,
+                        fontSize = 19.sp,
                         color = WhatsappTeal
                     )
                     IconButton(onClick = onDismiss) {
@@ -165,56 +205,91 @@ fun ContactProfileDetailsDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Contact Avatar with Online Status Badge
+                // COVER PHOTO BANNER & OVERLAPPING AVATAR CONTAINER
                 Box(
-                    modifier = Modifier.size(110.dp),
-                    contentAlignment = Alignment.Center
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    contentAlignment = Alignment.TopCenter
                 ) {
+                    // Cover Photo Area
                     Box(
                         modifier = Modifier
-                            .size(106.dp)
-                            .clip(CircleShape)
-                            .background(if (isMutualContact) WhatsappTeal else Color.Gray)
-                            .clickable { if (isMutualContact) showFullAvatarViewer = true },
+                            .fillMaxWidth()
+                            .height(145.dp)
+                            .background(androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(WhatsappTeal, WhatsappGreen)))
+                            .clickable {
+                                if (isMutualContact && !member.coverPhotoUrl.isNullOrBlank()) {
+                                    showFullCoverViewer = true
+                                }
+                            },
                         contentAlignment = Alignment.Center
                     ) {
-                        if (!isMutualContact) {
-                            Icon(
-                                imageVector = Icons.Default.Lock,
-                                contentDescription = "Locked Profile Picture",
-                                tint = Color.White,
-                                modifier = Modifier.size(48.dp)
-                            )
-                        } else if (member.avatarUrl != null) {
-                            val mediaModel = remember(member.avatarUrl) {
-                                com.family.talkly.util.PhoneUtils.getCoilMediaModel(member.avatarUrl)
+                        if (isMutualContact && !member.coverPhotoUrl.isNullOrBlank()) {
+                            val mediaModel = remember(member.coverPhotoUrl) {
+                                com.family.talkly.util.PhoneUtils.getCoilMediaModel(member.coverPhotoUrl)
                             }
                             AsyncImage(
                                 model = mediaModel,
-                                contentDescription = member.name,
+                                contentDescription = "Cover Photo",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
-                            )
-                        } else {
-                            Text(
-                                text = member.name.take(2).uppercase(),
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 36.sp
                             )
                         }
                     }
 
-                    // Online Status Dot Indicator
+                    // Contact Avatar with Online Status Badge
                     Box(
                         modifier = Modifier
-                            .size(24.dp)
-                            .background(if (isMutualContact && member.isRecentlyActive()) Color(0xFF25D366) else Color.Gray, CircleShape)
-                            .border(3.dp, Color.White, CircleShape)
-                            .align(Alignment.BottomEnd)
-                    )
+                            .align(Alignment.BottomCenter)
+                            .size(110.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(106.dp)
+                                .clip(CircleShape)
+                                .border(3.5.dp, Color.White, CircleShape)
+                                .background(if (isMutualContact) WhatsappTeal else Color.Gray)
+                                .clickable { if (isMutualContact) showFullAvatarViewer = true },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (!isMutualContact) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = "Locked Profile Picture",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(48.dp)
+                                )
+                            } else if (member.avatarUrl != null) {
+                                val mediaModel = remember(member.avatarUrl) {
+                                    com.family.talkly.util.PhoneUtils.getCoilMediaModel(member.avatarUrl)
+                                }
+                                AsyncImage(
+                                    model = mediaModel,
+                                    contentDescription = member.name,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Text(
+                                    text = member.name.take(2).uppercase(),
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 36.sp
+                                )
+                            }
+                        }
+
+                        // Online Status Dot Indicator
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .background(if (isMutualContact && member.isRecentlyActive()) Color(0xFF25D366) else Color.Gray, CircleShape)
+                                .border(3.dp, Color.White, CircleShape)
+                                .align(Alignment.BottomEnd)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -502,7 +577,7 @@ fun ContactProfileDetailsDialog(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = if (member.isRecentlyActive()) "Online" else "Last seen ${member.lastSeen}",
+                                text = if (member.isRecentlyActive()) "Online" else "Last seen ${member.displayLastSeen}",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Medium,
                                 color = if (member.isRecentlyActive()) Color(0xFF25D366) else Color.DarkGray

@@ -18,11 +18,15 @@ import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
 import im.zego.zegoexpress.ZegoExpressEngine
 import im.zego.zegoexpress.callback.IZegoEventHandler
+import im.zego.zegoexpress.constants.ZegoBeautifyFeature
+import im.zego.zegoexpress.constants.ZegoPublishChannel
 import im.zego.zegoexpress.constants.ZegoPublisherState
 import im.zego.zegoexpress.constants.ZegoPlayerState
 import im.zego.zegoexpress.constants.ZegoRoomStateChangedReason
 import im.zego.zegoexpress.constants.ZegoScenario
 import im.zego.zegoexpress.constants.ZegoUpdateType
+import im.zego.zegoexpress.constants.ZegoViewMode
+import im.zego.zegoexpress.entity.ZegoBeautifyOption
 import im.zego.zegoexpress.entity.ZegoCanvas
 import im.zego.zegoexpress.entity.ZegoEngineProfile
 import im.zego.zegoexpress.entity.ZegoRoomConfig
@@ -108,6 +112,7 @@ class ZegoCallEngineManager(private val context: Context) {
 
     private var activeCallListener: ListenerRegistration? = null
     private var secondaryCallListener: ListenerRegistration? = null
+    private var thirdCallListener: ListenerRegistration? = null
     private var currentSyncedUserId: String? = null
 
     var currentUserProfile: UserProfile? = null
@@ -137,7 +142,7 @@ class ZegoCallEngineManager(private val context: Context) {
             val profile = ZegoEngineProfile().apply {
                 appID = ZEGO_APP_ID
                 appSign = ZEGO_APP_SIGN
-                scenario = ZegoScenario.GENERAL
+                scenario = ZegoScenario.COMMUNICATION
                 application = app
             }
 
@@ -152,6 +157,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     Log.d(TAG, "onRoomStreamUpdate: roomID=$roomID, updateType=$updateType, streams=${streamList.size}")
 
                     if (updateType == ZegoUpdateType.ADD) {
+                        callSoundManager.stopAllSounds()
                         for (stream in streamList) {
                             val streamID = stream.streamID
                             Log.d(TAG, "Remote stream ADDED: streamID=$streamID by user=${stream.user?.userID}")
@@ -204,7 +210,7 @@ class ZegoCallEngineManager(private val context: Context) {
                 }
             })
             Log.i(TAG, "ZegoExpressEngine created successfully")
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e(TAG, "Failed to create ZegoExpressEngine: ${e.message}", e)
         }
     }
@@ -234,6 +240,10 @@ class ZegoCallEngineManager(private val context: Context) {
         expressEngine?.setAudioRouteToSpeaker(isVideoCall)
         expressEngine?.useFrontCamera(true)
 
+        if (isVideoCall) {
+            enableBeautyFilter(true)
+        }
+
         // Login to room
         val user = ZegoUser(myUserId, myUserName)
         val roomConfig = ZegoRoomConfig()
@@ -246,7 +256,8 @@ class ZegoCallEngineManager(private val context: Context) {
         // Attach local preview if view is bound
         localViewRef?.let { view ->
             if (isVideoCall) {
-                expressEngine?.startPreview(ZegoCanvas(view))
+                val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
+                expressEngine?.startPreview(canvas)
             }
         }
     }
@@ -286,10 +297,35 @@ class ZegoCallEngineManager(private val context: Context) {
         localViewRef = view
         val isVideo = (_callState.value.callType == CallType.VIDEO)
         if (view != null && isVideo) {
-            expressEngine?.startPreview(ZegoCanvas(view))
-            Log.d(TAG, "Attached local video preview view")
+            enableBeautyFilter(true)
+            val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
+            expressEngine?.startPreview(canvas)
+            Log.d(TAG, "Attached local video preview view with beauty filter")
         } else if (view == null) {
             expressEngine?.stopPreview()
+        }
+    }
+
+    fun enableBeautyFilter(enable: Boolean = true) {
+        if (expressEngine == null) return
+        try {
+            if (enable) {
+                val beautifyOption = ZegoBeautifyOption().apply {
+                    whitenFactor = 0.85 // Skin whitening & bright lighting (0.0 to 1.0)
+                    sharpenFactor = 0.6 // Facial detail sharpening (0.0 to 1.0)
+                }
+                expressEngine?.setBeautifyOption(beautifyOption, ZegoPublishChannel.MAIN)
+                Log.i(TAG, "Zego express real-time Beauty & Brightness filter ENABLED (Whiten=0.8, Sharpen=0.5)")
+            } else {
+                val defaultOption = ZegoBeautifyOption().apply {
+                    whitenFactor = 0.0
+                    sharpenFactor = 0.0
+                }
+                expressEngine?.setBeautifyOption(defaultOption, ZegoPublishChannel.MAIN)
+                Log.i(TAG, "Zego express Beauty filter DISABLED")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed setting Zego beautify options: ${e.localizedMessage}")
         }
     }
 
@@ -304,7 +340,7 @@ class ZegoCallEngineManager(private val context: Context) {
     private fun bindRemoteStream(streamID: String) {
         if (streamID.isBlank()) return
         remoteViewRef?.let { view ->
-            val canvas = ZegoCanvas(view)
+            val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
             expressEngine?.startPlayingStream(streamID, canvas)
             Log.d(TAG, "Playing remote stream $streamID on remote view")
         } ?: run {
@@ -342,6 +378,8 @@ class ZegoCallEngineManager(private val context: Context) {
             activeCallListener = null
             secondaryCallListener?.remove()
             secondaryCallListener = null
+            thirdCallListener?.remove()
+            thirdCallListener = null
             currentSyncedUserId = null
             currentUserProfile = null
             _callState.value = CurrentCallInfo(state = CallState.IDLE)
@@ -376,10 +414,17 @@ class ZegoCallEngineManager(private val context: Context) {
                 ?.document("user_$uid")
                 ?.addSnapshotListener { snapshot, error -> handleCallSnapshot(snapshot, error) }
 
-            val suffix = userProfile.phoneSuffix
+            val suffix = userProfile.phoneSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(userProfile.phoneNumber) }
+            val cleanPhone = PhoneUtils.cleanPhoneNumber(userProfile.phoneNumber)
+
             if (suffix.isNotBlank() && suffix != uid) {
                 secondaryCallListener = firestore?.collection("active_calls")
                     ?.document("user_$suffix")
+                    ?.addSnapshotListener { snapshot, error -> handleCallSnapshot(snapshot, error) }
+            }
+            if (cleanPhone.isNotBlank() && cleanPhone != uid && cleanPhone != suffix) {
+                thirdCallListener = firestore?.collection("active_calls")
+                    ?.document("user_$cleanPhone")
                     ?.addSnapshotListener { snapshot, error -> handleCallSnapshot(snapshot, error) }
             }
         } catch (e: Exception) {
@@ -455,6 +500,12 @@ class ZegoCallEngineManager(private val context: Context) {
                         val isVideo = (_callState.value.callType == CallType.VIDEO)
                         callSoundManager.configureAudioForActiveCall(isSpeakerOn = isVideo, isMuted = _callState.value.isMuted)
                         _callState.value = _callState.value.copy(state = CallState.ACTIVE, isSpeakerOn = isVideo)
+                        com.family.talkly.service.CallForegroundService.startActiveCallService(
+                            context = context,
+                            callerName = _callState.value.targetMember?.name ?: "Talkly User",
+                            callType = _callState.value.callType.name,
+                            roomId = roomID
+                        )
                         joinCallRoom(roomID, isVideo)
                         startCallTimer()
                     }
@@ -499,6 +550,7 @@ class ZegoCallEngineManager(private val context: Context) {
         val targetUid = member.firebaseUid ?: if (!member.id.startsWith("contact_") && !member.id.contains(" ")) member.id else ""
         val targetPhone = member.phone
         val targetSuffix = PhoneUtils.extractPhoneSuffix(targetPhone)
+        val cleanReceiverPhone = PhoneUtils.cleanPhoneNumber(targetPhone)
 
         val combinedUserIds = listOf(callerProfile.uid, targetUid.ifBlank { targetSuffix }).filter { it.isNotBlank() }.sorted().joinToString("_")
         val roomID = "call_room_${combinedUserIds}"
@@ -516,6 +568,12 @@ class ZegoCallEngineManager(private val context: Context) {
             isSpeakerOn = isVideo
         )
         callSoundManager.startOutgoingRingbackTone()
+        com.family.talkly.service.CallForegroundService.startActiveCallService(
+            context = context,
+            callerName = member.name,
+            callType = callType.name,
+            roomId = roomID
+        )
         Log.d(TAG, "Starting outgoing ${callType.name} call to ${member.name} in room $roomID")
 
         // Connect and publish stream early for outgoing call
@@ -538,6 +596,32 @@ class ZegoCallEngineManager(private val context: Context) {
         )
 
         publishCallSignalToTargets(callerProfile, targetUid, targetSuffix, callData)
+
+        // Async resolution if targetUid was blank to ensure recipient receives call without delay
+        if (targetUid.isBlank() && targetSuffix.isNotBlank()) {
+            scope.launch {
+                try {
+                    firestore?.collection("users_phone_index")?.document(targetSuffix)?.get()
+                        ?.addOnSuccessListener { doc ->
+                            val foundUid = doc?.getString("uid") ?: doc?.getString("firebaseUid")
+                            if (!foundUid.isNullOrBlank()) {
+                                val updatedData = callData.toMutableMap().apply { put("receiverUid", foundUid) }
+                                publishCallSignalToTargets(callerProfile, foundUid, targetSuffix, updatedData)
+                            }
+                        }
+                    firestore?.collection("users")?.whereEqualTo("phoneSuffix", targetSuffix)?.get()
+                        ?.addOnSuccessListener { snap ->
+                            val foundUid = snap?.documents?.firstOrNull()?.id
+                            if (!foundUid.isNullOrBlank()) {
+                                val updatedData = callData.toMutableMap().apply { put("receiverUid", foundUid) }
+                                publishCallSignalToTargets(callerProfile, foundUid, targetSuffix, updatedData)
+                            }
+                        }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Async target lookup for call exception: ${e.localizedMessage}")
+                }
+            }
+        }
 
         ringingTimeoutJob?.cancel()
 
@@ -579,11 +663,17 @@ class ZegoCallEngineManager(private val context: Context) {
     ) {
         try {
             val db = firestore ?: return
+            val receiverPhone = data["receiverPhone"] as? String ?: ""
+            val cleanReceiverPhone = PhoneUtils.cleanPhoneNumber(receiverPhone)
+
             if (targetUid.isNotBlank() && targetUid != "self") {
                 db.collection("active_calls").document("user_$targetUid").set(data)
             }
             if (targetSuffix.isNotBlank() && targetSuffix != targetUid) {
                 db.collection("active_calls").document("user_$targetSuffix").set(data)
+            }
+            if (cleanReceiverPhone.isNotBlank() && cleanReceiverPhone != targetUid && cleanReceiverPhone != targetSuffix) {
+                db.collection("active_calls").document("user_$cleanReceiverPhone").set(data)
             }
             if (callerProfile.uid.isNotBlank() && callerProfile.uid != "self") {
                 db.collection("active_calls").document("user_${callerProfile.uid}").set(data)
@@ -684,6 +774,12 @@ class ZegoCallEngineManager(private val context: Context) {
         publishCallUpdateToTargets(myProfile, targetUid, targetSuffix, "ACCEPTED")
 
         _callState.value = current.copy(state = CallState.ACTIVE, isSpeakerOn = isVideo)
+        com.family.talkly.service.CallForegroundService.startActiveCallService(
+            context = context,
+            callerName = member?.name ?: "Talkly User",
+            callType = current.callType.name,
+            roomId = current.roomID
+        )
         joinCallRoom(current.roomID, isVideo)
         startCallTimer()
     }
@@ -757,6 +853,11 @@ class ZegoCallEngineManager(private val context: Context) {
         timerJob?.cancel()
         callSoundManager.stopAllSounds()
         callSoundManager.resetAudioMode()
+        try {
+            com.family.talkly.service.CallForegroundService.stopCallService(context)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping foreground call service: ${e.localizedMessage}")
+        }
         leaveCallRoom()
         _callState.value = _callState.value.copy(state = CallState.ENDED)
 

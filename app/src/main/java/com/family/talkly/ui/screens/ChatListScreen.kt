@@ -5,6 +5,7 @@
 
 package com.family.talkly.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -121,7 +122,7 @@ fun ChatListScreen(
     currentThemeMode: ThemeMode = ThemeMode.SYSTEM,
     onThemeModeChange: ((ThemeMode) -> Unit)? = null,
     onLogout: (() -> Unit)? = null,
-    onSaveProfile: ((name: String, bio: String, photoUrl: String) -> Unit)? = null,
+    onSaveProfile: ((name: String, bio: String, photoUrl: String, coverPhotoUrl: String) -> Unit)? = null,
     onSelectMember: (FamilyMember) -> Unit,
     onStartCall: (FamilyMember, CallType) -> Unit,
     onTriggerIncomingDemo: (FamilyMember) -> Unit,
@@ -151,6 +152,30 @@ fun ChatListScreen(
     var activeViewerGroupIndex by remember { mutableStateOf<Int?>(null) }
     var selectedContactForProfile by remember { mutableStateOf<FamilyMember?>(null) }
     var memberToDeleteHistory by remember { mutableStateOf<FamilyMember?>(null) }
+
+    val isAnyOverlayOpen = selectedContactForProfile != null ||
+            activeViewerGroupIndex != null ||
+            showAddContactDialog ||
+            showProfileDialog ||
+            showThemeDialog ||
+            showBlockedContactsDialog ||
+            showPostStatusDialog ||
+            memberToDeleteHistory != null ||
+            selectedHeaderTab != 0
+
+    BackHandler(enabled = isAnyOverlayOpen) {
+        when {
+            selectedContactForProfile != null -> selectedContactForProfile = null
+            activeViewerGroupIndex != null -> activeViewerGroupIndex = null
+            showAddContactDialog -> showAddContactDialog = false
+            showProfileDialog -> showProfileDialog = false
+            showThemeDialog -> showThemeDialog = false
+            showBlockedContactsDialog -> showBlockedContactsDialog = false
+            showPostStatusDialog -> showPostStatusDialog = false
+            memberToDeleteHistory != null -> memberToDeleteHistory = null
+            selectedHeaderTab != 0 -> selectedHeaderTab = 0
+        }
+    }
 
     val isDark = LocalIsDarkTheme.current
 
@@ -268,8 +293,8 @@ fun ChatListScreen(
         UserProfileDetailsDialog(
             userProfile = currentUserProfile,
             onDismiss = { showProfileDialog = false },
-            onSaveProfile = { name, bio, photoUrl ->
-                onSaveProfile?.invoke(name, bio, photoUrl)
+            onSaveProfile = { name, bio, photoUrl, coverPhotoUrl ->
+                onSaveProfile?.invoke(name, bio, photoUrl, coverPhotoUrl)
             },
             onLogout = onLogout
         )
@@ -354,11 +379,16 @@ fun ChatListScreen(
             statusGroups = statusGroups,
             initialGroupIndex = activeViewerGroupIndex!!,
             currentUserId = currentUserProfile?.uid ?: "self",
+            familyMembers = familyMembers,
             onDismiss = { activeViewerGroupIndex = null },
             onMarkStatusSeen = { statusId -> onMarkStatusSeen?.invoke(statusId) },
             onAddStatusClick = { showPostStatusDialog = true },
             onToggleLikeStatus = { statusId -> onToggleLikeStatus?.invoke(statusId) },
-            onSendStatusReply = { targetUserId, replyText -> onSendStatusReply?.invoke(targetUserId, replyText) }
+            onSendStatusReply = { targetUserId, replyText -> onSendStatusReply?.invoke(targetUserId, replyText) },
+            onSelectMemberProfile = { member ->
+                activeViewerGroupIndex = null
+                selectedContactForProfile = member
+            }
         )
     }
 
@@ -730,14 +760,19 @@ fun ChatListScreen(
 
                     Divider(color = SecondaryLightSage.copy(alpha = 0.2f))
 
-                    // Family Conversations List
+                    // Family Conversations List (Only show contacts with active chat history or pinned)
                     val sortedMembers = remember(deduplicatedMembers, messagesMap) {
-                        deduplicatedMembers.sortedWith(
-                            compareByDescending<FamilyMember> { it.isPinned }
-                                .thenByDescending { member ->
-                                    messagesMap[member.id]?.lastOrNull()?.timestamp ?: 0L
-                                }
-                        )
+                        deduplicatedMembers
+                            .filter { member ->
+                                val msgs = getMemberMessages(member, messagesMap)
+                                member.isPinned || msgs.isNotEmpty()
+                            }
+                            .sortedWith(
+                                compareByDescending<FamilyMember> { it.isPinned }
+                                    .thenByDescending { member ->
+                                        getMemberMessages(member, messagesMap).lastOrNull()?.timestamp ?: 0L
+                                    }
+                            )
                     }
 
                     if (sortedMembers.isEmpty()) {
@@ -769,7 +804,7 @@ fun ChatListScreen(
                             contentPadding = PaddingValues(vertical = 2.dp)
                         ) {
                             items(sortedMembers, key = { member -> member.id }) { member ->
-                                val memberMessages = messagesMap[member.id] ?: emptyList()
+                                val memberMessages = getMemberMessages(member, messagesMap)
                                 val lastMessage = memberMessages.lastOrNull()
 
                                 FamilyChatRow(
@@ -1189,11 +1224,16 @@ private fun FamilyMemberAvatarStory(
             }
         }
         Spacer(modifier = Modifier.height(4.dp))
+        val storyNameFontSize = when {
+            member.name.length > 15 -> 9.sp
+            member.name.length > 10 -> 10.sp
+            else -> 12.sp
+        }
         Text(
             text = member.name,
             style = MaterialTheme.typography.bodySmall.copy(
                 fontWeight = FontWeight.Medium,
-                fontSize = 12.sp,
+                fontSize = storyNameFontSize,
                 color = Color.White
             ),
             maxLines = 1,
@@ -1303,11 +1343,16 @@ private fun FamilyChatRow(
                     if (member.isPinned) {
                         Text(text = "📌 ", fontSize = 14.sp)
                     }
+                    val rowNameFontSize = when {
+                        member.name.length > 22 -> 12.sp
+                        member.name.length > 16 -> 14.sp
+                        else -> 16.sp
+                    }
                     Text(
                         text = member.name,
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp,
+                            fontSize = rowNameFontSize,
                             color = Color.White
                         ),
                         maxLines = 1,
@@ -1315,7 +1360,7 @@ private fun FamilyChatRow(
                     )
                 }
                 Spacer(modifier = Modifier.width(8.dp))
-                val displayTime = if (lastMessage != null) lastMessage.formattedTime else member.lastSeen
+                val displayTime = if (lastMessage != null) lastMessage.formattedTime else (if (member.isRecentlyActive()) "Online" else member.displayLastSeen)
                 Text(
                     text = if (member.isTyping) "typing..." else displayTime,
                     style = MaterialTheme.typography.labelSmall.copy(
@@ -1424,4 +1469,28 @@ private fun FamilyChatRow(
             )
         }
     }
+}
+
+private fun getMemberMessages(member: FamilyMember, messagesMap: Map<String, List<ChatMessage>>): List<ChatMessage> {
+    val msgsById = messagesMap[member.id]
+    if (!msgsById.isNullOrEmpty()) return msgsById
+
+    val targetFirebaseUid = member.firebaseUid
+    if (!targetFirebaseUid.isNullOrBlank()) {
+        val msgsByUid = messagesMap[targetFirebaseUid]
+        if (!msgsByUid.isNullOrEmpty()) return msgsByUid
+    }
+
+    val suffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone)
+    if (suffix.isNotBlank()) {
+        val msgsBySuffix = messagesMap[suffix]
+        if (!msgsBySuffix.isNullOrEmpty()) return msgsBySuffix
+    }
+
+    if (member.phone.isNotBlank()) {
+        val msgsByPhone = messagesMap[member.phone]
+        if (!msgsByPhone.isNullOrEmpty()) return msgsByPhone
+    }
+
+    return emptyList()
 }

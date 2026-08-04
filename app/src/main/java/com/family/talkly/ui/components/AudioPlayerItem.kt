@@ -52,7 +52,69 @@ import com.family.talkly.ui.theme.WhatsappLightGreen
 import com.family.talkly.ui.theme.WhatsappTeal
 import androidx.compose.foundation.BorderStroke
 import kotlinx.coroutines.delay
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.input.pointer.pointerInput
+import java.io.File
 import java.util.Locale
+
+@Composable
+fun AudioWaveformBar(
+    progress: Float,
+    isPlaying: Boolean = false,
+    modifier: Modifier = Modifier,
+    barCount: Int = 30,
+    seed: Int = 0,
+    activeColor: Color = WhatsappGreen,
+    inactiveColor: Color = Color.Gray.copy(alpha = 0.35f),
+    onSeek: ((Float) -> Unit)? = null
+) {
+    val barHeights = remember(seed, barCount) {
+        val random = java.util.Random(seed.toLong())
+        List(barCount) {
+            val base = 0.25f + random.nextFloat() * 0.75f
+            base.coerceIn(0.25f, 1.0f)
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(24.dp)
+            .then(
+                if (onSeek != null) {
+                    Modifier.pointerInput(Unit) {
+                        detectTapGestures { offset ->
+                            val clickedRatio = (offset.x / size.width).coerceIn(0f, 1f)
+                            onSeek(clickedRatio)
+                        }
+                    }
+                } else Modifier
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            barHeights.forEachIndexed { index, heightFactor ->
+                val barProgress = index.toFloat() / barCount.toFloat()
+                val isFilled = barProgress <= progress
+
+                val color = if (isFilled) activeColor else inactiveColor
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 1.dp)
+                        .fillMaxHeight(heightFactor)
+                        .background(color, CircleShape)
+                )
+            }
+        }
+    }
+}
 
 @Composable
 fun AudioPlayerItem(
@@ -71,9 +133,11 @@ fun AudioPlayerItem(
     DisposableEffect(message.mediaUrl) {
         onDispose {
             try {
-                if (mediaPlayer.isPlaying) {
-                    mediaPlayer.stop()
-                }
+                try {
+                    if (mediaPlayer.isPlaying) {
+                        mediaPlayer.stop()
+                    }
+                } catch (ignored: Exception) {}
                 mediaPlayer.release()
             } catch (e: Exception) {
                 Log.w("AudioPlayerItem", "Error disposing mediaPlayer: ${e.localizedMessage}")
@@ -82,11 +146,36 @@ fun AudioPlayerItem(
     }
 
     LaunchedEffect(message.mediaUrl) {
-        if (!message.mediaUrl.isNullOrEmpty()) {
+        val url = message.mediaUrl
+        if (!url.isNullOrEmpty()) {
             try {
                 mediaPlayer.reset()
-                mediaPlayer.setDataSource(context, Uri.parse(message.mediaUrl))
-                mediaPlayer.prepareAsync()
+                mediaPlayer.setOnErrorListener { _, what, extra ->
+                    Log.e("AudioPlayerItem", "MediaPlayer onError: what=$what, extra=$extra")
+                    isPlaying = false
+                    isPrepared = false
+                    true // Return true so Android doesn't trigger crash popup
+                }
+
+                val uri: Uri = if (url.startsWith("data:")) {
+                    // Base64 encoded voice note - write to temp cache file for MediaPlayer
+                    val cacheFile = File(context.cacheDir, "temp_vn_${message.id.hashCode()}.m4a")
+                    if (!cacheFile.exists() || cacheFile.length() == 0L) {
+                        val base64Data = url.substringAfter(",")
+                        val bytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
+                        cacheFile.writeBytes(bytes)
+                    }
+                    Uri.fromFile(cacheFile)
+                } else if (url.startsWith("/")) {
+                    Uri.fromFile(File(url))
+                } else if (url.startsWith("file://")) {
+                    val path = Uri.parse(url).path
+                    if (path != null) Uri.fromFile(File(path)) else Uri.parse(url)
+                } else {
+                    Uri.parse(url)
+                }
+
+                mediaPlayer.setDataSource(context, uri)
                 mediaPlayer.setOnPreparedListener { mp ->
                     isPrepared = true
                     durationMs = mp.duration.toLong()
@@ -95,8 +184,11 @@ fun AudioPlayerItem(
                     isPlaying = false
                     currentPositionMs = 0L
                 }
+                mediaPlayer.prepareAsync()
             } catch (e: Exception) {
                 Log.e("AudioPlayerItem", "Error setting data source: ${e.localizedMessage}", e)
+                isPrepared = false
+                isPlaying = false
             }
         }
     }
@@ -120,29 +212,29 @@ fun AudioPlayerItem(
 
     val isDarkTheme = LocalIsDarkTheme.current
 
-    val containerColor = if (isDarkTheme) {
-        if (isSelf) WhatsappDarkBubble else WhatsappDarkSurface
-    } else {
-        if (isSelf) Color(0xFFDCF8C6) else Color.White
-    }
+    // Sage Green / Laurel Green theme color
+    val sageGreen = Color(0xFF6B8766)
 
-    val titleColor = if (isDarkTheme) WhatsappLightGreen else WhatsappTeal
-    val subTextColor = if (isDarkTheme) Color(0xFFCCCCCC) else Color.DarkGray
+    // Pure white background for voice note container as requested
+    val containerColor = Color.White
+    val titleColor = sageGreen
+    val subTextColor = Color(0xFF6B7280)
 
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(16.dp),
         color = containerColor,
+        shadowElevation = 1.dp,
         border = BorderStroke(
-            width = 0.5.dp,
-            color = if (isDarkTheme) Color.White.copy(alpha = 0.15f) else Color.Black.copy(alpha = 0.08f)
+            width = 1.dp,
+            color = Color(0xFFE2E8F0)
         ),
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .padding(vertical = 2.dp)
     ) {
         Row(
             modifier = Modifier
-                .padding(horizontal = 10.dp, vertical = 8.dp)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
                 .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -151,7 +243,7 @@ fun AudioPlayerItem(
                 modifier = Modifier
                     .size(38.dp)
                     .background(
-                        if (isDarkTheme) WhatsappLightGreen.copy(alpha = 0.2f) else WhatsappTeal.copy(alpha = 0.15f),
+                        sageGreen.copy(alpha = 0.12f),
                         CircleShape
                     ),
                 contentAlignment = Alignment.Center
@@ -159,19 +251,19 @@ fun AudioPlayerItem(
                 Icon(
                     imageVector = Icons.Default.Mic,
                     contentDescription = "Voice Note",
-                    tint = if (isDarkTheme) WhatsappLightGreen else WhatsappTeal,
+                    tint = sageGreen,
                     modifier = Modifier.size(20.dp)
                 )
             }
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Play / Pause Button
+            // Play / Pause Button in Sage Green / Laurel Green
             Surface(
                 shape = CircleShape,
-                color = WhatsappGreen,
+                color = sageGreen,
                 modifier = Modifier
-                    .size(36.dp)
+                    .size(38.dp)
                     .clickable {
                         if (!isPrepared) return@clickable
                         try {
@@ -221,13 +313,23 @@ fun AudioPlayerItem(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                LinearProgressIndicator(
-                    progress = { progress },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp),
-                    color = if (isDarkTheme) WhatsappLightGreen else WhatsappGreen,
-                    trackColor = if (isDarkTheme) Color.White.copy(alpha = 0.2f) else Color.Gray.copy(alpha = 0.25f),
+                AudioWaveformBar(
+                    progress = progress,
+                    isPlaying = isPlaying,
+                    seed = message.id.hashCode(),
+                    activeColor = sageGreen,
+                    inactiveColor = sageGreen.copy(alpha = 0.22f),
+                    onSeek = { clickedRatio ->
+                        if (isPrepared && durationMs > 0) {
+                            val seekMs = (clickedRatio * durationMs).toLong()
+                            currentPositionMs = seekMs
+                            try {
+                                mediaPlayer.seekTo(seekMs.toInt())
+                            } catch (e: Exception) {
+                                Log.e("AudioPlayerItem", "Error seeking: ${e.localizedMessage}")
+                            }
+                        }
+                    }
                 )
             }
         }

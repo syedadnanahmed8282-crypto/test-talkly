@@ -15,13 +15,8 @@ class AudioRecorder(private val context: Context) {
         outputFile = file
 
         return try {
-            val recordingContext = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                context.createAttributionContext("default")
-            } else {
-                context
-            }
             val mr = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                MediaRecorder(recordingContext)
+                MediaRecorder(context)
             } else {
                 @Suppress("DEPRECATION")
                 MediaRecorder()
@@ -41,7 +36,10 @@ class AudioRecorder(private val context: Context) {
             file
         } catch (e: Exception) {
             Log.e("AudioRecorder", "Failed to start recording: ${e.localizedMessage}", e)
-            recorder?.release()
+            try {
+                recorder?.reset()
+                recorder?.release()
+            } catch (ignored: Exception) {}
             recorder = null
             outputFile?.delete()
             outputFile = null
@@ -50,32 +48,48 @@ class AudioRecorder(private val context: Context) {
     }
 
     fun stopRecording(): File? {
+        val rec = recorder
+        recorder = null
+        val targetFile = outputFile
         return try {
-            recorder?.apply {
-                stop()
+            rec?.apply {
+                try {
+                    stop()
+                } catch (e: Exception) {
+                    Log.w("AudioRecorder", "MediaRecorder.stop() failed: ${e.localizedMessage}")
+                }
                 release()
             }
-            recorder = null
-            Log.d("AudioRecorder", "Recording stopped. File size: ${outputFile?.length() ?: 0} bytes")
-            outputFile
+            if (targetFile != null && targetFile.exists() && targetFile.length() > 0) {
+                Log.d("AudioRecorder", "Recording stopped. File size: ${targetFile.length()} bytes")
+                targetFile
+            } else {
+                targetFile?.delete()
+                outputFile = null
+                null
+            }
         } catch (e: Exception) {
             Log.e("AudioRecorder", "Failed to stop recording cleanly: ${e.localizedMessage}", e)
-            recorder?.release()
-            recorder = null
+            try {
+                rec?.release()
+            } catch (ignored: Exception) {}
             outputFile
         }
     }
 
     fun cancelRecording() {
+        val rec = recorder
+        recorder = null
         try {
-            recorder?.apply {
-                stop()
+            rec?.apply {
+                try {
+                    stop()
+                } catch (ignored: Exception) {}
                 release()
             }
         } catch (e: Exception) {
             Log.w("AudioRecorder", "Error releasing recorder on cancel: ${e.localizedMessage}")
         } finally {
-            recorder = null
             outputFile?.delete()
             outputFile = null
         }

@@ -1,6 +1,7 @@
 package com.family.talkly.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +21,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FamilyRestroom
@@ -48,8 +50,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -58,8 +63,16 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import com.family.talkly.data.models.UserProfile
-import com.family.talkly.ui.theme.WhatsappGreen
-import com.family.talkly.ui.theme.WhatsappTeal
+
+// Classic Dark Purple & Sage Green / Laurel Green Palette
+private val ClassicDarkPurpleBg = Color(0xFF201030)        // Deep Classic Dark Purple
+private val ClassicDarkPurpleCard = Color(0xFF2C1740)      // Classic Dark Purple Card surface
+private val ClassicInputBg = Color(0xFF140921)           // High contrast dark container for inputs
+private val SageGreenAccent = Color(0xFF8FA87B)           // Warm Sage Green / Laurel Green
+private val SageGreenMint = Color(0xFFAEC89B)             // Light Pastel Sage for headings/highlights
+private val SoftSageText = Color(0xFFCBE0BD)              // Soft Pastel Sage for subtext
+private val SoftPurpleSubtext = Color(0xFFC7B7E0)         // Soft Light Purple for labels/placeholders
+private val ClassicInputBorder = Color(0xFF4A2A6B)        // Dark Purple input border
 
 @Composable
 fun AddContactDialog(
@@ -70,7 +83,6 @@ fun AddContactDialog(
     var phoneInput by remember { mutableStateOf("") }
     var nameInput by remember { mutableStateOf("") }
     var relationInput by remember { mutableStateOf("Family Member") }
-    var bioInput by remember { mutableStateOf("Available on Talkly 💬") }
     var avatarUrlInput by remember { mutableStateOf<String?>(null) }
 
     var isSearching by remember { mutableStateOf(false) }
@@ -95,13 +107,14 @@ fun AddContactDialog(
             isSearching = false
             if (profile != null) {
                 foundUser = profile
-                nameInput = profile.name
-                bioInput = profile.bio.ifBlank { "Available on Talkly 💬" }
+                if (nameInput.isBlank()) {
+                    nameInput = profile.name
+                }
                 avatarUrlInput = profile.profilePicUrl.ifBlank { null }
                 searchStatusMessage = "✅ Talkly user found: ${profile.name}"
             } else {
                 foundUser = null
-                searchStatusMessage = "ℹ️ User not registered on Talkly yet. Contact will be saved as offline member."
+                searchStatusMessage = "ℹ️ User not registered on Talkly yet. Saved as offline contact."
             }
         }
     }
@@ -113,15 +126,16 @@ fun AddContactDialog(
         Surface(
             modifier = Modifier
                 .fillMaxWidth(0.92f)
-                .padding(vertical = 16.dp),
+                .padding(vertical = 16.dp)
+                .shadow(16.dp, RoundedCornerShape(24.dp), ambientColor = SageGreenAccent, spotColor = SageGreenAccent),
             shape = RoundedCornerShape(24.dp),
-            color = Color.White,
-            shadowElevation = 12.dp
+            color = ClassicDarkPurpleBg,
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, SageGreenAccent.copy(alpha = 0.6f))
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp)
+                    .padding(22.dp)
                     .verticalScroll(rememberScrollState())
             ) {
                 // Top Header Row
@@ -133,50 +147,60 @@ fun AddContactDialog(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             modifier = Modifier
-                                .size(38.dp)
-                                .background(WhatsappTeal, CircleShape),
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    Brush.radialGradient(
+                                        colors = listOf(SageGreenMint, SageGreenAccent)
+                                    )
+                                ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.PersonAdd,
                                 contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
+                                tint = ClassicDarkPurpleBg,
+                                modifier = Modifier.size(22.dp)
                             )
                         }
-                        Spacer(modifier = Modifier.width(10.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = "Add Talkly Contact",
+                            text = "Add New Member",
                             fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp,
-                            color = WhatsappTeal
+                            fontSize = 20.sp,
+                            color = SageGreenMint
                         )
                     }
                     IconButton(onClick = onDismiss) {
-                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = Color.Gray)
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = SoftPurpleSubtext
+                        )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(18.dp))
 
                 // Found User Banner Card
                 if (foundUser != null) {
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 12.dp),
-                        colors = CardDefaults.cardColors(containerColor = WhatsappGreen.copy(alpha = 0.12f)),
+                            .padding(bottom = 14.dp),
+                        colors = CardDefaults.cardColors(containerColor = ClassicDarkPurpleCard),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, SageGreenAccent),
                         shape = RoundedCornerShape(16.dp)
                     ) {
                         Row(
-                            modifier = Modifier.padding(12.dp),
+                            modifier = Modifier.padding(14.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(46.dp)
+                                    .size(48.dp)
                                     .clip(CircleShape)
-                                    .background(WhatsappTeal),
+                                    .background(SageGreenAccent),
                                 contentAlignment = Alignment.Center
                             ) {
                                 if (!foundUser!!.profilePicUrl.isNullOrBlank()) {
@@ -189,9 +213,9 @@ fun AddContactDialog(
                                 } else {
                                     Text(
                                         text = foundUser!!.name.take(1).uppercase(),
-                                        color = Color.White,
+                                        color = ClassicDarkPurpleBg,
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 18.sp
+                                        fontSize = 20.sp
                                     )
                                 }
                             }
@@ -201,97 +225,125 @@ fun AddContactDialog(
                                     Text(
                                         text = foundUser!!.name,
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 15.sp,
-                                        color = Color(0xFF111B21)
+                                        fontSize = 16.sp,
+                                        color = Color.White
                                     )
-                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
                                     Icon(
                                         imageVector = Icons.Default.CheckCircle,
                                         contentDescription = null,
-                                        tint = WhatsappGreen,
+                                        tint = SageGreenMint,
                                         modifier = Modifier.size(16.dp)
                                     )
                                 }
                                 Text(
                                     text = foundUser!!.phoneNumber,
-                                    fontSize = 12.sp,
-                                    color = Color.Gray
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = SoftSageText
                                 )
                             }
                         }
                     }
                 }
 
-                // Phone Input Field with Search Action
+                // Phone Input Field (Required)
                 OutlinedTextField(
                     value = phoneInput,
                     onValueChange = {
                         phoneInput = it
                         searchStatusMessage = null
                     },
-                    label = { Text("Phone Number / User Mobile") },
-                    placeholder = { Text("+8801700000000") },
+                    label = { Text("Mobile Phone Number *", fontWeight = FontWeight.SemiBold) },
+                    placeholder = { Text("+8801700000000", color = SoftPurpleSubtext.copy(alpha = 0.5f)) },
                     leadingIcon = {
-                        Icon(imageVector = Icons.Default.Phone, contentDescription = null, tint = WhatsappTeal)
+                        Icon(imageVector = Icons.Default.Phone, contentDescription = null, tint = SageGreenAccent)
                     },
                     trailingIcon = {
                         if (isSearching) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(20.dp),
-                                color = WhatsappTeal,
+                                color = SageGreenAccent,
                                 strokeWidth = 2.dp
                             )
                         } else {
                             IconButton(onClick = { triggerUserSearch() }) {
                                 Icon(
                                     imageVector = Icons.Default.Search,
-                                    contentDescription = "Search",
-                                    tint = WhatsappTeal
+                                    contentDescription = "Search Talkly User",
+                                    tint = SageGreenAccent
                                 )
                             }
                         }
                     },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                     singleLine = true,
+                    textStyle = TextStyle(
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = WhatsappTeal,
-                        focusedLabelColor = WhatsappTeal
+                        focusedBorderColor = SageGreenAccent,
+                        unfocusedBorderColor = ClassicInputBorder,
+                        focusedLabelColor = SageGreenMint,
+                        unfocusedLabelColor = SoftPurpleSubtext,
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedLeadingIconColor = SageGreenAccent,
+                        unfocusedLeadingIconColor = SoftPurpleSubtext,
+                        focusedContainerColor = ClassicInputBg,
+                        unfocusedContainerColor = ClassicInputBg
                     )
                 )
 
                 if (searchStatusMessage != null) {
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         text = searchStatusMessage!!,
                         fontSize = 12.sp,
-                        color = if (foundUser != null) WhatsappGreen else Color.DarkGray,
+                        fontWeight = FontWeight.Medium,
+                        color = if (foundUser != null) SageGreenMint else SoftPurpleSubtext,
                         modifier = Modifier.padding(start = 4.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                // Name Input Field
+                // Contact Name Field (Optional - Defaults to Phone or Found Name)
                 OutlinedTextField(
                     value = nameInput,
                     onValueChange = { nameInput = it },
-                    label = { Text("Contact Name") },
-                    placeholder = { Text("e.g. Brother Rahat") },
+                    label = { Text("Contact Name (Optional)", fontWeight = FontWeight.SemiBold) },
+                    placeholder = { Text("e.g. Brother Rahat", color = SoftPurpleSubtext.copy(alpha = 0.5f)) },
                     leadingIcon = {
-                        Icon(imageVector = Icons.Default.AccountCircle, contentDescription = null, tint = WhatsappTeal)
+                        Icon(imageVector = Icons.Default.AccountCircle, contentDescription = null, tint = SageGreenAccent)
                     },
                     singleLine = true,
+                    textStyle = TextStyle(
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = WhatsappTeal,
-                        focusedLabelColor = WhatsappTeal
+                        focusedBorderColor = SageGreenAccent,
+                        unfocusedBorderColor = ClassicInputBorder,
+                        focusedLabelColor = SageGreenMint,
+                        unfocusedLabelColor = SoftPurpleSubtext,
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedLeadingIconColor = SageGreenAccent,
+                        unfocusedLeadingIconColor = SoftPurpleSubtext,
+                        focusedContainerColor = ClassicInputBg,
+                        unfocusedContainerColor = ClassicInputBg
                     )
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 // Relation Selection Field
                 Box(modifier = Modifier.fillMaxWidth()) {
@@ -299,19 +351,30 @@ fun AddContactDialog(
                         value = relationInput,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Relation / Tag") },
+                        label = { Text("Relation / Tag", fontWeight = FontWeight.SemiBold) },
                         leadingIcon = {
-                            Icon(imageVector = Icons.Default.FamilyRestroom, contentDescription = null, tint = WhatsappTeal)
+                            Icon(imageVector = Icons.Default.FamilyRestroom, contentDescription = null, tint = SageGreenAccent)
                         },
+                        trailingIcon = {
+                            Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, tint = SageGreenAccent)
+                        },
+                        textStyle = TextStyle(
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        ),
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { showRelationDropdown = true },
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(14.dp),
                         enabled = false,
                         colors = OutlinedTextFieldDefaults.colors(
-                            disabledBorderColor = Color.LightGray,
-                            disabledLabelColor = WhatsappTeal,
-                            disabledTextColor = Color.Black
+                            disabledBorderColor = ClassicInputBorder,
+                            disabledLabelColor = SoftPurpleSubtext,
+                            disabledTextColor = Color.White,
+                            disabledLeadingIconColor = SageGreenAccent,
+                            disabledTrailingIconColor = SageGreenAccent,
+                            disabledContainerColor = ClassicInputBg
                         )
                     )
 
@@ -323,11 +386,20 @@ fun AddContactDialog(
 
                     DropdownMenu(
                         expanded = showRelationDropdown,
-                        onDismissRequest = { showRelationDropdown = false }
+                        onDismissRequest = { showRelationDropdown = false },
+                        modifier = Modifier
+                            .background(ClassicDarkPurpleCard)
+                            .border(1.dp, SageGreenAccent, RoundedCornerShape(8.dp))
                     ) {
                         relationOptions.forEach { option ->
                             DropdownMenuItem(
-                                text = { Text(option) },
+                                text = {
+                                    Text(
+                                        text = option,
+                                        color = if (option == relationInput) SageGreenMint else Color.White,
+                                        fontWeight = if (option == relationInput) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                },
                                 onClick = {
                                     relationInput = option
                                     showRelationDropdown = false
@@ -337,54 +409,58 @@ fun AddContactDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Bio / Status Field
-                OutlinedTextField(
-                    value = bioInput,
-                    onValueChange = { bioInput = it },
-                    label = { Text("Bio / Status Note") },
-                    placeholder = { Text("Available for call 💬") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = WhatsappTeal,
-                        focusedLabelColor = WhatsappTeal
-                    )
-                )
-
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(24.dp))
 
                 // Action Buttons Row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     TextButton(onClick = onDismiss) {
-                        Text("Cancel", color = Color.Gray)
+                        Text(
+                            text = "Cancel",
+                            color = SoftPurpleSubtext,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
                     Button(
                         onClick = {
-                            val cleanName = nameInput.trim()
                             val cleanPhone = phoneInput.trim()
-                            if (cleanName.isNotBlank() && cleanPhone.isNotBlank()) {
+                            if (cleanPhone.isNotBlank()) {
+                                val finalName = nameInput.trim().ifBlank {
+                                    foundUser?.name ?: cleanPhone
+                                }
                                 onAddContact(
-                                    cleanName,
+                                    finalName,
                                     cleanPhone,
                                     relationInput,
-                                    bioInput,
+                                    "Available on Talkly 💬",
                                     avatarUrlInput
                                 )
                                 onDismiss()
                             }
                         },
-                        enabled = nameInput.isNotBlank() && phoneInput.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = WhatsappGreen),
-                        shape = RoundedCornerShape(12.dp)
+                        enabled = phoneInput.trim().isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = SageGreenAccent,
+                            contentColor = ClassicDarkPurpleBg,
+                            disabledContainerColor = SageGreenAccent.copy(alpha = 0.3f),
+                            disabledContentColor = Color.White.copy(alpha = 0.4f)
+                        ),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .height(46.dp)
+                            .padding(horizontal = 4.dp)
                     ) {
-                        Text("Save Contact", fontWeight = FontWeight.Bold, color = Color.White)
+                        Text(
+                            text = "Save Contact",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = ClassicDarkPurpleBg
+                        )
                     }
                 }
             }

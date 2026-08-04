@@ -5,6 +5,7 @@ data class FamilyMember(
     val name: String,
     val relation: String,
     val avatarUrl: String? = null,
+    val coverPhotoUrl: String? = null,
     val status: String = "Available for video call",
     val phone: String,
     val isOnline: Boolean = true,
@@ -16,12 +17,26 @@ data class FamilyMember(
     val isRegisteredOnTalkly: Boolean = false,
     val firebaseUid: String? = null
 ) {
-    fun isRecentlyActive(maxInactiveMs: Long = 45 * 60 * 1000L): Boolean {
+    fun isRecentlyActive(maxInactiveMs: Long = 2 * 60 * 1000L): Boolean {
         if (!isOnline) return false
         val now = System.currentTimeMillis()
         if (lastActiveTimestamp <= 0L) return isOnline
         return (now - lastActiveTimestamp) <= maxInactiveMs
     }
+
+    val displayLastSeen: String
+        get() {
+            if (lastActiveTimestamp > 0L) {
+                val formatted = com.family.talkly.util.PhoneUtils.formatLastSeenTime(lastActiveTimestamp)
+                if (!formatted.equals("Online", ignoreCase = true) && formatted.isNotBlank()) {
+                    return formatted
+                }
+            }
+            if (lastSeen.equals("Online", ignoreCase = true) || lastSeen.isBlank()) {
+                return "Recently"
+            }
+            return lastSeen
+        }
 
     val firstName: String
         get() {

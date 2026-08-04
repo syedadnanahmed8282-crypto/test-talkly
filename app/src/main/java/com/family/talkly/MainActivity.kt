@@ -154,11 +154,12 @@ class MainActivity : ComponentActivity() {
                                     zegoManager.clearSession()
                                     authManager.logout()
                                 },
-                                onSaveProfile = { name, bio, picUrl ->
+                                onSaveProfile = { name, bio, picUrl, coverUrl ->
                                     authManager.saveUserProfile(
                                         name = name,
                                         profilePicUrl = picUrl,
-                                        bio = bio
+                                        bio = bio,
+                                        coverPhotoUrl = coverUrl
                                     )
                                 }
                             )

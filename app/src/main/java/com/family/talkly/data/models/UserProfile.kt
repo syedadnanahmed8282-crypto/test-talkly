@@ -6,6 +6,7 @@ data class UserProfile(
     val phoneNumber: String = "",
     val phoneSuffix: String = "",
     val profilePicUrl: String = "",
+    val coverPhotoUrl: String = "",
     val bio: String = "Available on Talkly 💬",
     val createdAt: Long = System.currentTimeMillis()
 )

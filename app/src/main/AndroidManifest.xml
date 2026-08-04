@@ -17,6 +17,7 @@
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
@@ -34,6 +35,10 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MyApplication">
 
+        <property
+            android:name="android.content.attribution_tag"
+            android:value="default" />
+
         <service
             android:name="com.family.talkly.service.TalklyFirebaseMessagingService"
             android:exported="false">
@@ -46,7 +51,7 @@
             android:name="com.family.talkly.service.CallForegroundService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="phoneCall">
+            android:foregroundServiceType="phoneCall|microphone">
         </service>
 
         <activity

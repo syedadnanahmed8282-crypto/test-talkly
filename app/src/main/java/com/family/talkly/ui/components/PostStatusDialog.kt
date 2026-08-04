@@ -307,9 +307,9 @@ fun PostStatusDialog(
                             isPosting = true
                             coroutineScope.launch {
                                 val currentUri = selectedMediaUri
-                                val finalPhotoUrl = if (currentUri != null && (currentUri.startsWith("content://") || currentUri.startsWith("file://"))) {
+                                val finalPhotoUrl = if (currentUri != null && (currentUri.startsWith("content://") || currentUri.startsWith("file://") || currentUri.startsWith("/"))) {
                                     try {
-                                        val uri = Uri.parse(currentUri)
+                                        val uri = if (currentUri.startsWith("/")) Uri.fromFile(java.io.File(currentUri)) else Uri.parse(currentUri)
                                         val compressor = com.family.talkly.util.MediaCompressorAndUploader(context)
                                         val compressedFile = compressor.compressImage(uri) { _, _ -> }
                                         compressor.uploadToFirebaseStorage(compressedFile, "status/media/${System.currentTimeMillis()}.jpg") { _, _ -> }

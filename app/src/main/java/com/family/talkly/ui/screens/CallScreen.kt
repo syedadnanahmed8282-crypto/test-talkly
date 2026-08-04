@@ -1,8 +1,14 @@
 package com.family.talkly.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Close
@@ -47,8 +54,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.toRect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -78,11 +91,60 @@ import com.family.talkly.ui.theme.WhatsappGreen
 import java.util.Locale
 import kotlin.math.roundToInt
 
+enum class BeautyFilterMode(val label: String) {
+    FAIR_AND_BRIGHT("✨ Fair & Bright"),
+    SOFT_GLOW("🌟 Soft Glow"),
+    OFF("📷 Original")
+}
+
+fun getBeautyColorMatrix(mode: BeautyFilterMode): ColorMatrix {
+    return when (mode) {
+        BeautyFilterMode.FAIR_AND_BRIGHT -> {
+            ColorMatrix(floatArrayOf(
+                1.16f, 0.00f, 0.00f, 0f, 24f, // Red channel boost for soft rosy skin
+                0.00f, 1.14f, 0.00f, 0f, 22f, // Green channel boost for fair skin tone
+                0.00f, 0.00f, 1.12f, 0f, 20f, // Blue channel boost for bright illumination
+                0.00f, 0.00f, 0.00f, 1f, 0f   // Alpha channel
+            ))
+        }
+        BeautyFilterMode.SOFT_GLOW -> {
+            ColorMatrix(floatArrayOf(
+                1.20f, 0.00f, 0.00f, 0f, 32f,
+                0.00f, 1.16f, 0.00f, 0f, 28f,
+                0.00f, 0.00f, 1.14f, 0f, 24f,
+                0.00f, 0.00f, 0.00f, 1f, 0f
+            ))
+        }
+        BeautyFilterMode.OFF -> ColorMatrix()
+    }
+}
+
+fun Modifier.applyBeautyColorFilter(beautyFilterMode: BeautyFilterMode, matrix: ColorMatrix): Modifier = this.drawWithContent {
+    if (beautyFilterMode != BeautyFilterMode.OFF && !size.isEmpty()) {
+        try {
+            val paint = Paint().apply {
+                colorFilter = ColorFilter.colorMatrix(matrix)
+            }
+            drawIntoCanvas { canvas ->
+                canvas.saveLayer(size.toRect(), paint)
+                drawContent()
+                canvas.restore()
+            }
+        } catch (e: Throwable) {
+            drawContent()
+        }
+    } else {
+        drawContent()
+    }
+}
+
 @Composable
 fun CameraPreviewView(
     onBindLocalView: (android.view.View?) -> Unit,
+    beautyFilterMode: BeautyFilterMode = BeautyFilterMode.FAIR_AND_BRIGHT,
     modifier: Modifier = Modifier
 ) {
+    val matrix = remember(beautyFilterMode) { getBeautyColorMatrix(beautyFilterMode) }
     AndroidView(
         factory = { ctx ->
             TextureView(ctx).apply {
@@ -99,7 +161,7 @@ fun CameraPreviewView(
                 }
             }
         },
-        modifier = modifier
+        modifier = modifier.applyBeautyColorFilter(beautyFilterMode, matrix)
     )
 }
 
@@ -108,8 +170,10 @@ fun RemoteVideoView(
     member: FamilyMember?,
     isRemotePlaying: Boolean,
     onBindRemoteView: (android.view.View?) -> Unit,
+    beautyFilterMode: BeautyFilterMode = BeautyFilterMode.FAIR_AND_BRIGHT,
     modifier: Modifier = Modifier
 ) {
+    val matrix = remember(beautyFilterMode) { getBeautyColorMatrix(beautyFilterMode) }
     Box(
         modifier = modifier.background(Color(0xFF101D25)),
         contentAlignment = Alignment.Center
@@ -130,7 +194,9 @@ fun RemoteVideoView(
                     }
                 }
             },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .applyBeautyColorFilter(beautyFilterMode, matrix)
         )
 
         if (!isRemotePlaying) {
@@ -194,6 +260,25 @@ fun CallScreen(
     onBindLocalView: (android.view.View?) -> Unit = {},
     onBindRemoteView: (android.view.View?) -> Unit = {}
 ) {
+    val context = LocalContext.current
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        val activity = context as? android.app.Activity
+        activity?.window?.addFlags(
+            android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+            android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+            android.view.WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+        )
+        onDispose {
+            activity?.window?.clearFlags(
+                android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                android.view.WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+            )
+        }
+    }
+
     val member = callInfo.targetMember
     val isVideo = callInfo.callType == CallType.VIDEO
 
@@ -212,13 +297,21 @@ fun CallScreen(
 
     var isSwapped by remember { mutableStateOf(false) }
     var isSplitScreen by remember { mutableStateOf(false) }
+    var beautyFilterMode by remember { mutableStateOf(BeautyFilterMode.FAIR_AND_BRIGHT) }
     var pipOffsetX by remember { mutableFloatStateOf(0f) }
     var pipOffsetY by remember { mutableFloatStateOf(0f) }
+    var areControlsVisible by remember { mutableStateOf(true) }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF0B141A))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {
+                areControlsVisible = !areControlsVisible
+            }
     ) {
         if (isVideo && !callInfo.isCameraOff) {
             if (isSplitScreen) {
@@ -235,6 +328,7 @@ fun CallScreen(
                             member = member,
                             isRemotePlaying = callInfo.isRemoteStreamPlaying,
                             onBindRemoteView = onBindRemoteView,
+                            beautyFilterMode = beautyFilterMode,
                             modifier = Modifier.fillMaxSize()
                         )
                         Surface(
@@ -262,6 +356,7 @@ fun CallScreen(
                     ) {
                         CameraPreviewView(
                             onBindLocalView = onBindLocalView,
+                            beautyFilterMode = beautyFilterMode,
                             modifier = Modifier.fillMaxSize()
                         )
                         Surface(
@@ -309,11 +404,13 @@ fun CallScreen(
                             member = member,
                             isRemotePlaying = callInfo.isRemoteStreamPlaying,
                             onBindRemoteView = onBindRemoteView,
+                            beautyFilterMode = beautyFilterMode,
                             modifier = Modifier.fillMaxSize()
                         )
                     } else {
                         CameraPreviewView(
                             onBindLocalView = onBindLocalView,
+                            beautyFilterMode = beautyFilterMode,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -356,6 +453,7 @@ fun CallScreen(
                             if (!isSwapped) {
                                 CameraPreviewView(
                                     onBindLocalView = onBindLocalView,
+                                    beautyFilterMode = beautyFilterMode,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             } else {
@@ -363,6 +461,7 @@ fun CallScreen(
                                     member = member,
                                     isRemotePlaying = callInfo.isRemoteStreamPlaying,
                                     onBindRemoteView = onBindRemoteView,
+                                    beautyFilterMode = beautyFilterMode,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
@@ -449,136 +548,184 @@ fun CallScreen(
         }
 
         // Top Status Header Overlay
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 40.dp, start = 20.dp, end = 20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+        AnimatedVisibility(
+            visible = areControlsVisible,
+            enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
+            modifier = Modifier.align(Alignment.TopCenter)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 40.dp, start = 20.dp, end = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Icon(
-                    imageVector = Icons.Default.Lock,
-                    contentDescription = "Encrypted",
-                    tint = WhatsappGreen,
-                    modifier = Modifier.size(14.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "Encrypted",
+                        tint = WhatsappGreen,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "End-to-End Encrypted Family Call",
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 Text(
-                    text = "End-to-End Encrypted Family Call",
-                    color = Color.White.copy(alpha = 0.8f),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
+                    text = callStatusText,
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
                 )
+
+                if (isVideo) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Surface(
+                        onClick = {
+                            beautyFilterMode = when (beautyFilterMode) {
+                                BeautyFilterMode.FAIR_AND_BRIGHT -> BeautyFilterMode.SOFT_GLOW
+                                BeautyFilterMode.SOFT_GLOW -> BeautyFilterMode.OFF
+                                BeautyFilterMode.OFF -> BeautyFilterMode.FAIR_AND_BRIGHT
+                            }
+                        },
+                        color = if (beautyFilterMode != BeautyFilterMode.OFF) WhatsappGreen.copy(alpha = 0.9f) else Color.Black.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(20.dp),
+                        shadowElevation = 4.dp
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = "Beauty Filter",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = beautyFilterMode.label,
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
             }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = callStatusText,
-                color = Color.White,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold
-            )
         }
 
         // Bottom Floating Call Controls
-        Surface(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(24.dp),
-            shape = RoundedCornerShape(32.dp),
-            color = Color(0xFF1F2C34).copy(alpha = 0.95f),
-            tonalElevation = 8.dp
+        AnimatedVisibility(
+            visible = areControlsVisible,
+            enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
+            modifier = Modifier.align(Alignment.BottomCenter)
         ) {
-            Row(
+            Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 16.dp, horizontal = 8.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(24.dp),
+                shape = RoundedCornerShape(32.dp),
+                color = Color(0xFF1F2C34).copy(alpha = 0.95f),
+                tonalElevation = 8.dp
             ) {
-                // Mute Mic
-                IconButton(
-                    onClick = onToggleMute,
+                Row(
                     modifier = Modifier
-                        .size(50.dp)
-                        .background(
-                            if (callInfo.isMuted) Color.White else Color.White.copy(alpha = 0.15f),
-                            CircleShape
+                        .fillMaxWidth()
+                        .padding(vertical = 16.dp, horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Mute Mic
+                    IconButton(
+                        onClick = onToggleMute,
+                        modifier = Modifier
+                            .size(50.dp)
+                            .background(
+                                if (callInfo.isMuted) Color.White else Color.White.copy(alpha = 0.15f),
+                                CircleShape
+                            )
+                    ) {
+                        Icon(
+                            imageVector = if (callInfo.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                            contentDescription = "Mute",
+                            tint = if (callInfo.isMuted) Color.Red else Color.White
                         )
-                ) {
-                    Icon(
-                        imageVector = if (callInfo.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                        contentDescription = "Mute",
-                        tint = if (callInfo.isMuted) Color.Red else Color.White
-                    )
-                }
+                    }
 
-                // Camera Flip
-                IconButton(
-                    onClick = onFlipCamera,
-                    modifier = Modifier
-                        .size(50.dp)
-                        .background(Color.White.copy(alpha = 0.15f), CircleShape)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Cameraswitch,
-                        contentDescription = "Flip Camera",
-                        tint = Color.White
-                    )
-                }
-
-                // Video Toggle
-                IconButton(
-                    onClick = onToggleCamera,
-                    modifier = Modifier
-                        .size(50.dp)
-                        .background(
-                            if (callInfo.isCameraOff) Color.White else Color.White.copy(alpha = 0.15f),
-                            CircleShape
+                    // Camera Flip
+                    IconButton(
+                        onClick = onFlipCamera,
+                        modifier = Modifier
+                            .size(50.dp)
+                            .background(Color.White.copy(alpha = 0.15f), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Cameraswitch,
+                            contentDescription = "Flip Camera",
+                            tint = Color.White
                         )
-                ) {
-                    Icon(
-                        imageVector = if (callInfo.isCameraOff) Icons.Default.VideocamOff else Icons.Default.Videocam,
-                        contentDescription = "Camera Toggle",
-                        tint = if (callInfo.isCameraOff) Color.Red else Color.White
-                    )
-                }
+                    }
 
-                // Speaker Toggle
-                IconButton(
-                    onClick = onToggleSpeaker,
-                    modifier = Modifier
-                        .size(50.dp)
-                        .background(
-                            if (callInfo.isSpeakerOn) WhatsappGreen else Color.White.copy(alpha = 0.15f),
-                            CircleShape
+                    // Video Toggle
+                    IconButton(
+                        onClick = onToggleCamera,
+                        modifier = Modifier
+                            .size(50.dp)
+                            .background(
+                                if (callInfo.isCameraOff) Color.White else Color.White.copy(alpha = 0.15f),
+                                CircleShape
+                            )
+                    ) {
+                        Icon(
+                            imageVector = if (callInfo.isCameraOff) Icons.Default.VideocamOff else Icons.Default.Videocam,
+                            contentDescription = "Camera Toggle",
+                            tint = if (callInfo.isCameraOff) Color.Red else Color.White
                         )
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.VolumeUp,
-                        contentDescription = "Speaker",
-                        tint = Color.White
-                    )
-                }
+                    }
 
-                // End Call FAB
-                FloatingActionButton(
-                    onClick = onEndCall,
-                    containerColor = Color(0xFFE53935),
-                    contentColor = Color.White,
-                    shape = CircleShape,
-                    modifier = Modifier.size(56.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CallEnd,
-                        contentDescription = "End Call",
-                        modifier = Modifier.size(28.dp)
-                    )
+                    // Speaker Toggle
+                    IconButton(
+                        onClick = onToggleSpeaker,
+                        modifier = Modifier
+                            .size(50.dp)
+                            .background(
+                                if (callInfo.isSpeakerOn) WhatsappGreen else Color.White.copy(alpha = 0.15f),
+                                CircleShape
+                            )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.VolumeUp,
+                            contentDescription = "Speaker",
+                            tint = Color.White
+                        )
+                    }
+
+                    // End Call FAB
+                    FloatingActionButton(
+                        onClick = onEndCall,
+                        containerColor = Color(0xFFE53935),
+                        contentColor = Color.White,
+                        shape = CircleShape,
+                        modifier = Modifier.size(56.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CallEnd,
+                            contentDescription = "End Call",
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                 }
             }
         }

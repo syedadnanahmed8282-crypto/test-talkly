@@ -1,5 +1,6 @@
 package com.family.talkly.ui.screens.auth
 
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -81,12 +82,25 @@ fun ProfileSetupScreen(
     var customAvatarUrl by remember { mutableStateOf<String?>(null) }
     var selectedAvatar by remember { mutableStateOf(PRESET_AVATARS[0]) }
 
+    var selectedImageForCropping by remember { mutableStateOf<Uri?>(null) }
+
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri != null) {
-            customAvatarUrl = uri.toString()
+            selectedImageForCropping = uri
         }
+    }
+
+    selectedImageForCropping?.let { rawUri ->
+        com.family.talkly.ui.components.ImageCropDialog(
+            imageUri = rawUri,
+            onDismiss = { selectedImageForCropping = null },
+            onImageCropped = { croppedUri ->
+                customAvatarUrl = croppedUri.toString()
+                selectedImageForCropping = null
+            }
+        )
     }
 
     val activeAvatarUrl = customAvatarUrl ?: selectedAvatar.url

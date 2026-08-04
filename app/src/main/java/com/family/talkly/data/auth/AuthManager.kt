@@ -42,6 +42,7 @@ class AuthManager(private val context: Context) {
         private const val KEY_NAME = "user_name"
         private const val KEY_PHONE = "user_phone"
         private const val KEY_PROFILE_PIC = "user_profile_pic"
+        private const val KEY_COVER_PHOTO = "user_cover_photo"
         private const val KEY_BIO = "user_bio"
 
         /**
@@ -118,6 +119,7 @@ class AuthManager(private val context: Context) {
                 val name = prefs.getString(KEY_NAME, "") ?: ""
                 val phone = prefs.getString(KEY_PHONE, "") ?: ""
                 var pic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
+                val coverPic = prefs.getString(KEY_COVER_PHOTO, "") ?: ""
                 val bio = prefs.getString(KEY_BIO, "Available on Talkly 💬") ?: "Available on Talkly 💬"
 
                 // Check if pic is a content:// URI and convert to persistent internal avatar file if available
@@ -135,6 +137,7 @@ class AuthManager(private val context: Context) {
                         name = name,
                         phoneNumber = phone,
                         profilePicUrl = pic,
+                        coverPhotoUrl = coverPic,
                         bio = bio
                     )
                     _authState.value = AuthState.Authenticated(profile)
@@ -323,6 +326,34 @@ class AuthManager(private val context: Context) {
         }
     }
 
+    /**
+     * Deletes previous storage files (Firebase Storage or local files) when a profile picture or cover photo is updated
+     */
+    private fun deleteOldStorageFile(oldUrl: String?) {
+        if (oldUrl.isNullOrBlank()) return
+        try {
+            if (oldUrl.startsWith("http://") || oldUrl.startsWith("https://")) {
+                if (oldUrl.contains("firebasestorage.googleapis.com") || oldUrl.contains("firebasestorage")) {
+                    val storageRef = com.google.firebase.storage.FirebaseStorage.getInstance().getReferenceFromUrl(oldUrl)
+                    storageRef.delete().addOnSuccessListener {
+                        Log.d(TAG, "Successfully deleted previous profile file from Firebase Storage: $oldUrl")
+                    }.addOnFailureListener { e ->
+                        Log.w(TAG, "Could not delete old cloud file ($oldUrl): ${e.localizedMessage}")
+                    }
+                }
+            } else if (oldUrl.startsWith("file://") || oldUrl.startsWith("/")) {
+                val path = if (oldUrl.startsWith("file://")) Uri.parse(oldUrl).path ?: "" else oldUrl
+                val file = File(path)
+                if (file.exists()) {
+                    val deleted = file.delete()
+                    Log.d(TAG, "Successfully deleted previous local profile file ($path): $deleted")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Exception during deletion of old profile file: ${e.localizedMessage}")
+        }
+    }
+
     private fun processProfileAvatarImage(uid: String, rawProfilePicUrl: String): Pair<String, String> {
         if (rawProfilePicUrl.isBlank()) {
             return Pair("", "")
@@ -446,14 +477,33 @@ class AuthManager(private val context: Context) {
                         ?: prefs.getString(KEY_NAME, "")?.takeIf { it.isNotBlank() }
                         ?: "Talkly User"
                     val primaryPhone = newestDoc.getString("phoneNumber")?.takeIf { it.isNotBlank() } ?: loginPhone
-                    val docPic = newestDoc.getString("profilePicUrl") ?: ""
+                    val docPic = newestDoc.getString("profilePicUrl")
+                        ?: newestDoc.getString("photoUrl")
+                        ?: newestDoc.getString("photoURL")
+                        ?: newestDoc.getString("avatarUrl")
+                        ?: newestDoc.getString("profilePic") ?: ""
                     val localPic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
-                    val primaryPic = if (docPic.startsWith("http://") || docPic.startsWith("https://") || docPic.startsWith("data:")) {
-                        docPic
-                    } else if (localPic.isNotBlank() && !localPic.startsWith("content://")) {
+                    val currentAuthPic = (_authState.value as? AuthState.Authenticated)?.profile?.profilePicUrl ?: ""
+                    val primaryPic = if (localPic.isNotBlank() && !localPic.startsWith("content://")) {
                         localPic
-                    } else {
+                    } else if (currentAuthPic.isNotBlank() && !currentAuthPic.startsWith("content://")) {
+                        currentAuthPic
+                    } else if (docPic.isNotBlank()) {
                         docPic
+                    } else {
+                        ""
+                    }
+                    val docCover = newestDoc.getString("coverPhotoUrl") ?: newestDoc.getString("coverUrl") ?: ""
+                    val localCover = prefs.getString(KEY_COVER_PHOTO, "") ?: ""
+                    val currentAuthCover = (_authState.value as? AuthState.Authenticated)?.profile?.coverPhotoUrl ?: ""
+                    val primaryCover = if (localCover.isNotBlank() && !localCover.startsWith("content://")) {
+                        localCover
+                    } else if (currentAuthCover.isNotBlank() && !currentAuthCover.startsWith("content://")) {
+                        currentAuthCover
+                    } else if (docCover.isNotBlank()) {
+                        docCover
+                    } else {
+                        ""
                     }
                     val primaryBio = newestDoc.getString("bio")?.takeIf { it.isNotBlank() } ?: "Available on Talkly 💬"
                     val primaryCreated = newestDoc.getLong("createdAt") ?: System.currentTimeMillis()
@@ -467,6 +517,7 @@ class AuthManager(private val context: Context) {
                         phoneNumber = primaryPhone,
                         phoneSuffix = suffix,
                         profilePicUrl = primaryPic,
+                        coverPhotoUrl = primaryCover,
                         bio = primaryBio
                     )
 
@@ -478,6 +529,7 @@ class AuthManager(private val context: Context) {
                         "phoneSuffix" to suffix,
                         "email" to getInternalEmail(primaryPhone),
                         "profilePicUrl" to primaryPic,
+                        "coverPhotoUrl" to primaryCover,
                         "bio" to primaryBio,
                         "createdAt" to primaryCreated,
                         "lastLoginAt" to now,
@@ -573,14 +625,21 @@ class AuthManager(private val context: Context) {
         val name = doc.getString("name") ?: ""
         val phone = doc.getString("phoneNumber") ?: fallbackPhone
         val suffix = doc.getString("phoneSuffix") ?: PhoneUtils.extractPhoneSuffix(phone)
-        val docPic = doc.getString("profilePicUrl") ?: ""
+        val docPic = doc.getString("profilePicUrl")
+            ?: doc.getString("photoUrl")
+            ?: doc.getString("photoURL")
+            ?: doc.getString("avatarUrl")
+            ?: doc.getString("profilePic") ?: ""
         val localPic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
-        val finalPic = if (docPic.startsWith("http://") || docPic.startsWith("https://") || docPic.startsWith("data:")) {
-            docPic
-        } else if (localPic.isNotBlank() && !localPic.startsWith("content://")) {
+        val currentAuthPic = (_authState.value as? AuthState.Authenticated)?.profile?.profilePicUrl ?: ""
+        val finalPic = if (localPic.isNotBlank() && !localPic.startsWith("content://")) {
             localPic
-        } else {
+        } else if (currentAuthPic.isNotBlank() && !currentAuthPic.startsWith("content://")) {
+            currentAuthPic
+        } else if (docPic.isNotBlank()) {
             docPic
+        } else {
+            ""
         }
         val bio = doc.getString("bio") ?: "Available on Talkly 💬"
 
@@ -600,6 +659,20 @@ class AuthManager(private val context: Context) {
         onComplete: (() -> Unit)? = null
     ) {
         val phone = profileMap["phoneNumber"] as? String ?: ""
+        val db = getFirestore()
+        if (uid.isNotBlank() && profileMap.isNotEmpty()) {
+            try {
+                db.collection("users").document(uid).set(profileMap, com.google.firebase.firestore.SetOptions.merge())
+                    .addOnSuccessListener {
+                        Log.d(TAG, "Saved user profileMap to Firestore for $uid")
+                    }
+                    .addOnFailureListener { e ->
+                        Log.w(TAG, "Failed saving user profileMap to Firestore: ${e.localizedMessage}")
+                    }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error setting user profile map: ${e.localizedMessage}")
+            }
+        }
         performAutomaticAccountMerge(uid, phone) {
             onComplete?.invoke()
         }
@@ -654,21 +727,45 @@ class AuthManager(private val context: Context) {
                 .addSnapshotListener { snapshot, error ->
                     if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
                     val name = snapshot.getString("name") ?: ""
-                    val pic = snapshot.getString("profilePicUrl") ?: snapshot.getString("photoUrl") ?: ""
+                    val pic = snapshot.getString("profilePicUrl")
+                        ?: snapshot.getString("photoUrl")
+                        ?: snapshot.getString("photoURL")
+                        ?: snapshot.getString("avatarUrl")
+                        ?: snapshot.getString("profilePic") ?: ""
                     val bio = snapshot.getString("bio") ?: "Available on Talkly 💬"
                     val phone = snapshot.getString("phoneNumber") ?: ""
+                    val cover = snapshot.getString("coverPhotoUrl") ?: snapshot.getString("coverUrl") ?: ""
 
                     if (name.isNotBlank()) {
                         val currentProfile = (_authState.value as? AuthState.Authenticated)?.profile
+                        val localSavedPic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
+                        val effectivePic = if (pic.isNotBlank()) {
+                            pic
+                        } else if (localSavedPic.isNotBlank() && !localSavedPic.startsWith("content://")) {
+                            localSavedPic
+                        } else {
+                            currentProfile?.profilePicUrl ?: ""
+                        }
+
+                        val localSavedCover = prefs.getString(KEY_COVER_PHOTO, "") ?: ""
+                        val effectiveCover = if (cover.isNotBlank()) {
+                            cover
+                        } else if (localSavedCover.isNotBlank() && !localSavedCover.startsWith("content://")) {
+                            localSavedCover
+                        } else {
+                            currentProfile?.coverPhotoUrl ?: ""
+                        }
+
                         val updatedProfile = UserProfile(
                             uid = uid,
                             name = name,
                             phoneNumber = if (phone.isNotBlank()) phone else (currentProfile?.phoneNumber ?: ""),
                             phoneSuffix = PhoneUtils.extractPhoneSuffix(phone),
-                            profilePicUrl = if (pic.isNotBlank()) pic else (currentProfile?.profilePicUrl ?: ""),
+                            profilePicUrl = effectivePic,
+                            coverPhotoUrl = effectiveCover,
                             bio = bio
                         )
-                        saveLocalSession(uid, updatedProfile.name, updatedProfile.phoneNumber, updatedProfile.profilePicUrl, updatedProfile.bio)
+                        saveLocalSession(uid, updatedProfile.name, updatedProfile.phoneNumber, updatedProfile.profilePicUrl, updatedProfile.bio, updatedProfile.coverPhotoUrl)
                         _authState.value = AuthState.Authenticated(updatedProfile)
                     }
                 }
@@ -689,7 +786,11 @@ class AuthManager(private val context: Context) {
         val name = doc.getString("name") ?: ""
         val phone = doc.getString("phoneNumber") ?: loginPhone
         val suffix = doc.getString("phoneSuffix") ?: PhoneUtils.extractPhoneSuffix(phone)
-        val docPic = doc.getString("profilePicUrl") ?: ""
+        val docPic = doc.getString("profilePicUrl")
+            ?: doc.getString("photoUrl")
+            ?: doc.getString("photoURL")
+            ?: doc.getString("avatarUrl")
+            ?: doc.getString("profilePic") ?: ""
         val bio = doc.getString("bio") ?: "Available on Talkly 💬"
 
         val profile = UserProfile(
@@ -770,6 +871,7 @@ class AuthManager(private val context: Context) {
         name: String,
         profilePicUrl: String,
         bio: String = "Available on Talkly 💬",
+        coverPhotoUrl: String = "",
         onSuccess: () -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
@@ -793,9 +895,12 @@ class AuthManager(private val context: Context) {
         }
 
         val phoneSuffix = PhoneUtils.extractPhoneSuffix(phone)
+        val oldPicUrl = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
+        val oldCoverUrl = prefs.getString(KEY_COVER_PHOTO, "") ?: ""
 
         kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             var finalPicUrl = profilePicUrl
+            var finalCoverUrl = coverPhotoUrl
 
             if (profilePicUrl.startsWith("content://") || profilePicUrl.startsWith("file://")) {
                 try {
@@ -807,9 +912,36 @@ class AuthManager(private val context: Context) {
                 } catch (e: Exception) {
                     Log.w(TAG, "Firebase Storage avatar upload error: ${e.localizedMessage}")
                     val (localPicUrl, firestorePicUrl) = processProfileAvatarImage(uid, profilePicUrl)
-                    finalPicUrl = if (firestorePicUrl.isNotBlank()) firestorePicUrl else localPicUrl
+                    val localDisplayPic = if (localPicUrl.isNotBlank()) localPicUrl else profilePicUrl
+                    finalPicUrl = if (firestorePicUrl.isNotBlank()) firestorePicUrl else localDisplayPic
                 }
             }
+
+            if (coverPhotoUrl.startsWith("content://") || coverPhotoUrl.startsWith("file://")) {
+                try {
+                    val uri = Uri.parse(coverPhotoUrl)
+                    val uploader = MediaCompressorAndUploader(context)
+                    val compressedFile = uploader.compressImage(uri) { _, _ -> }
+                    val remotePath = "profile_covers/${uid}_${System.currentTimeMillis()}.jpg"
+                    finalCoverUrl = uploader.uploadToFirebaseStorage(compressedFile, remotePath) { _, _ -> }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Firebase Storage cover photo upload error: ${e.localizedMessage}")
+                    val (localCoverUrl, firestoreCoverUrl) = processProfileAvatarImage("${uid}_cover", coverPhotoUrl)
+                    val localDisplayCover = if (localCoverUrl.isNotBlank()) localCoverUrl else coverPhotoUrl
+                    finalCoverUrl = if (firestoreCoverUrl.isNotBlank()) firestoreCoverUrl else localDisplayCover
+                }
+            }
+
+            // Delete previous profile picture from cloud/local storage if a new picture was uploaded
+            if (oldPicUrl.isNotBlank() && oldPicUrl != finalPicUrl) {
+                deleteOldStorageFile(oldPicUrl)
+            }
+            // Delete previous cover photo from cloud/local storage if a new cover photo was uploaded
+            if (oldCoverUrl.isNotBlank() && oldCoverUrl != finalCoverUrl) {
+                deleteOldStorageFile(oldCoverUrl)
+            }
+
+            saveLocalSession(uid, name, phone, finalPicUrl, bio, finalCoverUrl)
 
             // Force clear Coil image memory & disk caches to prevent stale image rendering
             try {
@@ -820,13 +952,13 @@ class AuthManager(private val context: Context) {
                 Log.w(TAG, "Failed clearing Coil image cache: ${e.localizedMessage}")
             }
 
-            saveLocalSession(uid, name, phone, finalPicUrl, bio)
             val profile = UserProfile(
                 uid = uid,
                 name = name,
                 phoneNumber = phone,
                 phoneSuffix = phoneSuffix,
                 profilePicUrl = finalPicUrl,
+                coverPhotoUrl = finalCoverUrl,
                 bio = bio
             )
 
@@ -842,25 +974,77 @@ class AuthManager(private val context: Context) {
                 "email" to getInternalEmail(phone),
                 "profilePicUrl" to finalPicUrl,
                 "photoUrl" to finalPicUrl,
+                "photoURL" to finalPicUrl,
                 "avatarUrl" to finalPicUrl,
+                "profilePic" to finalPicUrl,
+                "coverPhotoUrl" to finalCoverUrl,
+                "coverUrl" to finalCoverUrl,
                 "bio" to bio,
                 "updatedAt" to System.currentTimeMillis()
             )
 
             cleanupDuplicateUserDocsAndSave(uid, profileMap) {
                 try {
+                    val familyMemberMap = mapOf(
+                        "avatarUrl" to finalPicUrl,
+                        "photoUrl" to finalPicUrl,
+                        "profilePicUrl" to finalPicUrl,
+                        "coverPhotoUrl" to finalCoverUrl,
+                        "coverUrl" to finalCoverUrl,
+                        "name" to name,
+                        "status" to bio,
+                        "updatedAt" to System.currentTimeMillis()
+                    )
                     getFirestore().collection("family_members").document(uid).set(
-                        mapOf(
-                            "avatarUrl" to finalPicUrl,
-                            "photoUrl" to finalPicUrl,
-                            "name" to name,
-                            "status" to bio,
-                            "updatedAt" to System.currentTimeMillis()
-                        ),
+                        familyMemberMap,
                         com.google.firebase.firestore.SetOptions.merge()
                     )
+                    if (phoneSuffix.isNotBlank()) {
+                        getFirestore().collection("family_members").document(phoneSuffix).set(
+                            familyMemberMap,
+                            com.google.firebase.firestore.SetOptions.merge()
+                        )
+                        getFirestore().collection("users").document(phoneSuffix).set(
+                            profileMap,
+                            com.google.firebase.firestore.SetOptions.merge()
+                        )
+                    }
+
+                    // Update all contacts subcollections across all users where current user is saved
+                    val contactUpdates = mapOf(
+                        "avatarUrl" to finalPicUrl,
+                        "profilePicUrl" to finalPicUrl,
+                        "photoUrl" to finalPicUrl,
+                        "coverPhotoUrl" to finalCoverUrl,
+                        "coverUrl" to finalCoverUrl,
+                        "updatedAt" to System.currentTimeMillis()
+                    )
+                    val updateContactDocs = { querySnap: com.google.firebase.firestore.QuerySnapshot? ->
+                        if (querySnap != null) {
+                            for (doc in querySnap.documents) {
+                                try {
+                                    doc.reference.update(contactUpdates)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Failed updating contact doc ${doc.id}: ${e.localizedMessage}")
+                                }
+                            }
+                        }
+                    }
+
+                    if (uid.isNotBlank()) {
+                        getFirestore().collectionGroup("contacts").whereEqualTo("uid", uid).get()
+                            .addOnSuccessListener { updateContactDocs(it) }
+                    }
+                    if (phoneSuffix.isNotBlank()) {
+                        getFirestore().collectionGroup("contacts").whereEqualTo("phoneSuffix", phoneSuffix).get()
+                            .addOnSuccessListener { updateContactDocs(it) }
+                    }
+                    if (phone.isNotBlank()) {
+                        getFirestore().collectionGroup("contacts").whereEqualTo("phone", phone).get()
+                            .addOnSuccessListener { updateContactDocs(it) }
+                    }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error updating family_members doc for avatar: ${e.localizedMessage}")
+                    Log.w(TAG, "Error updating family_members or contacts doc for avatar: ${e.localizedMessage}")
                 }
                 setupCurrentUserSnapshotListener(uid)
                 kotlinx.coroutines.CoroutineScope(Dispatchers.Main).launch {
@@ -870,13 +1054,14 @@ class AuthManager(private val context: Context) {
         }
     }
 
-    private fun saveLocalSession(uid: String, name: String, phone: String, pic: String, bio: String = "Available on Talkly 💬") {
+    private fun saveLocalSession(uid: String, name: String, phone: String, pic: String, bio: String = "Available on Talkly 💬", coverPic: String = "") {
         prefs.edit()
             .putBoolean(KEY_IS_LOGGED_IN, true)
             .putString(KEY_UID, uid)
             .putString(KEY_NAME, name)
             .putString(KEY_PHONE, phone)
             .putString(KEY_PROFILE_PIC, pic)
+            .putString(KEY_COVER_PHOTO, coverPic)
             .putString(KEY_BIO, bio)
             .apply()
 
@@ -886,6 +1071,7 @@ class AuthManager(private val context: Context) {
                 .putString("user_name", name)
                 .putString("user_phone", phone)
                 .putString("user_profile_pic", pic)
+                .putString("user_cover_photo", coverPic)
                 .putString("user_bio", bio)
                 .apply()
         } catch (e: Exception) {

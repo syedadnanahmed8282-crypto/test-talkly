@@ -22,6 +22,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.isActive
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -63,7 +64,7 @@ fun MainScreen(
     currentThemeMode: ThemeMode = ThemeMode.SYSTEM,
     onThemeModeChange: ((ThemeMode) -> Unit)? = null,
     onLogout: (() -> Unit)? = null,
-    onSaveProfile: ((name: String, bio: String, photoUrl: String) -> Unit)? = null
+    onSaveProfile: ((name: String, bio: String, photoUrl: String, coverPhotoUrl: String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -127,6 +128,21 @@ fun MainScreen(
                     isOnline = false,
                     lastSeen = com.family.talkly.util.PhoneUtils.formatLastSeenTime(now),
                     lastActiveTimestamp = now
+                )
+            }
+        }
+    }
+
+    androidx.compose.runtime.LaunchedEffect(currentUserProfile?.uid) {
+        val uid = currentUserProfile?.uid
+        if (!uid.isNullOrBlank()) {
+            while (true) {
+                kotlinx.coroutines.delay(45_000L)
+                chatRepository.setMemberPresence(
+                    memberId = uid,
+                    isOnline = true,
+                    lastSeen = "Online",
+                    lastActiveTimestamp = System.currentTimeMillis()
                 )
             }
         }
@@ -267,6 +283,15 @@ fun MainScreen(
             onToggleReaction = { messageId, reactionEmoji ->
                 chatRepository.toggleMessageReaction(currentMember.id, messageId, reactionEmoji)
             },
+            onDeleteForYou = { messageId ->
+                chatRepository.deleteMessageForYou(currentMember.id, messageId)
+            },
+            onDeleteForEveryone = { messageId ->
+                chatRepository.deleteMessageForEveryone(currentMember.id, messageId)
+            },
+            onEditMessage = { messageId, newText ->
+                chatRepository.editMessage(currentMember.id, messageId, newText)
+            },
             onToggleStarMessage = { messageId ->
                 chatRepository.toggleStarMessage(currentMember.id, messageId)
             },
@@ -277,7 +302,7 @@ fun MainScreen(
                 chatRepository.togglePinMember(currentMember.id)
             },
             onTypingStateChanged = { isTyping ->
-                // Simulate status sync
+                chatRepository.setTypingStatus(currentMember.id, isTyping)
             },
             onToggleFastForward = { chatRepository.toggle48HourFastForward() },
             onAddExpiredDemo = { chatRepository.addExpiredMediaDemo(currentMember.id) },

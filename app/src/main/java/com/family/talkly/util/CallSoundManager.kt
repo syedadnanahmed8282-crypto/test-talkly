@@ -213,7 +213,7 @@ class CallSoundManager(private val context: Context) {
     }
 
     /**
-     * Stops all active call sounds immediately.
+     * Stops all active call ringtones immediately.
      */
     @Synchronized
     fun stopAllSounds() {

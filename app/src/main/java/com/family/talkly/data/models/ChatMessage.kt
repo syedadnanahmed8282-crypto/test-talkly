@@ -31,7 +31,11 @@ data class ChatMessage(
     val isPinned: Boolean = false,
     val replyToMessageId: String? = null,
     val replyToSenderName: String? = null,
-    val replyToText: String? = null
+    val replyToText: String? = null,
+    val isEdited: Boolean = false,
+    val isDeletedForEveryone: Boolean = false,
+    val deletedForUsers: List<String> = emptyList(),
+    val isPending: Boolean = false
 ) {
     companion object {
         const val EXPIRATION_48_HOURS_MS = 48 * 60 * 60 * 1000L // 172,800,000 ms

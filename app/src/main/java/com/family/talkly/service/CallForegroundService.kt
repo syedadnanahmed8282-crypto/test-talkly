@@ -25,6 +25,7 @@ class CallForegroundService : Service() {
         const val NOTIFICATION_ID = 2002
 
         const val ACTION_START_INCOMING_CALL = "com.family.talkly.action.START_INCOMING_CALL"
+        const val ACTION_START_ACTIVE_CALL = "com.family.talkly.action.START_ACTIVE_CALL"
         const val ACTION_STOP_INCOMING_CALL = "com.family.talkly.action.STOP_INCOMING_CALL"
         const val ACTION_DECLINE_CALL = "com.family.talkly.action.DECLINE_CALL"
 
@@ -53,10 +54,37 @@ class CallForegroundService : Service() {
                 putExtra(EXTRA_ROOM_ID, roomId)
                 putExtra(EXTRA_CALL_TYPE, callType)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start incoming call service: ${e.localizedMessage}")
+            }
+        }
+
+        fun startActiveCallService(
+            context: Context,
+            callerName: String,
+            callType: String,
+            roomId: String
+        ) {
+            val intent = Intent(context, CallForegroundService::class.java).apply {
+                action = ACTION_START_ACTIVE_CALL
+                putExtra(EXTRA_CALLER_NAME, callerName)
+                putExtra(EXTRA_CALL_TYPE, callType)
+                putExtra(EXTRA_ROOM_ID, roomId)
+            }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start active call service: ${e.localizedMessage}")
             }
         }
 
@@ -85,7 +113,7 @@ class CallForegroundService : Service() {
                 val roomId = intent.getStringExtra(EXTRA_ROOM_ID) ?: ""
                 val callType = intent.getStringExtra(EXTRA_CALL_TYPE) ?: "VIDEO"
 
-                acquireWakeLock()
+                acquireFullWakeLock()
                 startRingtone()
                 showIncomingCallNotification(
                     callerName = callerName,
@@ -94,6 +122,19 @@ class CallForegroundService : Service() {
                     callerAvatar = callerAvatar,
                     roomId = roomId,
                     callType = callType
+                )
+            }
+            ACTION_START_ACTIVE_CALL -> {
+                val callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: "Talkly User"
+                val callType = intent.getStringExtra(EXTRA_CALL_TYPE) ?: "AUDIO"
+                val roomId = intent.getStringExtra(EXTRA_ROOM_ID) ?: ""
+
+                stopRingtone()
+                acquirePartialWakeLock()
+                showActiveCallNotification(
+                    callerName = callerName,
+                    callType = callType,
+                    roomId = roomId
                 )
             }
             ACTION_DECLINE_CALL -> {
@@ -111,8 +152,9 @@ class CallForegroundService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun acquireWakeLock() {
+    private fun acquireFullWakeLock() {
         try {
+            releaseWakeLock()
             val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
             wakeLock = powerManager?.newWakeLock(
                 PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
@@ -120,7 +162,35 @@ class CallForegroundService : Service() {
             )
             wakeLock?.acquire(30000) // 30 seconds max
         } catch (e: Exception) {
-            Log.w(TAG, "Error acquiring wake lock: ${e.localizedMessage}")
+            Log.w(TAG, "Error acquiring full wake lock: ${e.localizedMessage}")
+        }
+    }
+
+    private fun acquirePartialWakeLock() {
+        try {
+            releaseWakeLock()
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            wakeLock = powerManager?.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "Talkly:ActiveCallWakeLock"
+            )
+            wakeLock?.acquire(4 * 60 * 60 * 1000L) // 4 hours max for ongoing call
+            Log.d(TAG, "Acquired PARTIAL_WAKE_LOCK for active call")
+        } catch (e: Exception) {
+            Log.w(TAG, "Error acquiring partial wake lock: ${e.localizedMessage}")
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            wakeLock?.let {
+                if (it.isHeld) {
+                    it.release()
+                }
+            }
+            wakeLock = null
+        } catch (e: Exception) {
+            Log.w(TAG, "Error releasing wake lock: ${e.localizedMessage}")
         }
     }
 
@@ -163,7 +233,6 @@ class CallForegroundService : Service() {
     ) {
         TalklyNotificationHelper.initNotificationChannels(this)
 
-        // Intent for Answer / Fullscreen Call Intent
         val fullScreenIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra("open_incoming_call", true)
@@ -182,7 +251,6 @@ class CallForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Decline Intent
         val declineIntent = Intent(this, CallForegroundService::class.java).apply {
             action = ACTION_DECLINE_CALL
             putExtra(EXTRA_ROOM_ID, roomId)
@@ -211,10 +279,72 @@ class CallForegroundService : Service() {
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePendingIntent)
             .addAction(android.R.drawable.ic_menu_call, "Answer", fullScreenPendingIntent)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notificationBuilder.build(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
+        val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
         } else {
-            startForeground(NOTIFICATION_ID, notificationBuilder.build())
+            0
+        }
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notificationBuilder.build(), foregroundType)
+            } else {
+                startForeground(NOTIFICATION_ID, notificationBuilder.build())
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "startForeground failed for incoming call: ${e.localizedMessage}")
+        }
+    }
+
+    private fun showActiveCallNotification(
+        callerName: String,
+        callType: String,
+        roomId: String
+    ) {
+        TalklyNotificationHelper.initNotificationChannels(this)
+
+        val contentIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("open_active_call", true)
+            putExtra("room_id", roomId)
+        }
+
+        val contentPendingIntent = PendingIntent.getActivity(
+            this,
+            roomId.hashCode(),
+            contentIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notificationBuilder = NotificationCompat.Builder(this, TalklyNotificationHelper.CHANNEL_CALLS_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Ongoing $callType Call")
+            .setContentText("In call with $callerName")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setOngoing(true)
+            .setSound(null)
+            .setContentIntent(contentPendingIntent)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+
+        val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+        } else {
+            0
+        }
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notificationBuilder.build(), foregroundType)
+            } else {
+                startForeground(NOTIFICATION_ID, notificationBuilder.build())
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "startForeground failed for active call: ${e.localizedMessage}")
         }
     }
 
@@ -230,16 +360,7 @@ class CallForegroundService : Service() {
 
     private fun stopSelfAndRingtone() {
         stopRingtone()
-        try {
-            wakeLock?.let {
-                if (it.isHeld) {
-                    it.release()
-                }
-            }
-            wakeLock = null
-        } catch (e: Exception) {
-            Log.w(TAG, "Error releasing wake lock: ${e.localizedMessage}")
-        }
+        releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }

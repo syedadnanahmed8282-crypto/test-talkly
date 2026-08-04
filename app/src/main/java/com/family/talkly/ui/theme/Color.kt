@@ -16,8 +16,12 @@ val WhatsappDarkTeal = Color(0xFF23122B)
 val WhatsappLightGreen = Color(0xFFACC7B4)
 val WhatsappBgLight = Color(0xFFF2F6F3)
 val WhatsappChatBg = Color(0xFFECEFEA)
-val SentBubbleGreen = Color(0xFFD9FDD3)
-val ReceivedBubbleWhite = Color(0xFFFFFFFF)
+// Chat Message Bubble Colors
+val ReceiverBubblePlum = Color(0xFF3D1E4D) // Dark Purple / Deep Plum
+val SenderBubbleSage = Color(0xFF6B8766)   // Sage Green / Laurel Green
+
+val SentBubbleGreen = Color(0xFF6B8766)
+val ReceivedBubbleWhite = Color(0xFF3D1E4D)
 val WhatsappDarkBg = Color(0xFF111B21)
 val WhatsappDarkSurface = Color(0xFF202C33)
 val WhatsappDarkBubble = Color(0xFF005C4B)

@@ -9,6 +9,7 @@ import android.content.Context
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -37,6 +38,7 @@ import androidx.compose.ui.layout.ContentScale
 import coil.compose.AsyncImage
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.filled.Mic
@@ -66,6 +68,15 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import android.media.MediaPlayer
+import android.net.Uri
+import java.util.Locale
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.material3.Divider
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.HourglassTop
@@ -132,6 +143,14 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import com.family.talkly.data.models.CallType
 import com.family.talkly.data.models.ChatMessage
 import com.family.talkly.data.models.FamilyMember
@@ -144,7 +163,9 @@ import com.family.talkly.ui.components.MediaMessageItem
 import com.family.talkly.ui.components.MessageLoadingState
 import com.family.talkly.ui.theme.PrimaryDarkPurple
 import com.family.talkly.ui.theme.ReceivedBubbleWhite
+import com.family.talkly.ui.theme.ReceiverBubblePlum
 import com.family.talkly.ui.theme.SecondaryLightSage
+import com.family.talkly.ui.theme.SenderBubbleSage
 import com.family.talkly.ui.theme.SentBubbleGreen
 import com.family.talkly.ui.theme.WhatsappChatBg
 import com.family.talkly.ui.theme.WhatsappGreen
@@ -168,6 +189,9 @@ fun ChatDetailScreen(
         replyToText: String?
     ) -> Unit,
     onToggleReaction: (messageId: String, reactionEmoji: String) -> Unit = { _, _ -> },
+    onDeleteForYou: (messageId: String) -> Unit = {},
+    onDeleteForEveryone: (messageId: String) -> Boolean = { false },
+    onEditMessage: (messageId: String, newText: String) -> Boolean = { _, _ -> false },
     onToggleStarMessage: (messageId: String) -> Unit = {},
     onTogglePinMessage: (messageId: String) -> Unit = {},
     onTogglePinMember: () -> Unit = {},
@@ -192,6 +216,7 @@ fun ChatDetailScreen(
     var fullMediaViewerMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var reactionDialogMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var replyingToMessage by remember { mutableStateOf<ChatMessage?>(null) }
+    var editingMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var showContactProfile by remember { mutableStateOf(false) }
     
     var isSearchActive by remember { mutableStateOf(false) }
@@ -207,6 +232,43 @@ fun ChatDetailScreen(
     var recordingDurationSec by remember { mutableStateOf(0) }
     var currentAudioFile by remember { mutableStateOf<File?>(null) }
     var isUploadingAudio by remember { mutableStateOf(false) }
+    var isPreviewingVoiceNote by remember { mutableStateOf(false) }
+    var localPendingMessages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
+
+    var showMenu by remember { mutableStateOf(false) }
+    var isMuted by remember { mutableStateOf(false) }
+    var isBlocked by remember(isInitiallyBlocked) { mutableStateOf(isInitiallyBlocked) }
+    var showBlockConfirmDialog by remember { mutableStateOf(false) }
+    var showClearChatConfirmDialog by remember { mutableStateOf(false) }
+    var showWallpaperDialog by remember { mutableStateOf(false) }
+    var localClearedMessages by remember { mutableStateOf(false) }
+    var chatWindowScreenHeight by remember { mutableFloatStateOf(1000f) }
+    var selectedMsgIsTopHalf by remember { mutableStateOf(false) }
+
+    // Intercept back presses to close overlays or go back to chat list
+    BackHandler(enabled = true) {
+        when {
+            fullMediaViewerMessage != null -> fullMediaViewerMessage = null
+            reactionDialogMessage != null -> reactionDialogMessage = null
+            showContactProfile -> showContactProfile = false
+            showStarredMessagesDialog -> showStarredMessagesDialog = false
+            showWallpaperDialog -> showWallpaperDialog = false
+            showBlockConfirmDialog -> showBlockConfirmDialog = false
+            showClearChatConfirmDialog -> showClearChatConfirmDialog = false
+            showAttachmentDialog -> showAttachmentDialog = false
+            showMenu -> showMenu = false
+            isSearchActive -> {
+                isSearchActive = false
+                searchQuery = ""
+            }
+            editingMessage != null -> {
+                editingMessage = null
+                textInput = ""
+            }
+            replyingToMessage != null -> replyingToMessage = null
+            else -> onBack()
+        }
+    }
 
     // Recording timer loop
     LaunchedEffect(isRecording) {
@@ -216,6 +278,17 @@ fun ChatDetailScreen(
                 delay(1000)
                 recordingDurationSec++
             }
+        }
+    }
+
+    // Auto debounce typing state
+    LaunchedEffect(textInput) {
+        if (textInput.isNotBlank()) {
+            onTypingStateChanged(true)
+            delay(3500L)
+            onTypingStateChanged(false)
+        } else {
+            onTypingStateChanged(false)
         }
     }
 
@@ -254,60 +327,143 @@ fun ChatDetailScreen(
         }
     }
 
-    fun stopAndSendRecording() {
-        val file = audioRecorder.stopRecording()
-        isRecording = false
-        if (file == null || !file.exists() || file.length() == 0L) {
-            Toast.makeText(context, "Voice recording was empty", Toast.LENGTH_SHORT).show()
-            return
-        }
+    fun sendPendingMediaMessage(
+        textContent: String,
+        messageType: MessageType,
+        localMediaUrl: String?
+    ) {
+        val tempId = "temp_${System.currentTimeMillis()}_${(1000..9999).random()}"
+        val replyId = replyingToMessage?.id
+        val replyName = replyingToMessage?.senderName
+        val replyText = replyingToMessage?.textContent?.ifEmpty { "Media/Voice Message" }
 
-        isUploadingAudio = true
+        val tempMsg = ChatMessage(
+            id = tempId,
+            senderId = "self",
+            senderName = "You",
+            receiverId = member.id,
+            messageType = messageType,
+            textContent = textContent,
+            mediaUrl = localMediaUrl,
+            timestamp = System.currentTimeMillis(),
+            isPending = true,
+            replyToMessageId = replyId,
+            replyToSenderName = replyName,
+            replyToText = replyText
+        )
+
+        localPendingMessages = localPendingMessages + tempMsg
+        replyingToMessage = null
+
         scope.launch(Dispatchers.IO) {
             try {
-                val remotePath = "family_chats/${member.id}/voice_notes/vn_${System.currentTimeMillis()}.m4a"
-                val finalUrl = uploader.uploadToFirebaseStorage(file, remotePath) { progress, status ->
-                    android.util.Log.d("ChatDetailScreen", "Voice note upload progress: $progress% - $status")
+                var finalRemoteUrl = localMediaUrl
+                if (!localMediaUrl.isNullOrBlank()) {
+                    val isLocal = localMediaUrl.startsWith("content://") ||
+                            localMediaUrl.startsWith("file://") ||
+                            localMediaUrl.startsWith("/")
+                    if (isLocal) {
+                        val uri = if (localMediaUrl.startsWith("/")) {
+                            Uri.fromFile(File(localMediaUrl))
+                        } else {
+                            Uri.parse(localMediaUrl)
+                        }
+
+                        if (messageType == MessageType.IMAGE) {
+                            try {
+                                val compressedFile = uploader.compressImage(uri) { _, _ -> }
+                                val remotePath = "chats/media/${System.currentTimeMillis()}_img.jpg"
+                                finalRemoteUrl = uploader.uploadToFirebaseStorage(compressedFile, remotePath) { _, _ -> }
+                            } catch (e: Exception) {
+                                android.util.Log.w("ChatDetailScreen", "Firebase Storage upload failed for image, using fallback: ${e.localizedMessage}")
+                                finalRemoteUrl = localMediaUrl
+                            }
+                        } else if (messageType == MessageType.VIDEO) {
+                            try {
+                                val compressedFile = uploader.compressVideo(uri) { _, _ -> }
+                                val remotePath = "chats/media/${System.currentTimeMillis()}_vid.mp4"
+                                finalRemoteUrl = uploader.uploadToFirebaseStorage(compressedFile, remotePath) { _, _ -> }
+                            } catch (e: Exception) {
+                                android.util.Log.w("ChatDetailScreen", "Firebase Storage upload failed for video, using fallback: ${e.localizedMessage}")
+                                finalRemoteUrl = localMediaUrl
+                            }
+                        } else if (messageType == MessageType.VOICE_NOTE) {
+                            val filePath = if (localMediaUrl.startsWith("file://")) Uri.parse(localMediaUrl).path ?: "" else localMediaUrl
+                            val file = File(filePath)
+                            val remotePath = "family_chats/${member.id}/voice_notes/vn_${System.currentTimeMillis()}.m4a"
+                            finalRemoteUrl = try {
+                                uploader.uploadToFirebaseStorage(file, remotePath) { _, _ -> }
+                            } catch (e: Exception) {
+                                android.util.Log.w("ChatDetailScreen", "Firebase Storage upload failed for voice note, using Base64/local fallback: ${e.localizedMessage}")
+                                if (file.exists() && file.length() > 0) {
+                                    uploader.encodeFileToBase64(file)
+                                } else {
+                                    localMediaUrl
+                                }
+                            }
+                        }
+                    }
                 }
 
                 scope.launch(Dispatchers.Main) {
-                    isUploadingAudio = false
-                    val durationText = "${recordingDurationSec}s"
                     onSendMessage(
-                        "Voice Message ($durationText)",
-                        MessageType.VOICE_NOTE,
-                        finalUrl,
-                        replyingToMessage?.id,
-                        replyingToMessage?.senderName,
-                        replyingToMessage?.textContent?.ifEmpty { "Voice Message" }
+                        textContent,
+                        messageType,
+                        finalRemoteUrl,
+                        replyId,
+                        replyName,
+                        replyText
                     )
-                    replyingToMessage = null
-                    recordingDurationSec = 0
-                    Toast.makeText(context, "Voice note sent!", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
+                android.util.Log.e("ChatDetailScreen", "Error uploading media: ${e.localizedMessage}", e)
+            } finally {
                 scope.launch(Dispatchers.Main) {
-                    isUploadingAudio = false
-                    Toast.makeText(context, "ভয়েস মেসেজ পাঠাতে ব্যর্থ হয়েছে: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                    localPendingMessages = localPendingMessages.filterNot { it.id == tempId }
                 }
             }
         }
     }
 
-    fun cancelRecording() {
+    fun stopAndPreparePreview() {
+        val file = audioRecorder.stopRecording()
+        isRecording = false
+        if (file == null || !file.exists() || file.length() == 0L) {
+            Toast.makeText(context, "Voice recording was empty", Toast.LENGTH_SHORT).show()
+            isPreviewingVoiceNote = false
+            return
+        }
+        currentAudioFile = file
+        isPreviewingVoiceNote = true
+    }
+
+    fun sendPreviewedVoiceNote() {
+        val file = currentAudioFile ?: run {
+            isPreviewingVoiceNote = false
+            return
+        }
+        isPreviewingVoiceNote = false
+        val durationText = "${recordingDurationSec}s"
+        val localFilePath = file.absolutePath
+
+        sendPendingMediaMessage(
+            textContent = "Voice Message ($durationText)",
+            messageType = MessageType.VOICE_NOTE,
+            localMediaUrl = localFilePath
+        )
+
+        currentAudioFile = null
+        recordingDurationSec = 0
+    }
+
+    fun cancelVoicePreview() {
         audioRecorder.cancelRecording()
+        isPreviewingVoiceNote = false
         isRecording = false
         currentAudioFile = null
         recordingDurationSec = 0
         Toast.makeText(context, "Recording cancelled", Toast.LENGTH_SHORT).show()
     }
-    var showMenu by remember { mutableStateOf(false) }
-    var isMuted by remember { mutableStateOf(false) }
-    var isBlocked by remember(isInitiallyBlocked) { mutableStateOf(isInitiallyBlocked) }
-    var showBlockConfirmDialog by remember { mutableStateOf(false) }
-    var showClearChatConfirmDialog by remember { mutableStateOf(false) }
-    var showWallpaperDialog by remember { mutableStateOf(false) }
-    var localClearedMessages by remember { mutableStateOf(false) }
 
     val prefs = remember(context) { context.getSharedPreferences("talkly_prefs", Context.MODE_PRIVATE) }
     var wallpaperValue by remember(member.id) {
@@ -320,18 +476,23 @@ fun ChatDetailScreen(
 
     val activeMessages = if (localClearedMessages) emptyList() else messages
 
-    val displayedMessages = remember(activeMessages, isSearchActive, searchQuery) {
+    val combinedMessages = remember(activeMessages, localPendingMessages) {
+        val serverIds = activeMessages.map { it.id }.toSet()
+        activeMessages + localPendingMessages.filter { it.id !in serverIds }
+    }
+
+    val displayedMessages = remember(combinedMessages, isSearchActive, searchQuery) {
         if (isSearchActive && searchQuery.isNotBlank()) {
-            activeMessages.filter {
+            combinedMessages.filter {
                 it.textContent.contains(searchQuery, ignoreCase = true)
             }
         } else {
-            activeMessages
+            combinedMessages
         }
     }
 
-    val pinnedMessage = remember(activeMessages) {
-        activeMessages.lastOrNull { it.isPinned }
+    val pinnedMessage = remember(combinedMessages) {
+        combinedMessages.lastOrNull { it.isPinned }
     }
 
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -344,13 +505,24 @@ fun ChatDetailScreen(
     }
 
     // Auto-scroll to latest message whenever new message arrives or user is typing
-    LaunchedEffect(messages.size, member.isTyping) {
-        if (messages.isNotEmpty()) {
-            val targetIndex = messages.size - 1 + (if (member.isTyping) 1 else 0)
+    var isInitialScrollDone by remember(member.id) { mutableStateOf(false) }
+    var previousMessageCount by remember(member.id) { mutableStateOf(0) }
+
+    LaunchedEffect(displayedMessages.size, member.isTyping) {
+        if (displayedMessages.isNotEmpty()) {
+            val targetIndex = displayedMessages.size - 1 + (if (member.isTyping) 1 else 0)
             if (targetIndex >= 0) {
-                listState.animateScrollToItem(targetIndex)
+                if (!isInitialScrollDone) {
+                    listState.scrollToItem(targetIndex)
+                    isInitialScrollDone = true
+                } else if (displayedMessages.size > previousMessageCount || member.isTyping) {
+                    listState.animateScrollToItem(targetIndex)
+                } else {
+                    listState.scrollToItem(targetIndex)
+                }
             }
         }
+        previousMessageCount = displayedMessages.size
     }
 
     // Attachment Dialog
@@ -358,13 +530,7 @@ fun ChatDetailScreen(
         MediaAttachmentDialog(
             onDismiss = { showAttachmentDialog = false },
             onSendMediaWithTag = { caption, type, url ->
-                onSendMessage(
-                    caption, type, url,
-                    replyingToMessage?.id,
-                    replyingToMessage?.senderName,
-                    replyingToMessage?.textContent?.ifEmpty { "Media photo/video" }
-                )
-                replyingToMessage = null
+                sendPendingMediaMessage(caption, type, url)
             },
             onSendExpiredDemo = {
                 onAddExpiredDemo()
@@ -380,168 +546,295 @@ fun ChatDetailScreen(
         )
     }
 
-    // Reaction & Reply Long-Click Dialog
+    // Reaction & Reply Long-Click Dialog with 70% opacity translucent container, floating scrollable reactions, clean options and scale animation
     reactionDialogMessage?.let { selectedMsg ->
-        Dialog(onDismissRequest = { reactionDialogMessage = null }) {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = Color.White,
-                tonalElevation = 8.dp,
-                modifier = Modifier.padding(16.dp)
+        var isAnimatedVisible by remember { mutableStateOf(false) }
+        LaunchedEffect(selectedMsg) {
+            isAnimatedVisible = true
+        }
+
+        Dialog(
+            onDismissRequest = { reactionDialogMessage = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .clickable { reactionDialogMessage = null },
+                contentAlignment = Alignment.Center
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "React to message",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        color = WhatsappTeal
+                AnimatedVisibility(
+                    visible = isAnimatedVisible,
+                    enter = fadeIn(animationSpec = tween(250)) + scaleIn(
+                        initialScale = 0.05f,
+                        transformOrigin = if (selectedMsgIsTopHalf) TransformOrigin(0.5f, 0.2f) else TransformOrigin(0.5f, 0.8f),
+                        animationSpec = tween(250)
+                    ),
+                    exit = fadeOut(animationSpec = tween(200)) + scaleOut(
+                        targetScale = 0.05f,
+                        transformOrigin = if (selectedMsgIsTopHalf) TransformOrigin(0.5f, 0.2f) else TransformOrigin(0.5f, 0.8f),
+                        animationSpec = tween(200)
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Reaction Emojis Row
-                    Row(
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        listOf("❤️", "😢", "😡", "😮", "👎", "👍", "🔥").forEach { emoji ->
-                            Box(
-                                modifier = Modifier
-                                    .size(42.dp)
-                                    .background(
-                                        if (selectedMsg.reaction == emoji) WhatsappGreen.copy(alpha = 0.2f) else Color.Transparent,
-                                        CircleShape
-                                    )
-                                    .clickable {
-                                        onToggleReaction(selectedMsg.id, emoji)
-                                        reactionDialogMessage = null
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(text = emoji, fontSize = 24.sp)
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Action buttons: Reply, Star, Pin & Cancel
+                ) {
                     Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier
+                            .padding(horizontal = 24.dp, vertical = 20.dp)
+                            .widthIn(max = 330.dp)
+                            .clickable(enabled = false) {}, // Prevent dismiss when tapping inside popup content
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        // 1. FLOATING REACTION EMOJIS (OUTSIDE TOP, NO CONTAINER BACKGROUND, HORIZONTALLY SCROLLABLE)
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp)
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = WhatsappGreen.copy(alpha = 0.1f),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable {
-                                        replyingToMessage = selectedMsg
-                                        reactionDialogMessage = null
-                                    }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                            listOf("❤️", "😭", "😡", "😮", "👍", "👎", "🔥", "😂", "🥰", "🙏", "👏", "🎉", "💯", "😍", "✨", "💙").forEach { emoji ->
+                                Box(
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (selectedMsg.reaction == emoji) Color.White.copy(alpha = 0.3f) else Color.Transparent
+                                        )
+                                        .clickable {
+                                            onToggleReaction(selectedMsg.id, emoji)
+                                            reactionDialogMessage = null
+                                        },
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.Reply,
-                                        contentDescription = "Reply",
-                                        tint = WhatsappGreen,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Reply",
-                                        color = WhatsappGreen,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp
-                                    )
-                                }
-                            }
-
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = Color(0xFFFFF8E1),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable {
-                                        onToggleStarMessage(selectedMsg.id)
-                                        reactionDialogMessage = null
-                                        Toast.makeText(
-                                            context,
-                                            if (selectedMsg.isStarred) "Unstarred message" else "Starred message ⭐",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = if (selectedMsg.isStarred) Icons.Default.Star else Icons.Default.StarBorder,
-                                        contentDescription = "Star",
-                                        tint = Color(0xFFFFB300),
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (selectedMsg.isStarred) "Unstar" else "Star ⭐",
-                                        color = Color(0xFFE65100),
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp
-                                    )
-                                }
-                            }
-
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = WhatsappTeal.copy(alpha = 0.1f),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable {
-                                        onTogglePinMessage(selectedMsg.id)
-                                        reactionDialogMessage = null
-                                        Toast.makeText(
-                                            context,
-                                            if (selectedMsg.isPinned) "Unpinned message" else "Pinned to top 📌",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.PushPin,
-                                        contentDescription = "Pin",
-                                        tint = WhatsappTeal,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (selectedMsg.isPinned) "Unpin" else "Pin 📌",
-                                        color = WhatsappTeal,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp
-                                    )
+                                    Text(text = emoji, fontSize = 28.sp)
                                 }
                             }
                         }
 
-                        TextButton(
-                            onClick = { reactionDialogMessage = null },
-                            modifier = Modifier.align(Alignment.End)
+                        // 2. MAIN POPUP CONTAINER (70% TRANSLUCENT SURFACE: COLOR 0xB3180E26 / 70% OPACITY)
+                        Surface(
+                            shape = RoundedCornerShape(22.dp),
+                            color = Color(0xB3180E26), // 70% opacity translucent dark purple
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.18f)),
+                            shadowElevation = 10.dp,
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Cancel", color = Color.Gray)
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                // TOP ROW: Reply, Star, Pin (Clean text pills, extra star/pin icon graphics removed)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    // Reply
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = WhatsappGreen.copy(alpha = 0.25f),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable {
+                                                replyingToMessage = selectedMsg
+                                                reactionDialogMessage = null
+                                            }
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.padding(vertical = 10.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "Reply",
+                                                color = WhatsappGreen,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp
+                                            )
+                                        }
+                                    }
+
+                                    // Star / Unstar
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = Color(0xFFFFD54F).copy(alpha = 0.22f),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable {
+                                                onToggleStarMessage(selectedMsg.id)
+                                                reactionDialogMessage = null
+                                                Toast.makeText(
+                                                    context,
+                                                    if (selectedMsg.isStarred) "Unstarred message" else "Starred message",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.padding(vertical = 10.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = if (selectedMsg.isStarred) "Unstar" else "Star",
+                                                color = Color(0xFFFFC107),
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp
+                                            )
+                                        }
+                                    }
+
+                                    // Pin / Unpin
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = WhatsappTeal.copy(alpha = 0.25f),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable {
+                                                onTogglePinMessage(selectedMsg.id)
+                                                reactionDialogMessage = null
+                                                Toast.makeText(
+                                                    context,
+                                                    if (selectedMsg.isPinned) "Unpinned message" else "Pinned to top",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.padding(vertical = 10.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = if (selectedMsg.isPinned) "Unpin" else "Pin",
+                                                color = Color(0xFF4DD0E1),
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                val isSelfMsg = selectedMsg.senderId == "self" || selectedMsg.senderName.contains("You", ignoreCase = true)
+                                val isWithin10Mins = (System.currentTimeMillis() - selectedMsg.timestamp) <= 10 * 60 * 1000L
+
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    // Edit message (এডিট)
+                                    if (isSelfMsg && selectedMsg.messageType == MessageType.TEXT && !selectedMsg.isDeletedForEveryone) {
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = if (isWithin10Mins) WhatsappTeal.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.08f),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    if (isWithin10Mins) {
+                                                        editingMessage = selectedMsg
+                                                        textInput = selectedMsg.textContent
+                                                        reactionDialogMessage = null
+                                                        Toast.makeText(context, "Editing message ✏️", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        Toast.makeText(context, "১০ মিনিট পার হয়ে গেছে, এডিট করা যাবে না", Toast.LENGTH_LONG).show()
+                                                    }
+                                                }
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "Edit message (এডিট)",
+                                                    color = if (isWithin10Mins) Color(0xFF80DEEA) else Color.Gray,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    fontSize = 13.sp
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    // Delete for you (ডিলিট ফর মি)
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = Color(0xFFE53935).copy(alpha = 0.18f),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                onDeleteForYou(selectedMsg.id)
+                                                reactionDialogMessage = null
+                                                Toast.makeText(context, "Deleted for you", Toast.LENGTH_SHORT).show()
+                                            }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Delete for you (ডিলিট ফর মি)",
+                                                color = Color(0xFFEF5350),
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 13.sp
+                                            )
+                                        }
+                                    }
+
+                                    // Delete for everyone (ডিলিট ফর এভরিওয়ান)
+                                    if (isSelfMsg) {
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = if (isWithin10Mins) Color(0xFFE53935).copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    if (isWithin10Mins) {
+                                                        val success = onDeleteForEveryone(selectedMsg.id)
+                                                        reactionDialogMessage = null
+                                                        if (success) {
+                                                            Toast.makeText(context, "Deleted for everyone", Toast.LENGTH_SHORT).show()
+                                                        } else {
+                                                            Toast.makeText(context, "১০ মিনিট পার হয়ে যাওয়ায় ডিলিট ফর এভরিওয়ান সম্ভব নয়", Toast.LENGTH_LONG).show()
+                                                        }
+                                                    } else {
+                                                        Toast.makeText(context, "১০ মিনিট পার হয়ে গেছে, ডিলিট ফর এভরিওয়ান করা যাবে না", Toast.LENGTH_LONG).show()
+                                                    }
+                                                }
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "Delete for everyone (ডিলিট ফর এভরিওয়ান)",
+                                                    color = if (isWithin10Mins) Color(0xFFEF5350) else Color.Gray,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    fontSize = 13.sp
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                // Bottom Right Cancel Button
+                                Box(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentAlignment = Alignment.CenterEnd
+                                ) {
+                                    TextButton(
+                                        onClick = { reactionDialogMessage = null }
+                                    ) {
+                                        Text(
+                                            text = "Cancel",
+                                            color = Color.White.copy(alpha = 0.8f),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -751,6 +1044,9 @@ fun ChatDetailScreen(
     }
 
     Scaffold(
+        modifier = Modifier.onGloballyPositioned { coords ->
+            chatWindowScreenHeight = coords.size.height.toFloat()
+        },
         topBar = {
             if (isSearchActive) {
                 TopAppBar(
@@ -837,10 +1133,19 @@ fun ChatDetailScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
+                                    val displayName = member.firstName
+                                    val nameFontSize = when {
+                                        displayName.length > 22 -> 11.sp
+                                        displayName.length > 16 -> 13.sp
+                                        displayName.length > 10 -> 14.sp
+                                        else -> 16.sp
+                                    }
                                     Text(
-                                        text = member.firstName,
+                                        text = displayName,
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp,
+                                        fontSize = nameFontSize,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                         color = Color.White
                                     )
                                     if (isMuted) {
@@ -859,7 +1164,7 @@ fun ChatDetailScreen(
                                     isBlocked -> "Blocked"
                                     member.isTyping -> "typing..."
                                     member.isRecentlyActive() -> "Online"
-                                    else -> "Last seen ${member.lastSeen}"
+                                    else -> "Last seen ${member.displayLastSeen}"
                                 }
                                 Text(
                                     text = statusSubtext,
@@ -884,13 +1189,6 @@ fun ChatDetailScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = { isSearchActive = true }) {
-                            Icon(
-                                imageVector = Icons.Default.Search,
-                                contentDescription = "Search Messages",
-                                tint = Color.White
-                            )
-                        }
                         IconButton(onClick = {
                             if (!isMutualContact) {
                                 Toast.makeText(context, "Cannot call: Message request must be accepted first", Toast.LENGTH_SHORT).show()
@@ -1244,17 +1542,27 @@ fun ChatDetailScreen(
                                 )
                             }
 
-                            val bubbleContainerColor = if (isDarkTheme) {
-                                if (isSelf) Color(0xFF005C4B) else Color(0xFF202C33)
+                            val hasMedia = msg.mediaUrl != null || msg.isMediaExpired(simulatedTimeOffsetMs)
+                            val hasReply = msg.replyToSenderName != null
+                            val isVoiceNote = msg.messageType == MessageType.VOICE_NOTE
+                            val isSingleEmoji = !hasMedia && !hasReply && !msg.isDeletedForEveryone && isSingleEmojiOrSticker(msg.textContent)
+
+                            val bubbleContainerColor = if (isSingleEmoji || isVoiceNote) {
+                                Color.Transparent
                             } else {
-                                if (isSelf) Color(0xFFD9FDD3) else Color(0xFFFFFFFF)
+                                if (isSelf) SenderBubbleSage else ReceiverBubblePlum
                             }
 
-                            val bubbleTextColor = if (isDarkTheme) Color(0xFFE9EDEF) else Color(0xFF111B21)
-                            val subTextColor = if (isDarkTheme) Color(0xFF8696A0) else Color(0xFF667781)
-                            val replyBgColor = if (isDarkTheme) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.05f)
-                            val replySenderColor = if (isDarkTheme) WhatsappLightGreen else WhatsappGreen
-                            val replySubTextColor = if (isDarkTheme) Color(0xFFCCCCCC) else Color.DarkGray
+                            val bubbleTextColor = Color.White
+                            val subTextColor = if (isSingleEmoji || isVoiceNote) {
+                                if (isDarkTheme) Color(0xFF9E9E9E) else Color(0xFF616161)
+                            } else {
+                                if (isSelf) Color(0xFFD8E6D6) else Color(0xFFD8C4DE)
+                            }
+                            val replyBgColor = Color.White.copy(alpha = 0.12f)
+                            val replySenderColor = if (isSelf) Color(0xFFE0F0DE) else Color(0xFFE2C4EE)
+                            val replySubTextColor = Color(0xFFF0F0F0)
+                            var itemYInWindow by remember { mutableFloatStateOf(0f) }
 
                             Row(
                                 modifier = Modifier
@@ -1267,9 +1575,9 @@ fun ChatDetailScreen(
                                         colors = CardDefaults.cardColors(
                                             containerColor = bubbleContainerColor
                                         ),
-                                        border = BorderStroke(
+                                        border = if (isSingleEmoji || isVoiceNote) null else BorderStroke(
                                             width = 0.5.dp,
-                                            color = if (isDarkTheme) Color.White.copy(alpha = 0.15f) else Color.Black.copy(alpha = 0.08f)
+                                            color = Color.White.copy(alpha = 0.12f)
                                         ),
                                         shape = RoundedCornerShape(
                                             topStart = 16.dp,
@@ -1277,21 +1585,47 @@ fun ChatDetailScreen(
                                             bottomStart = if (isSelf) 16.dp else 2.dp,
                                             bottomEnd = if (isSelf) 2.dp else 16.dp
                                         ),
-                                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                                        elevation = CardDefaults.cardElevation(defaultElevation = if (isSingleEmoji || isVoiceNote) 0.dp else 1.dp),
                                         modifier = Modifier
-                                            .widthIn(min = 90.dp, max = 280.dp)
+                                            .widthIn(min = if (isSingleEmoji) 0.dp else 90.dp, max = 280.dp)
+                                            .onGloballyPositioned { coords ->
+                                                itemYInWindow = coords.positionInWindow().y
+                                            }
                                             .combinedClickable(
                                                 onClick = {
                                                     showReadDetails = !showReadDetails
                                                 },
                                                 onLongClick = {
+                                                    selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
                                                     reactionDialogMessage = msg
                                                 }
                                             )
                                     ) {
-                                        Column(modifier = Modifier.padding(10.dp)) {
-                                            // Quoted Reply Preview inside Message Bubble
-                                            if (msg.replyToSenderName != null) {
+                                        Column(modifier = Modifier.padding(if (isSingleEmoji) 2.dp else if (isVoiceNote) 0.dp else 10.dp)) {
+                                            if (msg.isDeletedForEveryone) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    modifier = Modifier.padding(vertical = 4.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Block,
+                                                        contentDescription = "Deleted",
+                                                        tint = Color.Gray,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text(
+                                                        text = "This message was deleted",
+                                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                                            color = Color.Gray,
+                                                            fontStyle = FontStyle.Italic,
+                                                            fontSize = 14.sp
+                                                        )
+                                                    )
+                                                }
+                                            } else {
+                                                // Quoted Reply Preview inside Message Bubble
+                                                if (msg.replyToSenderName != null) {
                                                 Surface(
                                                     shape = RoundedCornerShape(8.dp),
                                                     color = replyBgColor,
@@ -1343,15 +1677,16 @@ fun ChatDetailScreen(
                                             }
 
                                             // Text Content
-                                            if (msg.textContent.isNotEmpty()) {
+                                            if (msg.textContent.isNotEmpty() && !isVoiceNote) {
                                                 Text(
                                                     text = msg.textContent,
                                                     style = MaterialTheme.typography.bodyMedium.copy(
                                                         color = bubbleTextColor,
-                                                        fontSize = 15.sp
+                                                        fontSize = if (isSingleEmoji) 44.sp else 15.sp
                                                     )
                                                 )
                                             }
+                                        }
 
                                             Spacer(modifier = Modifier.height(4.dp))
 
@@ -1380,13 +1715,16 @@ fun ChatDetailScreen(
                                                     Spacer(modifier = Modifier.width(3.dp))
                                                 }
                                                 Text(
-                                                    text = msg.formattedTime,
+                                                    text = if (msg.isEdited) "${msg.formattedTime} • Edited" else msg.formattedTime,
                                                     fontSize = 10.sp,
                                                     color = subTextColor
                                                 )
                                                 if (isSelf) {
                                                     Spacer(modifier = Modifier.width(4.dp))
+                                                    val isPendingMsg = msg.isPending || msg.id.startsWith("temp_") ||
+                                                            (!msg.mediaUrl.isNullOrEmpty() && (msg.mediaUrl.startsWith("content://") || msg.mediaUrl.startsWith("file://") || msg.mediaUrl.startsWith("/")))
                                                     val statusState = when {
+                                                        isPendingMsg -> 3
                                                         msg.isRead -> 2
                                                         msg.isDelivered -> 1
                                                         else -> 0
@@ -1397,6 +1735,13 @@ fun ChatDetailScreen(
                                                         label = "StatusFadeAnimation"
                                                     ) { state ->
                                                         when (state) {
+                                                            3 -> {
+                                                                CircularProgressIndicator(
+                                                                    strokeWidth = 1.5.dp,
+                                                                    color = subTextColor,
+                                                                    modifier = Modifier.size(13.dp)
+                                                                )
+                                                            }
                                                             2 -> {
                                                                 Box(
                                                                     modifier = Modifier
@@ -1490,20 +1835,22 @@ fun ChatDetailScreen(
                             ) {
                                 Card(
                                     colors = CardDefaults.cardColors(containerColor = ReceivedBubbleWhite),
-                                    shape = RoundedCornerShape(16.dp),
+                                    shape = RoundedCornerShape(18.dp),
                                     elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                                    modifier = Modifier.padding(vertical = 4.dp)
+                                    modifier = Modifier.padding(vertical = 4.dp, horizontal = 4.dp)
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            text = "${member.name} is typing...",
+                                            text = "${member.name} is typing",
                                             fontSize = 13.sp,
                                             color = WhatsappGreen,
                                             fontWeight = FontWeight.Bold
                                         )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        AnimatedTypingDotsIndicator(dotColor = WhatsappGreen)
                                     }
                                 }
                             }
@@ -1538,6 +1885,73 @@ fun ChatDetailScreen(
                             }
                             .padding(4.dp)
                     )
+                }
+            }
+
+            // Editing Banner Bar directly above input field
+            AnimatedVisibility(
+                visible = editingMessage != null,
+                enter = slideInVertically() + fadeIn(),
+                exit = slideOutVertically() + fadeOut()
+            ) {
+                editingMessage?.let { editMsg ->
+                    Surface(
+                        color = Color(0xFFE8F5E9),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(0.5.dp, WhatsappGreen.copy(alpha = 0.5f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(4.dp)
+                                        .height(36.dp)
+                                        .background(WhatsappGreen, RoundedCornerShape(2.dp))
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = "Editing Message ✏️",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = WhatsappGreen
+                                    )
+                                    Text(
+                                        text = editMsg.textContent,
+                                        fontSize = 12.sp,
+                                        color = Color.DarkGray,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    editingMessage = null
+                                    textInput = ""
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Cancel edit",
+                                    tint = Color.Gray,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1779,32 +2193,13 @@ fun ChatDetailScreen(
                         }
                     }
                 }
-            } else if (isUploadingAudio) {
-                Surface(
-                    color = Color.White,
-                    tonalElevation = 4.dp,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        CircularProgressIndicator(
-                            color = WhatsappGreen,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = "Uploading voice note to Firebase Storage...",
-                            fontSize = 14.sp,
-                            color = Color.DarkGray,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
+            } else if (isPreviewingVoiceNote && currentAudioFile != null) {
+                VoiceNotePreviewBar(
+                    audioFile = currentAudioFile!!,
+                    durationSec = recordingDurationSec,
+                    onCancel = { cancelVoicePreview() },
+                    onSend = { sendPreviewedVoiceNote() }
+                )
             } else if (isRecording) {
                 Surface(
                     color = Color(0xFFFFF3F3),
@@ -1841,7 +2236,7 @@ fun ChatDetailScreen(
                         }
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = { cancelRecording() }) {
+                            IconButton(onClick = { cancelVoicePreview() }) {
                                 Icon(
                                     imageVector = Icons.Default.Delete,
                                     contentDescription = "Cancel Recording",
@@ -1853,15 +2248,15 @@ fun ChatDetailScreen(
                             Spacer(modifier = Modifier.width(8.dp))
 
                             FloatingActionButton(
-                                onClick = { stopAndSendRecording() },
+                                onClick = { stopAndPreparePreview() },
                                 containerColor = WhatsappGreen,
                                 contentColor = Color.White,
                                 shape = CircleShape,
                                 modifier = Modifier.size(44.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.Send,
-                                    contentDescription = "Send Voice Note",
+                                    imageVector = Icons.Default.Done,
+                                    contentDescription = "Finish Recording & Preview",
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -1870,23 +2265,28 @@ fun ChatDetailScreen(
                 }
             } else {
                 Surface(
-                    color = Color.White,
-                    tonalElevation = 4.dp,
+                    color = Color.Transparent,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(8.dp),
+                            .padding(horizontal = 6.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = { showAttachmentDialog = true }) {
+                        IconButton(
+                            onClick = { showAttachmentDialog = true },
+                            modifier = Modifier.size(42.dp)
+                        ) {
                             Icon(
                                 imageVector = Icons.Default.AttachFile,
                                 contentDescription = "Attach",
-                                tint = WhatsappTeal
+                                tint = WhatsappTeal,
+                                modifier = Modifier.size(24.dp)
                             )
                         }
+
+                        Spacer(modifier = Modifier.width(2.dp))
 
                         OutlinedTextField(
                             value = textInput,
@@ -1904,54 +2304,62 @@ fun ChatDetailScreen(
                             keyboardActions = KeyboardActions(
                                 onSend = {
                                     if (textInput.isNotBlank()) {
-                                        onSendMessage(
-                                            textInput, MessageType.TEXT, null,
-                                            replyingToMessage?.id,
-                                            replyingToMessage?.senderName,
-                                            replyingToMessage?.textContent?.ifEmpty { "Media" }
-                                        )
+                                        if (editingMessage != null) {
+                                            val success = onEditMessage(editingMessage!!.id, textInput)
+                                            if (!success) {
+                                                Toast.makeText(context, "১০ মিনিট পার হয়ে যাওয়ায় এডিট করা সম্ভব নয়", Toast.LENGTH_SHORT).show()
+                                            }
+                                            editingMessage = null
+                                        } else {
+                                            onSendMessage(
+                                                textInput, MessageType.TEXT, null,
+                                                replyingToMessage?.id,
+                                                replyingToMessage?.senderName,
+                                                replyingToMessage?.textContent?.ifEmpty { "Media" }
+                                            )
+                                            replyingToMessage = null
+                                        }
                                         textInput = ""
-                                        replyingToMessage = null
                                         onTypingStateChanged(false)
                                     }
                                 }
                             ),
                             modifier = Modifier
                                 .weight(1f)
-                                .padding(horizontal = 4.dp),
+                                .padding(horizontal = 2.dp),
                             shape = RoundedCornerShape(24.dp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedTextColor = Color(0xFF111B21),
                                 unfocusedTextColor = Color(0xFF111B21),
-                                focusedContainerColor = Color(0xFFF0F2F5),
-                                unfocusedContainerColor = Color(0xFFF0F2F5),
-                                unfocusedBorderColor = Color.LightGray.copy(alpha = 0.5f),
+                                focusedContainerColor = Color.White,
+                                unfocusedContainerColor = Color.White,
+                                unfocusedBorderColor = Color(0xFFE0E0E0),
                                 focusedBorderColor = WhatsappGreen
                             ),
                             maxLines = 3
                         )
 
-                        IconButton(onClick = { startVoiceRecording() }) {
-                            Icon(
-                                imageVector = Icons.Default.Mic,
-                                contentDescription = "Record Voice Note",
-                                tint = WhatsappTeal
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(2.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
 
                         FloatingActionButton(
                             onClick = {
                                 if (textInput.isNotBlank()) {
-                                    onSendMessage(
-                                        textInput, MessageType.TEXT, null,
-                                        replyingToMessage?.id,
-                                        replyingToMessage?.senderName,
-                                        replyingToMessage?.textContent?.ifEmpty { "Media" }
-                                    )
+                                    if (editingMessage != null) {
+                                        val success = onEditMessage(editingMessage!!.id, textInput)
+                                        if (!success) {
+                                            Toast.makeText(context, "১০ মিনিট পার হয়ে যাওয়ায় এডিট করা সম্ভব নয়", Toast.LENGTH_SHORT).show()
+                                        }
+                                        editingMessage = null
+                                    } else {
+                                        onSendMessage(
+                                            textInput, MessageType.TEXT, null,
+                                            replyingToMessage?.id,
+                                            replyingToMessage?.senderName,
+                                            replyingToMessage?.textContent?.ifEmpty { "Media" }
+                                        )
+                                        replyingToMessage = null
+                                    }
                                     textInput = ""
-                                    replyingToMessage = null
                                     onTypingStateChanged(false)
                                 } else {
                                     startVoiceRecording()
@@ -1974,4 +2382,310 @@ fun ChatDetailScreen(
         }
     }
 }
+}
+
+private fun isSingleEmojiOrSticker(text: String): Boolean {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return false
+
+    val iterator = java.text.BreakIterator.getCharacterInstance()
+    iterator.setText(trimmed)
+    var count = 0
+    var singleCluster = ""
+    var start = iterator.first()
+    var end = iterator.next()
+
+    while (end != java.text.BreakIterator.DONE) {
+        count++
+        if (count == 1) {
+            singleCluster = trimmed.substring(start, end)
+        } else {
+            return false
+        }
+        start = end
+        end = iterator.next()
+    }
+
+    if (count != 1 || singleCluster.isEmpty()) return false
+
+    val firstCodePoint = singleCluster.codePointAt(0)
+    val type = Character.getType(firstCodePoint)
+
+    val isEmojiOrSymbol = type == Character.OTHER_SYMBOL.toInt() ||
+            type == Character.SURROGATE.toInt() ||
+            firstCodePoint in 0x1F600..0x1F64F ||
+            firstCodePoint in 0x1F300..0x1F5FF ||
+            firstCodePoint in 0x1F680..0x1F6FF ||
+            firstCodePoint in 0x1F1E6..0x1F1FF ||
+            firstCodePoint in 0x2600..0x27BF ||
+            firstCodePoint in 0x1F900..0x1F9FF ||
+            firstCodePoint in 0x1FA70..0x1FAFF
+
+    val isPlainAscii = (firstCodePoint in 'a'.code..'z'.code) ||
+            (firstCodePoint in 'A'.code..'Z'.code) ||
+            (firstCodePoint in '0'.code..'9'.code) ||
+            (singleCluster.length == 1 && firstCodePoint < 128)
+
+    return isEmojiOrSymbol && !isPlainAscii
+}
+
+@Composable
+fun AnimatedTypingDotsIndicator(
+    modifier: Modifier = Modifier,
+    dotColor: Color = WhatsappGreen,
+    dotSize: androidx.compose.ui.unit.Dp = 5.dp
+) {
+    val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "typing_dots")
+
+    val alpha1 by infiniteTransition.animateFloat(
+        initialValue = 0.2f,
+        targetValue = 1f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.keyframes {
+                durationMillis = 1000
+                0.2f at 0
+                1.0f at 250
+                0.2f at 500
+            },
+            repeatMode = androidx.compose.animation.core.RepeatMode.Restart
+        ),
+        label = "dot1"
+    )
+
+    val alpha2 by infiniteTransition.animateFloat(
+        initialValue = 0.2f,
+        targetValue = 1f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.keyframes {
+                durationMillis = 1000
+                0.2f at 200
+                1.0f at 450
+                0.2f at 700
+            },
+            repeatMode = androidx.compose.animation.core.RepeatMode.Restart
+        ),
+        label = "dot2"
+    )
+
+    val alpha3 by infiniteTransition.animateFloat(
+        initialValue = 0.2f,
+        targetValue = 1f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.keyframes {
+                durationMillis = 1000
+                0.2f at 400
+                1.0f at 650
+                0.2f at 900
+            },
+            repeatMode = androidx.compose.animation.core.RepeatMode.Restart
+        ),
+        label = "dot3"
+    )
+
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(dotSize)
+                .clip(CircleShape)
+                .background(dotColor.copy(alpha = alpha1))
+        )
+        Box(
+            modifier = Modifier
+                .size(dotSize)
+                .clip(CircleShape)
+                .background(dotColor.copy(alpha = alpha2))
+        )
+        Box(
+            modifier = Modifier
+                .size(dotSize)
+                .clip(CircleShape)
+                .background(dotColor.copy(alpha = alpha3))
+        )
+    }
+}
+
+@Composable
+fun VoiceNotePreviewBar(
+    audioFile: java.io.File,
+    durationSec: Int,
+    onCancel: () -> Unit,
+    onSend: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var isPlaying by remember { mutableStateOf(false) }
+    val currentPosMs = remember { mutableStateOf(0L) }
+    val totalDurationMs = remember { mutableStateOf((durationSec * 1000L).coerceAtLeast(1000L)) }
+    var isPrepared by remember { mutableStateOf(false) }
+
+    val mediaPlayer = remember { MediaPlayer() }
+
+    androidx.compose.runtime.DisposableEffect(audioFile) {
+        try {
+            mediaPlayer.reset()
+            mediaPlayer.setDataSource(context, Uri.fromFile(audioFile))
+            mediaPlayer.prepareAsync()
+            mediaPlayer.setOnPreparedListener { mp ->
+                isPrepared = true
+                if (mp.duration > 0) totalDurationMs.value = mp.duration.toLong()
+            }
+            mediaPlayer.setOnCompletionListener {
+                isPlaying = false
+                currentPosMs.value = 0L
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("VoiceNotePreview", "Error setting preview player: ${e.localizedMessage}")
+        }
+
+        onDispose {
+            try {
+                if (mediaPlayer.isPlaying) mediaPlayer.stop()
+                mediaPlayer.release()
+            } catch (e: Exception) {
+                // ignore
+            }
+        }
+    }
+
+    LaunchedEffect(isPlaying) {
+        while (isPlaying) {
+            try {
+                if (mediaPlayer.isPlaying) {
+                    currentPosMs.value = mediaPlayer.currentPosition.toLong()
+                } else {
+                    isPlaying = false
+                }
+            } catch (e: Exception) {
+                isPlaying = false
+            }
+            delay(150)
+        }
+    }
+
+    val progress = if (totalDurationMs.value > 0) (currentPosMs.value.toFloat() / totalDurationMs.value.toFloat()).coerceIn(0f, 1f) else 0f
+
+    Surface(
+        color = Color(0xFFF0F4F2),
+        shape = RoundedCornerShape(20.dp),
+        shadowElevation = 2.dp,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = WhatsappGreen,
+                modifier = Modifier
+                    .size(38.dp)
+                    .clickable {
+                        if (!isPrepared) return@clickable
+                        try {
+                            if (isPlaying) {
+                                mediaPlayer.pause()
+                                isPlaying = false
+                            } else {
+                                mediaPlayer.start()
+                                isPlaying = true
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("VoiceNotePreview", "Error toggling preview: ${e.localizedMessage}")
+                        }
+                    }
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = "Play/Pause Preview",
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(10.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Preview Voice Note",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = WhatsappTeal
+                    )
+                    val dispMs = if (isPlaying || currentPosMs.value > 0) currentPosMs.value else totalDurationMs.value
+                    val secs = (dispMs / 1000).toInt()
+                    Text(
+                        text = String.format(Locale.getDefault(), "%d:%02d", secs / 60, secs % 60),
+                        fontSize = 11.sp,
+                        color = Color.DarkGray
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                com.family.talkly.ui.components.AudioWaveformBar(
+                    progress = progress,
+                    isPlaying = isPlaying,
+                    seed = audioFile.hashCode(),
+                    activeColor = WhatsappGreen,
+                    inactiveColor = Color.Gray.copy(alpha = 0.35f),
+                    onSeek = { seekRatio ->
+                        if (isPrepared && totalDurationMs.value > 0) {
+                            val seekMs = (seekRatio * totalDurationMs.value).toLong()
+                            currentPosMs.value = seekMs
+                            try {
+                                mediaPlayer.seekTo(seekMs.toInt())
+                            } catch (e: Exception) {
+                                android.util.Log.e("VoiceNotePreview", "Error seeking preview: ${e.localizedMessage}")
+                            }
+                        }
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.width(10.dp))
+
+            IconButton(
+                onClick = onCancel,
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Discard Recording",
+                    tint = Color.Gray,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(4.dp))
+
+            FloatingActionButton(
+                onClick = onSend,
+                containerColor = WhatsappGreen,
+                contentColor = Color.White,
+                shape = CircleShape,
+                modifier = Modifier.size(42.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Send,
+                    contentDescription = "Send Voice Note",
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
 }

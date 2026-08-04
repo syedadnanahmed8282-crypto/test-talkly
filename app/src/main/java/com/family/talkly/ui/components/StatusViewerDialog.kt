@@ -64,10 +64,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import com.family.talkly.data.models.FamilyMember
 import com.family.talkly.data.models.StatusItem
 import com.family.talkly.data.models.UserStatusGroup
 import com.family.talkly.ui.theme.PrimaryDarkPurple
 import com.family.talkly.ui.theme.SecondaryLightSage
+import com.family.talkly.util.PhoneUtils
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -78,11 +80,13 @@ fun StatusViewerDialog(
     statusGroups: List<UserStatusGroup>,
     initialGroupIndex: Int = 0,
     currentUserId: String = "self",
+    familyMembers: List<FamilyMember> = emptyList(),
     onDismiss: () -> Unit,
     onMarkStatusSeen: (statusId: String) -> Unit,
     onAddStatusClick: (() -> Unit)? = null,
     onToggleLikeStatus: ((statusId: String) -> Unit)? = null,
-    onSendStatusReply: ((targetUserId: String, replyText: String) -> Unit)? = null
+    onSendStatusReply: ((targetUserId: String, replyText: String) -> Unit)? = null,
+    onSelectMemberProfile: ((FamilyMember) -> Unit)? = null
 ) {
     if (statusGroups.isEmpty()) {
         onDismiss()
@@ -303,7 +307,30 @@ fun StatusViewerDialog(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable {
+                                if (!isOwnStatus) {
+                                    val authorSuffix = PhoneUtils.extractPhoneSuffix(currentGroup.userId)
+                                    val authorMember = familyMembers.firstOrNull { m ->
+                                        m.id == currentGroup.userId || m.firebaseUid == currentGroup.userId || (authorSuffix.isNotBlank() && PhoneUtils.extractPhoneSuffix(m.phone) == authorSuffix)
+                                    } ?: FamilyMember(
+                                        id = currentGroup.userId,
+                                        name = currentGroup.userName,
+                                        relation = "Contact",
+                                        avatarUrl = currentGroup.userAvatarUrl,
+                                        status = "Available on Talkly 💬",
+                                        phone = currentGroup.userId,
+                                        isRegisteredOnTalkly = true,
+                                        firebaseUid = if (!currentGroup.userId.startsWith("contact_")) currentGroup.userId else null
+                                    )
+                                    onDismiss()
+                                    onSelectMemberProfile?.invoke(authorMember)
+                                }
+                            }
+                    ) {
                         Box(
                             modifier = Modifier
                                 .size(42.dp)
@@ -312,9 +339,12 @@ fun StatusViewerDialog(
                                 .border(1.5.dp, SecondaryLightSage, CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
-                            if (currentGroup.userAvatarUrl != null) {
+                            if (!currentGroup.userAvatarUrl.isNullOrBlank()) {
+                                val mediaModel = remember(currentGroup.userAvatarUrl) {
+                                    PhoneUtils.getCoilMediaModel(currentGroup.userAvatarUrl)
+                                }
                                 AsyncImage(
-                                    model = currentGroup.userAvatarUrl,
+                                    model = mediaModel,
                                     contentDescription = currentGroup.userName,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
@@ -338,7 +368,9 @@ fun StatusViewerDialog(
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White,
                                     fontSize = 16.sp
-                                )
+                                ),
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                             )
                             Text(
                                 text = formatStatusTime(currentStatus.timestamp),
@@ -522,7 +554,13 @@ fun StatusViewerDialog(
             if (showAnalyticsDialog) {
                 StatusAnalyticsModal(
                     status = currentStatus,
-                    onDismiss = { showAnalyticsDialog = false }
+                    familyMembers = familyMembers,
+                    onDismiss = { showAnalyticsDialog = false },
+                    onSelectMemberProfile = { member ->
+                        showAnalyticsDialog = false
+                        onDismiss()
+                        onSelectMemberProfile?.invoke(member)
+                    }
                 )
             }
         }
@@ -532,7 +570,9 @@ fun StatusViewerDialog(
 @Composable
 private fun StatusAnalyticsModal(
     status: StatusItem,
-    onDismiss: () -> Unit
+    familyMembers: List<FamilyMember> = emptyList(),
+    onDismiss: () -> Unit,
+    onSelectMemberProfile: ((FamilyMember) -> Unit)? = null
 ) {
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Viewers, 1: Likes
 
@@ -621,30 +661,68 @@ private fun StatusAnalyticsModal(
                             modifier = Modifier.height(200.dp)
                         ) {
                             items(status.viewers) { viewer ->
+                                val vSuffix = PhoneUtils.extractPhoneSuffix(viewer.userId)
+                                val matchingMember = familyMembers.firstOrNull { m ->
+                                    m.id == viewer.userId || m.firebaseUid == viewer.userId || (vSuffix.isNotBlank() && PhoneUtils.extractPhoneSuffix(m.phone) == vSuffix)
+                                }
+                                val viewerAvatar = matchingMember?.avatarUrl ?: viewer.userAvatarUrl
+                                val viewerName = matchingMember?.name ?: viewer.userName
+
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            val targetMember = matchingMember ?: FamilyMember(
+                                                id = viewer.userId,
+                                                name = viewerName,
+                                                relation = "Contact",
+                                                avatarUrl = viewerAvatar,
+                                                status = "Available on Talkly 💬",
+                                                phone = viewer.userId,
+                                                isRegisteredOnTalkly = true,
+                                                firebaseUid = if (!viewer.userId.startsWith("contact_")) viewer.userId else null
+                                            )
+                                            onDismiss()
+                                            onSelectMemberProfile?.invoke(targetMember)
+                                        }
+                                        .padding(vertical = 4.dp)
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(36.dp)
+                                            .size(38.dp)
                                             .clip(CircleShape)
                                             .background(SecondaryLightSage),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text(
-                                            text = viewer.userName.take(1).uppercase(),
-                                            fontWeight = FontWeight.Bold,
-                                            color = PrimaryDarkPurple
-                                        )
+                                        if (!viewerAvatar.isNullOrBlank()) {
+                                            val mediaModel = remember(viewerAvatar) {
+                                                PhoneUtils.getCoilMediaModel(viewerAvatar)
+                                            }
+                                            AsyncImage(
+                                                model = mediaModel,
+                                                contentDescription = viewerName,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        } else {
+                                            Text(
+                                                text = viewerName.take(1).uppercase(),
+                                                fontWeight = FontWeight.Bold,
+                                                color = PrimaryDarkPurple
+                                            )
+                                        }
                                     }
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = viewer.userName,
+                                            text = viewerName,
                                             fontWeight = FontWeight.Bold,
                                             color = Color.White,
-                                            fontSize = 14.sp
+                                            fontSize = 14.sp,
+                                            maxLines = 1,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                         )
                                         Text(
                                             text = viewer.timeAgo,
@@ -675,30 +753,68 @@ private fun StatusAnalyticsModal(
                             modifier = Modifier.height(200.dp)
                         ) {
                             items(status.likes) { liker ->
+                                val lSuffix = PhoneUtils.extractPhoneSuffix(liker.userId)
+                                val matchingMember = familyMembers.firstOrNull { m ->
+                                    m.id == liker.userId || m.firebaseUid == liker.userId || (lSuffix.isNotBlank() && PhoneUtils.extractPhoneSuffix(m.phone) == lSuffix)
+                                }
+                                val likerAvatar = matchingMember?.avatarUrl ?: liker.userAvatarUrl
+                                val likerName = matchingMember?.name ?: liker.userName
+
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            val targetMember = matchingMember ?: FamilyMember(
+                                                id = liker.userId,
+                                                name = likerName,
+                                                relation = "Contact",
+                                                avatarUrl = likerAvatar,
+                                                status = "Available on Talkly 💬",
+                                                phone = liker.userId,
+                                                isRegisteredOnTalkly = true,
+                                                firebaseUid = if (!liker.userId.startsWith("contact_")) liker.userId else null
+                                            )
+                                            onDismiss()
+                                            onSelectMemberProfile?.invoke(targetMember)
+                                        }
+                                        .padding(vertical = 4.dp)
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(36.dp)
+                                            .size(38.dp)
                                             .clip(CircleShape)
                                             .background(Color(0xFFFF2D55)),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text(
-                                            text = liker.userName.take(1).uppercase(),
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White
-                                        )
+                                        if (!likerAvatar.isNullOrBlank()) {
+                                            val mediaModel = remember(likerAvatar) {
+                                                PhoneUtils.getCoilMediaModel(likerAvatar)
+                                            }
+                                            AsyncImage(
+                                                model = mediaModel,
+                                                contentDescription = likerName,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        } else {
+                                            Text(
+                                                text = likerName.take(1).uppercase(),
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White
+                                            )
+                                        }
                                     }
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Text(
-                                        text = liker.userName,
+                                        text = likerName,
                                         fontWeight = FontWeight.Bold,
                                         color = Color.White,
                                         fontSize = 14.sp,
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                     )
                                     Icon(
                                         imageVector = Icons.Default.Favorite,
