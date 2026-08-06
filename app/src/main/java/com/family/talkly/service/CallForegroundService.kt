@@ -113,6 +113,25 @@ class CallForegroundService : Service() {
                 val roomId = intent.getStringExtra(EXTRA_ROOM_ID) ?: ""
                 val callType = intent.getStringExtra(EXTRA_CALL_TYPE) ?: "VIDEO"
 
+                val prefs = getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+                val fallbackPrefs = getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+                val currentUid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+                    ?: prefs.getString("user_uid", null)
+                    ?: fallbackPrefs.getString("user_uid", null) ?: ""
+                val currentPhone = prefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", null) ?: ""
+                val currentSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(currentPhone)
+                val callerSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(callerPhone)
+
+                val isSelfCall = (currentUid.isNotBlank() && currentUid != "self" && callerUid == currentUid) ||
+                        (currentPhone.isNotBlank() && callerPhone.isNotBlank() && callerPhone == currentPhone) ||
+                        (currentSuffix.isNotBlank() && callerSuffix.isNotBlank() && callerSuffix == currentSuffix)
+
+                if (isSelfCall) {
+                    Log.d(TAG, "Ignoring ACTION_START_INCOMING_CALL for self-call (callerUid=$callerUid)")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+
                 acquireFullWakeLock()
                 startRingtone()
                 showIncomingCallNotification(
@@ -287,14 +306,34 @@ class CallForegroundService : Service() {
             0
         }
 
+        safeStartForeground(NOTIFICATION_ID, notificationBuilder.build(), foregroundType)
+    }
+
+    private fun safeStartForeground(notificationId: Int, notification: android.app.Notification, primaryType: Int) {
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(NOTIFICATION_ID, notificationBuilder.build(), foregroundType)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && primaryType != 0) {
+                startForeground(notificationId, notification, primaryType)
             } else {
-                startForeground(NOTIFICATION_ID, notificationBuilder.build())
+                startForeground(notificationId, notification)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "startForeground failed for incoming call: ${e.localizedMessage}")
+            Log.e(TAG, "startForeground failed with type $primaryType: ${e.localizedMessage}, attempting fallback types")
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    startForeground(notificationId, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(notificationId, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                } else {
+                    startForeground(notificationId, notification)
+                }
+            } catch (e2: Exception) {
+                Log.e(TAG, "Fallback startForeground with MICROPHONE/DATA_SYNC failed: ${e2.localizedMessage}")
+                try {
+                    startForeground(notificationId, notification)
+                } catch (e3: Exception) {
+                    Log.e(TAG, "Untyped startForeground failed: ${e3.localizedMessage}")
+                }
+            }
         }
     }
 
@@ -337,15 +376,7 @@ class CallForegroundService : Service() {
             0
         }
 
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(NOTIFICATION_ID, notificationBuilder.build(), foregroundType)
-            } else {
-                startForeground(NOTIFICATION_ID, notificationBuilder.build())
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "startForeground failed for active call: ${e.localizedMessage}")
-        }
+        safeStartForeground(NOTIFICATION_ID, notificationBuilder.build(), foregroundType)
     }
 
     private fun declineCallInFirestore(roomId: String) {

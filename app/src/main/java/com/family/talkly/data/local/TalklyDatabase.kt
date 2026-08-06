@@ -9,7 +9,7 @@ import com.family.talkly.data.local.entity.ChatMessageEntity
 
 @Database(
     entities = [ChatMessageEntity::class],
-    version = 1,
+    version = 3,
     exportSchema = false
 )
 abstract class TalklyDatabase : RoomDatabase() {

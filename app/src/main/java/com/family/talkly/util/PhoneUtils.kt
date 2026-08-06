@@ -65,6 +65,20 @@ object PhoneUtils {
     }
 
     /**
+     * Appends dynamic cache-busting query parameter to image URLs/Uris.
+     * Guarantees client-side image loaders (Coil/Glide) treat updated photos as new resources and purge old caches.
+     */
+    fun appendCacheBuster(url: String?, timestamp: Long = System.currentTimeMillis()): String? {
+        if (url.isNullOrBlank()) return null
+        if (url.startsWith("data:") || url.startsWith("base64:")) return url
+        if (url.contains("v=") || url.contains("cb=")) {
+            return url.replace(Regex("([?&])(v|cb)=\\d+"), "$1$2=$timestamp")
+        }
+        val separator = if (url.contains("?")) "&" else "?"
+        return "${url}${separator}v=${timestamp}"
+    }
+
+    /**
      * Decodes Base64 data strings or returns URL/Uri for Coil AsyncImage model.
      * Prevents blank images when media is sent as Base64 fallback or data URI across devices.
      */
@@ -79,7 +93,7 @@ object PhoneUtils {
                 mediaUrl
             }
         }
-        return mediaUrl
+        return appendCacheBuster(mediaUrl) ?: mediaUrl
     }
 
     /**

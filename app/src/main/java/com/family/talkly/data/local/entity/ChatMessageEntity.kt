@@ -8,7 +8,12 @@ import com.family.talkly.data.models.MessageType
 
 @Entity(
     tableName = "chat_messages",
-    indices = [Index(value = ["chatKey"]), Index(value = ["timestamp"])]
+    indices = [
+        Index(value = ["chatKey"]),
+        Index(value = ["timestamp"]),
+        Index(value = ["chatKey", "timestamp"]),
+        Index(value = ["senderId"])
+    ]
 )
 data class ChatMessageEntity(
     @PrimaryKey
@@ -29,12 +34,17 @@ data class ChatMessageEntity(
     val reaction: String? = null,
     val isStarred: Boolean = false,
     val isPinned: Boolean = false,
+    val pinnedBy: String? = null,
     val replyToMessageId: String? = null,
     val replyToSenderName: String? = null,
     val replyToText: String? = null,
     val isEdited: Boolean = false,
     val isDeletedForEveryone: Boolean = false,
-    val deletedForUsersString: String = "" // Comma-separated user IDs
+    val deletedForUsersString: String = "", // Comma-separated user IDs
+    val isPending: Boolean = false,
+    val isUploading: Boolean = false,
+    val isFailed: Boolean = false,
+    val uploadProgress: Int = 0
 ) {
     fun toChatMessage(): ChatMessage {
         val type = try {
@@ -65,12 +75,17 @@ data class ChatMessageEntity(
             reaction = reaction,
             isStarred = isStarred,
             isPinned = isPinned,
+            pinnedBy = pinnedBy,
             replyToMessageId = replyToMessageId,
             replyToSenderName = replyToSenderName,
             replyToText = replyToText,
             isEdited = isEdited,
             isDeletedForEveryone = isDeletedForEveryone,
-            deletedForUsers = deletedUsers
+            deletedForUsers = deletedUsers,
+            isPending = isPending,
+            isUploading = isUploading,
+            isFailed = isFailed,
+            uploadProgress = uploadProgress
         )
     }
 
@@ -94,12 +109,17 @@ data class ChatMessageEntity(
                 reaction = message.reaction,
                 isStarred = message.isStarred,
                 isPinned = message.isPinned,
+                pinnedBy = message.pinnedBy,
                 replyToMessageId = message.replyToMessageId,
                 replyToSenderName = message.replyToSenderName,
                 replyToText = message.replyToText,
                 isEdited = message.isEdited,
                 isDeletedForEveryone = message.isDeletedForEveryone,
-                deletedForUsersString = message.deletedForUsers.joinToString(",")
+                deletedForUsersString = message.deletedForUsers.joinToString(","),
+                isPending = message.isPending,
+                isUploading = message.isUploading,
+                isFailed = message.isFailed,
+                uploadProgress = message.uploadProgress
             )
         }
     }

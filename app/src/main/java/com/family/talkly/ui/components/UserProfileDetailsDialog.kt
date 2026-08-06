@@ -110,6 +110,7 @@ fun UserProfileDetailsDialog(
     selectedAvatarUriForCropping?.let { rawUri ->
         ImageCropDialog(
             imageUri = rawUri,
+            isCoverCrop = false,
             onDismiss = { selectedAvatarUriForCropping = null },
             onImageCropped = { croppedUri ->
                 currentPhotoUrl = croppedUri.toString()
@@ -122,6 +123,7 @@ fun UserProfileDetailsDialog(
     selectedCoverUriForCropping?.let { rawUri ->
         ImageCropDialog(
             imageUri = rawUri,
+            isCoverCrop = true,
             onDismiss = { selectedCoverUriForCropping = null },
             onImageCropped = { croppedUri ->
                 currentCoverPhotoUrl = croppedUri.toString()
@@ -368,6 +370,40 @@ fun UserProfileDetailsDialog(
                                 contentDescription = "Cover Photo Banner",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
+                            )
+
+                            // Top Fade Effect Overlay
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(50.dp)
+                                    .align(Alignment.TopCenter)
+                                    .background(
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                Color.Black.copy(alpha = 0.65f),
+                                                Color.Black.copy(alpha = 0.25f),
+                                                Color.Transparent
+                                            )
+                                        )
+                                    )
+                            )
+
+                            // Bottom Fade Effect Overlay
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(50.dp)
+                                    .align(Alignment.BottomCenter)
+                                    .background(
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                Color.Transparent,
+                                                Color.Black.copy(alpha = 0.25f),
+                                                Color.Black.copy(alpha = 0.65f)
+                                            )
+                                        )
+                                    )
                             )
                         } else {
                             Row(

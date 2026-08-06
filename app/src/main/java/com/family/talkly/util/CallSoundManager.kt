@@ -98,8 +98,9 @@ class CallSoundManager(private val context: Context) {
             ringbackJob?.cancel()
             ringbackJob = scope.launch {
                 while (isActive) {
+                    val tg = toneGenerator ?: break
                     try {
-                        toneGenerator?.startTone(ToneGenerator.TONE_SUP_RINGTONE, 1200)
+                        tg.startTone(ToneGenerator.TONE_SUP_RINGTONE, 1200)
                     } catch (e: Exception) {
                         Log.w(TAG, "ToneGenerator play error: ${e.localizedMessage}")
                     }
@@ -112,7 +113,7 @@ class CallSoundManager(private val context: Context) {
     }
 
     /**
-     * Stops outgoing call ringback tone and restores normal audio mode.
+     * Stops outgoing call ringback tone immediately and releases resources.
      */
     @Synchronized
     fun stopOutgoingRingbackTone() {
@@ -120,10 +121,20 @@ class CallSoundManager(private val context: Context) {
             ringbackJob?.cancel()
             ringbackJob = null
 
-            toneGenerator?.stopTone()
-            toneGenerator?.release()
+            toneGenerator?.let { tg ->
+                try {
+                    tg.stopTone()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error stopping tone: ${e.localizedMessage}")
+                }
+                try {
+                    tg.release()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error releasing tone generator: ${e.localizedMessage}")
+                }
+            }
             toneGenerator = null
-            Log.d(TAG, "Stopped outgoing call ringback tone")
+            Log.d(TAG, "Explicitly stopped and released outgoing ringtone tone generator")
         } catch (e: Exception) {
             Log.w(TAG, "Error stopping outgoing ringback tone: ${e.localizedMessage}")
         }
@@ -138,6 +149,29 @@ class CallSoundManager(private val context: Context) {
         stopAllSounds()
         try {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+
+            // Explicitly request audio focus for voice call / communication
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val focusRequest = android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setAcceptsDelayedFocusGain(true)
+                    .setOnAudioFocusChangeListener { }
+                    .build()
+                audioManager.requestAudioFocus(focusRequest)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.requestAudioFocus(
+                    null,
+                    AudioManager.STREAM_VOICE_CALL,
+                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+                )
+            }
+
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             audioManager.isMicrophoneMute = isMuted
             audioManager.isSpeakerphoneOn = isSpeakerOn
@@ -161,7 +195,7 @@ class CallSoundManager(private val context: Context) {
                 Log.w(TAG, "Audio effect check: ${e.message}")
             }
 
-            Log.d(TAG, "Configured active call audio: MODE_IN_COMMUNICATION, speaker=$isSpeakerOn, mute=$isMuted")
+            Log.d(TAG, "Configured active call audio: STREAM_VOICE_CALL, MODE_IN_COMMUNICATION, speaker=$isSpeakerOn, mute=$isMuted")
         } catch (e: Exception) {
             Log.e(TAG, "Error configuring active call audio: ${e.localizedMessage}")
         }

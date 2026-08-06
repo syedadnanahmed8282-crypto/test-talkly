@@ -235,6 +235,40 @@ fun ContactProfileDetailsDialog(
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
                             )
+
+                            // Top Fade Effect Overlay
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(50.dp)
+                                    .align(Alignment.TopCenter)
+                                    .background(
+                                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                                            colors = listOf(
+                                                Color.Black.copy(alpha = 0.65f),
+                                                Color.Black.copy(alpha = 0.25f),
+                                                Color.Transparent
+                                            )
+                                        )
+                                    )
+                            )
+
+                            // Bottom Fade Effect Overlay
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(50.dp)
+                                    .align(Alignment.BottomCenter)
+                                    .background(
+                                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                                            colors = listOf(
+                                                Color.Transparent,
+                                                Color.Black.copy(alpha = 0.25f),
+                                                Color.Black.copy(alpha = 0.65f)
+                                            )
+                                        )
+                                    )
+                            )
                         }
                     }
 
@@ -577,7 +611,7 @@ fun ContactProfileDetailsDialog(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = if (member.isRecentlyActive()) "Online" else "Last seen ${member.displayLastSeen}",
+                                text = if (member.isRecentlyActive()) "Online" else member.displayLastSeen,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Medium,
                                 color = if (member.isRecentlyActive()) Color(0xFF25D366) else Color.DarkGray

@@ -106,6 +106,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.foundation.text.KeyboardActions
@@ -153,6 +154,10 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import com.family.talkly.data.models.CallType
 import com.family.talkly.data.models.ChatMessage
+import com.family.talkly.data.models.ReactionUtils
+import com.family.talkly.data.models.ReactionEntry
+import com.family.talkly.data.models.UserProfile
+import androidx.compose.foundation.layout.wrapContentHeight
 import com.family.talkly.data.models.FamilyMember
 import com.family.talkly.data.models.MessageRequest
 import com.family.talkly.data.models.MessageType
@@ -193,7 +198,7 @@ fun ChatDetailScreen(
     onDeleteForEveryone: (messageId: String) -> Boolean = { false },
     onEditMessage: (messageId: String, newText: String) -> Boolean = { _, _ -> false },
     onToggleStarMessage: (messageId: String) -> Unit = {},
-    onTogglePinMessage: (messageId: String) -> Unit = {},
+    onTogglePinMessage: (messageId: String) -> Boolean = { false },
     onTogglePinMember: () -> Unit = {},
     onTypingStateChanged: (Boolean) -> Unit,
     onToggleFastForward: () -> Unit,
@@ -209,12 +214,15 @@ fun ChatDetailScreen(
     onSendMessageRequest: (initialText: String) -> Unit = {},
     onAcceptMessageRequest: (request: MessageRequest) -> Unit = {},
     onDeclineMessageRequest: (requestId: String) -> Unit = {},
-    onClearChatHistory: () -> Unit = {}
+    onClearChatHistory: () -> Unit = {},
+    currentUserProfile: UserProfile? = null
 ) {
+    val isDarkTheme = LocalIsDarkTheme.current
     var textInput by remember { mutableStateOf("") }
     var showAttachmentDialog by remember { mutableStateOf(false) }
     var fullMediaViewerMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var reactionDialogMessage by remember { mutableStateOf<ChatMessage?>(null) }
+    var reactionDetailsMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var replyingToMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var editingMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var showContactProfile by remember { mutableStateOf(false) }
@@ -250,6 +258,7 @@ fun ChatDetailScreen(
         when {
             fullMediaViewerMessage != null -> fullMediaViewerMessage = null
             reactionDialogMessage != null -> reactionDialogMessage = null
+            reactionDetailsMessage != null -> reactionDetailsMessage = null
             showContactProfile -> showContactProfile = false
             showStarredMessagesDialog -> showStarredMessagesDialog = false
             showWallpaperDialog -> showWallpaperDialog = false
@@ -281,11 +290,11 @@ fun ChatDetailScreen(
         }
     }
 
-    // Auto debounce typing state
+    // Auto debounce typing state (emit typing_start immediately, typing_stop after 1.5s inactivity)
     LaunchedEffect(textInput) {
         if (textInput.isNotBlank()) {
             onTypingStateChanged(true)
-            delay(3500L)
+            delay(1500L)
             onTypingStateChanged(false)
         } else {
             onTypingStateChanged(false)
@@ -332,97 +341,29 @@ fun ChatDetailScreen(
         messageType: MessageType,
         localMediaUrl: String?
     ) {
+        if (localMediaUrl.isNullOrBlank()) return
         val tempId = "temp_${System.currentTimeMillis()}_${(1000..9999).random()}"
         val replyId = replyingToMessage?.id
         val replyName = replyingToMessage?.senderName
         val replyText = replyingToMessage?.textContent?.ifEmpty { "Media/Voice Message" }
 
-        val tempMsg = ChatMessage(
-            id = tempId,
-            senderId = "self",
-            senderName = "You",
-            receiverId = member.id,
-            messageType = messageType,
-            textContent = textContent,
-            mediaUrl = localMediaUrl,
-            timestamp = System.currentTimeMillis(),
-            isPending = true,
-            replyToMessageId = replyId,
-            replyToSenderName = replyName,
-            replyToText = replyText
-        )
-
-        localPendingMessages = localPendingMessages + tempMsg
         replyingToMessage = null
 
-        scope.launch(Dispatchers.IO) {
-            try {
-                var finalRemoteUrl = localMediaUrl
-                if (!localMediaUrl.isNullOrBlank()) {
-                    val isLocal = localMediaUrl.startsWith("content://") ||
-                            localMediaUrl.startsWith("file://") ||
-                            localMediaUrl.startsWith("/")
-                    if (isLocal) {
-                        val uri = if (localMediaUrl.startsWith("/")) {
-                            Uri.fromFile(File(localMediaUrl))
-                        } else {
-                            Uri.parse(localMediaUrl)
-                        }
+        val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository(context)
+        val canonicalId = chatRepo.getCanonicalMemberId(member.id)
 
-                        if (messageType == MessageType.IMAGE) {
-                            try {
-                                val compressedFile = uploader.compressImage(uri) { _, _ -> }
-                                val remotePath = "chats/media/${System.currentTimeMillis()}_img.jpg"
-                                finalRemoteUrl = uploader.uploadToFirebaseStorage(compressedFile, remotePath) { _, _ -> }
-                            } catch (e: Exception) {
-                                android.util.Log.w("ChatDetailScreen", "Firebase Storage upload failed for image, using fallback: ${e.localizedMessage}")
-                                finalRemoteUrl = localMediaUrl
-                            }
-                        } else if (messageType == MessageType.VIDEO) {
-                            try {
-                                val compressedFile = uploader.compressVideo(uri) { _, _ -> }
-                                val remotePath = "chats/media/${System.currentTimeMillis()}_vid.mp4"
-                                finalRemoteUrl = uploader.uploadToFirebaseStorage(compressedFile, remotePath) { _, _ -> }
-                            } catch (e: Exception) {
-                                android.util.Log.w("ChatDetailScreen", "Firebase Storage upload failed for video, using fallback: ${e.localizedMessage}")
-                                finalRemoteUrl = localMediaUrl
-                            }
-                        } else if (messageType == MessageType.VOICE_NOTE) {
-                            val filePath = if (localMediaUrl.startsWith("file://")) Uri.parse(localMediaUrl).path ?: "" else localMediaUrl
-                            val file = File(filePath)
-                            val remotePath = "family_chats/${member.id}/voice_notes/vn_${System.currentTimeMillis()}.m4a"
-                            finalRemoteUrl = try {
-                                uploader.uploadToFirebaseStorage(file, remotePath) { _, _ -> }
-                            } catch (e: Exception) {
-                                android.util.Log.w("ChatDetailScreen", "Firebase Storage upload failed for voice note, using Base64/local fallback: ${e.localizedMessage}")
-                                if (file.exists() && file.length() > 0) {
-                                    uploader.encodeFileToBase64(file)
-                                } else {
-                                    localMediaUrl
-                                }
-                            }
-                        }
-                    }
-                }
-
-                scope.launch(Dispatchers.Main) {
-                    onSendMessage(
-                        textContent,
-                        messageType,
-                        finalRemoteUrl,
-                        replyId,
-                        replyName,
-                        replyText
-                    )
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("ChatDetailScreen", "Error uploading media: ${e.localizedMessage}", e)
-            } finally {
-                scope.launch(Dispatchers.Main) {
-                    localPendingMessages = localPendingMessages.filterNot { it.id == tempId }
-                }
-            }
-        }
+        com.family.talkly.util.MediaUploadManager.enqueueMediaUpload(
+            context = context,
+            messageId = tempId,
+            chatKey = canonicalId,
+            recipientId = member.id,
+            messageType = messageType,
+            localMediaUrl = localMediaUrl,
+            textContent = textContent,
+            replyToId = replyId,
+            replyToName = replyName,
+            replyToText = replyText
+        )
     }
 
     fun stopAndPreparePreview() {
@@ -498,6 +439,18 @@ fun ChatDetailScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     val listState = rememberLazyListState()
+
+    // Mark active chat in notification helper & clear notifications on enter/exit
+    androidx.compose.runtime.DisposableEffect(member.id) {
+        com.family.talkly.util.TalklyNotificationHelper.activeChatMemberId = member.id
+        com.family.talkly.util.TalklyNotificationHelper.cancelNotificationsForChat(context, member.id)
+        onReadMessages()
+        onDispose {
+            if (com.family.talkly.util.TalklyNotificationHelper.activeChatMemberId == member.id) {
+                com.family.talkly.util.TalklyNotificationHelper.activeChatMemberId = null
+            }
+        }
+    }
 
     // Mark messages as read when opening or receiving new messages in chat screen
     LaunchedEffect(member.id, messages.size) {
@@ -584,30 +537,32 @@ fun ChatDetailScreen(
                             .clickable(enabled = false) {}, // Prevent dismiss when tapping inside popup content
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // 1. FLOATING REACTION EMOJIS (OUTSIDE TOP, NO CONTAINER BACKGROUND, HORIZONTALLY SCROLLABLE)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 12.dp)
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(14.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            listOf("❤️", "😭", "😡", "😮", "👍", "👎", "🔥", "😂", "🥰", "🙏", "👏", "🎉", "💯", "😍", "✨", "💙").forEach { emoji ->
-                                Box(
-                                    modifier = Modifier
-                                        .size(46.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            if (selectedMsg.reaction == emoji) Color.White.copy(alpha = 0.3f) else Color.Transparent
-                                        )
-                                        .clickable {
-                                            onToggleReaction(selectedMsg.id, emoji)
-                                            reactionDialogMessage = null
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(text = emoji, fontSize = 28.sp)
+                        // 1. FLOATING REACTION EMOJIS (ONLY FOR NON-DELETED MESSAGES)
+                        if (!selectedMsg.isDeletedForEveryone) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 12.dp)
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                listOf("❤️", "😭", "😡", "😮", "👍", "👎", "🔥", "😂", "🥰", "🙏", "👏", "🎉", "💯", "😍", "✨", "💙").forEach { emoji ->
+                                    Box(
+                                        modifier = Modifier
+                                            .size(46.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (selectedMsg.reaction == emoji) Color.White.copy(alpha = 0.3f) else Color.Transparent
+                                            )
+                                            .clickable {
+                                                onToggleReaction(selectedMsg.id, emoji)
+                                                reactionDialogMessage = null
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(text = emoji, fontSize = 28.sp)
+                                    }
                                 }
                             }
                         }
@@ -626,119 +581,140 @@ fun ChatDetailScreen(
                                     .padding(16.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                // TOP ROW: Reply, Star, Pin (Clean text pills, extra star/pin icon graphics removed)
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    // Reply
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = WhatsappGreen.copy(alpha = 0.25f),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable {
-                                                replyingToMessage = selectedMsg
-                                                reactionDialogMessage = null
-                                            }
+                                // TOP ROW: Reply, Star, Pin (Only for non-deleted messages)
+                                if (!selectedMsg.isDeletedForEveryone) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Box(
-                                            modifier = Modifier.padding(vertical = 10.dp),
-                                            contentAlignment = Alignment.Center
+                                        // Reply
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = WhatsappGreen.copy(alpha = 0.25f),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable {
+                                                    replyingToMessage = selectedMsg
+                                                    reactionDialogMessage = null
+                                                }
                                         ) {
-                                            Text(
-                                                text = "Reply",
-                                                color = WhatsappGreen,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 13.sp
-                                            )
+                                            Box(
+                                                modifier = Modifier.padding(vertical = 10.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = "Reply",
+                                                    color = WhatsappGreen,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp
+                                                )
+                                            }
+                                        }
+
+                                        // Star / Unstar
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = Color(0xFFFFD54F).copy(alpha = 0.22f),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable {
+                                                    onToggleStarMessage(selectedMsg.id)
+                                                    reactionDialogMessage = null
+                                                    Toast.makeText(
+                                                        context,
+                                                        if (selectedMsg.isStarred) "Unstarred message" else "Starred message",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                }
+                                        ) {
+                                            Box(
+                                                modifier = Modifier.padding(vertical = 10.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = if (selectedMsg.isStarred) "Unstar" else "Star",
+                                                    color = Color(0xFFFFC107),
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp
+                                                )
+                                            }
+                                        }
+
+                                        // Pin / Unpin
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = WhatsappTeal.copy(alpha = 0.25f),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable {
+                                                    val pinResult = onTogglePinMessage(selectedMsg.id)
+                                                    reactionDialogMessage = null
+                                                    if (pinResult) {
+                                                        Toast.makeText(
+                                                            context,
+                                                            if (selectedMsg.isPinned) "Unpinned message" else "Pinned to top",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    } else {
+                                                        Toast.makeText(
+                                                            context,
+                                                            "Only the person who pinned this message can unpin it",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    }
+                                                }
+                                        ) {
+                                            Box(
+                                                modifier = Modifier.padding(vertical = 10.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = if (selectedMsg.isPinned) "Unpin" else "Pin",
+                                                    color = Color(0xFF4DD0E1),
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp
+                                                )
+                                            }
                                         }
                                     }
 
-                                    // Star / Unstar
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = Color(0xFFFFD54F).copy(alpha = 0.22f),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable {
-                                                onToggleStarMessage(selectedMsg.id)
-                                                reactionDialogMessage = null
-                                                Toast.makeText(
-                                                    context,
-                                                    if (selectedMsg.isStarred) "Unstarred message" else "Starred message",
-                                                    Toast.LENGTH_SHORT
-                                                ).show()
-                                            }
-                                    ) {
-                                        Box(
-                                            modifier = Modifier.padding(vertical = 10.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(
-                                                text = if (selectedMsg.isStarred) "Unstar" else "Star",
-                                                color = Color(0xFFFFC107),
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 13.sp
-                                            )
-                                        }
-                                    }
-
-                                    // Pin / Unpin
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = WhatsappTeal.copy(alpha = 0.25f),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable {
-                                                onTogglePinMessage(selectedMsg.id)
-                                                reactionDialogMessage = null
-                                                Toast.makeText(
-                                                    context,
-                                                    if (selectedMsg.isPinned) "Unpinned message" else "Pinned to top",
-                                                    Toast.LENGTH_SHORT
-                                                ).show()
-                                            }
-                                    ) {
-                                        Box(
-                                            modifier = Modifier.padding(vertical = 10.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(
-                                                text = if (selectedMsg.isPinned) "Unpin" else "Pin",
-                                                color = Color(0xFF4DD0E1),
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 13.sp
-                                            )
-                                        }
-                                    }
+                                    Spacer(modifier = Modifier.height(10.dp))
                                 }
 
-                                Spacer(modifier = Modifier.height(10.dp))
+                                val currentUid = currentUserProfile?.uid ?: "self"
+                                val currentPhone = currentUserProfile?.phoneNumber ?: ""
+                                val currentPhoneSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(currentPhone)
+                                val selectedSenderSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(selectedMsg.senderId)
+                                val memberSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone)
+                                val isMemberSender = (selectedMsg.senderId == member.id) ||
+                                        (!member.firebaseUid.isNullOrBlank() && selectedMsg.senderId == member.firebaseUid) ||
+                                        (member.phone.isNotBlank() && selectedMsg.senderId == member.phone) ||
+                                        (memberSuffix.isNotBlank() && memberSuffix == selectedSenderSuffix)
 
-                                val isSelfMsg = selectedMsg.senderId == "self" || selectedMsg.senderName.contains("You", ignoreCase = true)
+                                val isSelfMsg = !isMemberSender ||
+                                        selectedMsg.senderId == "self" ||
+                                        selectedMsg.senderId == currentUid ||
+                                        selectedMsg.senderName.contains("You", ignoreCase = true) ||
+                                        (currentPhoneSuffix.isNotBlank() && currentPhoneSuffix == selectedSenderSuffix)
+
                                 val isWithin10Mins = (System.currentTimeMillis() - selectedMsg.timestamp) <= 10 * 60 * 1000L
 
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    // Edit message (এডিট)
-                                    if (isSelfMsg && selectedMsg.messageType == MessageType.TEXT && !selectedMsg.isDeletedForEveryone) {
+                                    // Edit message (only if sender and within 10 mins)
+                                    if (isSelfMsg && isWithin10Mins && selectedMsg.messageType == MessageType.TEXT && !selectedMsg.isDeletedForEveryone) {
                                         Surface(
                                             shape = RoundedCornerShape(12.dp),
-                                            color = if (isWithin10Mins) WhatsappTeal.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.08f),
+                                            color = WhatsappTeal.copy(alpha = 0.2f),
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clickable {
-                                                    if (isWithin10Mins) {
-                                                        editingMessage = selectedMsg
-                                                        textInput = selectedMsg.textContent
-                                                        reactionDialogMessage = null
-                                                        Toast.makeText(context, "Editing message ✏️", Toast.LENGTH_SHORT).show()
-                                                    } else {
-                                                        Toast.makeText(context, "১০ মিনিট পার হয়ে গেছে, এডিট করা যাবে না", Toast.LENGTH_LONG).show()
-                                                    }
+                                                    editingMessage = selectedMsg
+                                                    textInput = selectedMsg.textContent
+                                                    reactionDialogMessage = null
+                                                    Toast.makeText(context, "Editing message ✏️", Toast.LENGTH_SHORT).show()
                                                 }
                                         ) {
                                             Row(
@@ -746,8 +722,8 @@ fun ChatDetailScreen(
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Text(
-                                                    text = "Edit message (এডিট)",
-                                                    color = if (isWithin10Mins) Color(0xFF80DEEA) else Color.Gray,
+                                                    text = "Edit message",
+                                                    color = Color(0xFF80DEEA),
                                                     fontWeight = FontWeight.SemiBold,
                                                     fontSize = 13.sp
                                                 )
@@ -755,7 +731,7 @@ fun ChatDetailScreen(
                                         }
                                     }
 
-                                    // Delete for you (ডিলিট ফর মি)
+                                    // Delete for me (always available for all messages)
                                     Surface(
                                         shape = RoundedCornerShape(12.dp),
                                         color = Color(0xFFE53935).copy(alpha = 0.18f),
@@ -772,7 +748,7 @@ fun ChatDetailScreen(
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text(
-                                                text = "Delete for you (ডিলিট ফর মি)",
+                                                text = "Delete for me",
                                                 color = Color(0xFFEF5350),
                                                 fontWeight = FontWeight.SemiBold,
                                                 fontSize = 13.sp
@@ -780,24 +756,20 @@ fun ChatDetailScreen(
                                         }
                                     }
 
-                                    // Delete for everyone (ডিলিট ফর এভরিওয়ান)
-                                    if (isSelfMsg) {
+                                    // Delete for everyone (only if sender and within 10 mins)
+                                    if (isSelfMsg && isWithin10Mins && !selectedMsg.isDeletedForEveryone) {
                                         Surface(
                                             shape = RoundedCornerShape(12.dp),
-                                            color = if (isWithin10Mins) Color(0xFFE53935).copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f),
+                                            color = Color(0xFFE53935).copy(alpha = 0.22f),
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clickable {
-                                                    if (isWithin10Mins) {
-                                                        val success = onDeleteForEveryone(selectedMsg.id)
-                                                        reactionDialogMessage = null
-                                                        if (success) {
-                                                            Toast.makeText(context, "Deleted for everyone", Toast.LENGTH_SHORT).show()
-                                                        } else {
-                                                            Toast.makeText(context, "১০ মিনিট পার হয়ে যাওয়ায় ডিলিট ফর এভরিওয়ান সম্ভব নয়", Toast.LENGTH_LONG).show()
-                                                        }
+                                                    val success = onDeleteForEveryone(selectedMsg.id)
+                                                    reactionDialogMessage = null
+                                                    if (success) {
+                                                        Toast.makeText(context, "Deleted for everyone", Toast.LENGTH_SHORT).show()
                                                     } else {
-                                                        Toast.makeText(context, "১০ মিনিট পার হয়ে গেছে, ডিলিট ফর এভরিওয়ান করা যাবে না", Toast.LENGTH_LONG).show()
+                                                        Toast.makeText(context, "Could not delete for everyone", Toast.LENGTH_SHORT).show()
                                                     }
                                                 }
                                         ) {
@@ -806,8 +778,8 @@ fun ChatDetailScreen(
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Text(
-                                                    text = "Delete for everyone (ডিলিট ফর এভরিওয়ান)",
-                                                    color = if (isWithin10Mins) Color(0xFFEF5350) else Color.Gray,
+                                                    text = "Delete for everyone",
+                                                    color = Color(0xFFEF5350),
                                                     fontWeight = FontWeight.SemiBold,
                                                     fontSize = 13.sp
                                                 )
@@ -832,6 +804,186 @@ fun ChatDetailScreen(
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 13.sp
                                         )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (reactionDetailsMessage != null) {
+        val targetMsg = reactionDetailsMessage!!
+        val currentUserId = currentUserProfile?.uid ?: "self"
+        val entries = remember(targetMsg.reaction) {
+            ReactionUtils.parseReactions(targetMsg.reaction, targetMsg.senderId, targetMsg.senderName, targetMsg.timestamp)
+        }
+
+        Dialog(
+            onDismissRequest = { reactionDetailsMessage = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.92f)
+                    .wrapContentHeight(),
+                shape = RoundedCornerShape(20.dp),
+                color = if (isDarkTheme) WhatsappDarkSurface else Color.White,
+                tonalElevation = 6.dp
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp)
+                ) {
+                    // Header
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Reactions (${entries.size})",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isDarkTheme) Color.White else Color.Black
+                        )
+                        IconButton(
+                            onClick = { reactionDetailsMessage = null },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close",
+                                tint = if (isDarkTheme) Color.White.copy(alpha = 0.7f) else Color.Gray
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    var selectedEmojiFilter by remember { mutableStateOf<String?>(null) }
+                    val distinctEmojis = remember(entries) { entries.map { it.emoji }.distinct() }
+
+                    if (distinctEmojis.size > 1) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = selectedEmojiFilter == null,
+                                onClick = { selectedEmojiFilter = null },
+                                label = { Text("All ${entries.size}") }
+                            )
+                            distinctEmojis.forEach { emoji ->
+                                val count = entries.count { it.emoji == emoji }
+                                FilterChip(
+                                    selected = selectedEmojiFilter == emoji,
+                                    onClick = { selectedEmojiFilter = emoji },
+                                    label = { Text("$emoji $count") }
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+
+                    val filteredEntries = remember(entries, selectedEmojiFilter) {
+                        if (selectedEmojiFilter == null) entries
+                        else entries.filter { it.emoji == selectedEmojiFilter }
+                    }
+
+                    if (filteredEntries.isEmpty()) {
+                        Text(
+                            text = "No reactions",
+                            color = Color.Gray,
+                            modifier = Modifier.padding(vertical = 16.dp)
+                        )
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 300.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            items(filteredEntries, key = { "${it.userId}_${it.emoji}_${it.timestamp}" }) { entry ->
+                                val isCurrentUser = entry.userId == currentUserId || entry.userId == "self" || (currentUserId == "self" && entry.userId == "You")
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(
+                                            if (isDarkTheme) Color.White.copy(alpha = 0.05f)
+                                            else Color.Black.copy(alpha = 0.03f)
+                                        )
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // Avatar
+                                    Box(
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .clip(CircleShape)
+                                            .background(WhatsappTeal.copy(alpha = 0.2f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (!entry.avatarUrl.isNullOrBlank()) {
+                                            AsyncImage(
+                                                model = entry.avatarUrl,
+                                                contentDescription = entry.userName,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        } else {
+                                            Text(
+                                                text = entry.userName.take(1).uppercase(),
+                                                fontWeight = FontWeight.Bold,
+                                                color = WhatsappTeal
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(12.dp))
+
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = if (isCurrentUser) "You" else entry.userName,
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 14.sp,
+                                            color = if (isDarkTheme) Color.White else Color.Black
+                                        )
+                                        Text(
+                                            text = if (isCurrentUser) "Tap to remove" else entry.formattedTime,
+                                            fontSize = 11.sp,
+                                            color = if (isCurrentUser) WhatsappTeal else Color.Gray
+                                        )
+                                    }
+
+                                    Text(
+                                        text = entry.emoji,
+                                        fontSize = 20.sp
+                                    )
+
+                                    if (isCurrentUser) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        IconButton(
+                                            onClick = {
+                                                onToggleReaction(targetMsg.id, entry.emoji)
+                                                reactionDetailsMessage = null
+                                                Toast.makeText(context, "Reaction removed", Toast.LENGTH_SHORT).show()
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Close,
+                                                contentDescription = "Remove reaction",
+                                                tint = Color.Red.copy(alpha = 0.7f),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1164,7 +1316,7 @@ fun ChatDetailScreen(
                                     isBlocked -> "Blocked"
                                     member.isTyping -> "typing..."
                                     member.isRecentlyActive() -> "Online"
-                                    else -> "Last seen ${member.displayLastSeen}"
+                                    else -> member.displayLastSeen
                                 }
                                 Text(
                                     text = statusSubtext,
@@ -1672,6 +1824,24 @@ fun ChatDetailScreen(
                                                         if (!msg.isMediaExpired(simulatedTimeOffsetMs)) {
                                                             fullMediaViewerMessage = msg
                                                         }
+                                                    },
+                                                    onRetryUpload = {
+                                                        if (!msg.mediaUrl.isNullOrBlank()) {
+                                                            val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository(context)
+                                                            val canonicalId = chatRepo.getCanonicalMemberId(member.id)
+                                                            com.family.talkly.util.MediaUploadManager.enqueueMediaUpload(
+                                                                context = context,
+                                                                messageId = msg.id,
+                                                                chatKey = canonicalId,
+                                                                recipientId = member.id,
+                                                                messageType = msg.messageType,
+                                                                localMediaUrl = msg.mediaUrl,
+                                                                textContent = msg.textContent,
+                                                                replyToId = msg.replyToMessageId,
+                                                                replyToName = msg.replyToSenderName,
+                                                                replyToText = msg.replyToText
+                                                            )
+                                                        }
                                                     }
                                                 )
                                             }
@@ -1749,12 +1919,11 @@ fun ChatDetailScreen(
                                                                         .background(Color(0xFF25D366), CircleShape),
                                                                     contentAlignment = Alignment.Center
                                                                 ) {
-                                                                    Text(
-                                                                        text = "S",
-                                                                        color = Color.White,
-                                                                        fontSize = 9.sp,
-                                                                        fontWeight = FontWeight.Bold,
-                                                                        textAlign = TextAlign.Center
+                                                                    Icon(
+                                                                        imageVector = Icons.Default.DoneAll,
+                                                                        contentDescription = "Seen",
+                                                                        tint = Color.White,
+                                                                        modifier = Modifier.size(11.dp)
                                                                     )
                                                                 }
                                                             }
@@ -1800,24 +1969,39 @@ fun ChatDetailScreen(
 
                                     // Reaction Badge Pill Overlay
                                     msg.reaction?.let { reactEmoji ->
-                                        Surface(
-                                            shape = RoundedCornerShape(12.dp),
-                                            color = if (isDarkTheme) WhatsappDarkSurface else Color.White,
-                                            border = BorderStroke(0.5.dp, if (isDarkTheme) Color.White.copy(alpha = 0.20f) else Color.LightGray.copy(alpha = 0.5f)),
-                                            tonalElevation = 4.dp,
-                                            shadowElevation = 2.dp,
-                                            modifier = Modifier
-                                                .align(if (isSelf) Alignment.BottomStart else Alignment.BottomEnd)
-                                                .offset(y = 8.dp, x = if (isSelf) (-6).dp else 6.dp)
-                                                .clickable {
-                                                    onToggleReaction(msg.id, reactEmoji)
-                                                }
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                                verticalAlignment = Alignment.CenterVertically
+                                        val entries = remember(reactEmoji) { ReactionUtils.parseReactions(reactEmoji, msg.senderId, msg.senderName, msg.timestamp) }
+                                        if (entries.isNotEmpty()) {
+                                            Surface(
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = if (isDarkTheme) WhatsappDarkSurface else Color.White,
+                                                border = BorderStroke(0.5.dp, if (isDarkTheme) Color.White.copy(alpha = 0.20f) else Color.LightGray.copy(alpha = 0.5f)),
+                                                tonalElevation = 4.dp,
+                                                shadowElevation = 2.dp,
+                                                modifier = Modifier
+                                                    .align(if (isSelf) Alignment.BottomStart else Alignment.BottomEnd)
+                                                    .offset(y = 8.dp, x = if (isSelf) (-6).dp else 6.dp)
+                                                    .clickable {
+                                                        reactionDetailsMessage = msg
+                                                    }
                                             ) {
-                                                Text(text = reactEmoji, fontSize = 13.sp)
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                                ) {
+                                                    val distinctEmojis = entries.map { it.emoji }.distinct()
+                                                    distinctEmojis.forEach { emoji ->
+                                                        Text(text = emoji, fontSize = 13.sp)
+                                                    }
+                                                    if (entries.size > 1) {
+                                                        Text(
+                                                            text = "${entries.size}",
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = if (isDarkTheme) Color.White.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.7f)
+                                                        )
+                                                    }
+                                                }
                                             }
                                         }
                                     }

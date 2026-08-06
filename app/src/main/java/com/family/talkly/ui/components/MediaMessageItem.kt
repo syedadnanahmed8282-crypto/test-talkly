@@ -54,7 +54,8 @@ fun MediaMessageItem(
     message: ChatMessage,
     isSelf: Boolean = false,
     simulatedTimeOffsetMs: Long,
-    onMediaClick: (String) -> Unit
+    onMediaClick: (String) -> Unit,
+    onRetryUpload: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val isExpired = message.isMediaExpired(simulatedTimeOffsetMs)
@@ -160,6 +161,73 @@ fun MediaMessageItem(
                         tint = Color.White,
                         modifier = Modifier.size(32.dp)
                     )
+                }
+            }
+
+            // Uploading / Pending Overlay
+            val isUploadingOrPending = message.isUploading || (message.isPending && !message.isFailed)
+            if (isUploadingOrPending) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(Color.Black.copy(alpha = 0.65f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            progress = { (message.uploadProgress.coerceIn(0, 100) / 100f) },
+                            color = Color.White,
+                            trackColor = Color.White.copy(alpha = 0.3f),
+                            modifier = Modifier.size(36.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = if (message.uploadProgress > 0) "Uploading ${message.uploadProgress}%" else "Compressing video...",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            } else if (message.isFailed) {
+                // Failed Upload Overlay
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(Color.Black.copy(alpha = 0.75f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = "Upload Failed",
+                            tint = Color(0xFFFF5252),
+                            modifier = Modifier.size(36.dp)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Upload Failed",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        androidx.compose.material3.Button(
+                            onClick = { onRetryUpload?.invoke() },
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFFF5252)
+                            ),
+                            shape = RoundedCornerShape(20.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 6.dp)
+                        ) {
+                            Text("Retry Upload", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
 

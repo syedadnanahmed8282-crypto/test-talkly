@@ -18,8 +18,24 @@ interface ChatMessageDao {
     @Query("SELECT * FROM chat_messages WHERE chatKey = :chatKey ORDER BY timestamp ASC")
     suspend fun getMessagesForChatSync(chatKey: String): List<ChatMessageEntity>
 
+    @Query("SELECT * FROM chat_messages WHERE chatKey = :chatKey ORDER BY timestamp DESC LIMIT :limit OFFSET :offset")
+    suspend fun getMessagesForChatPaginated(chatKey: String, limit: Int = 50, offset: Int = 0): List<ChatMessageEntity>
+
     @Query("SELECT * FROM chat_messages ORDER BY timestamp ASC")
     suspend fun getAllMessagesSync(): List<ChatMessageEntity>
+
+    @Query("SELECT * FROM chat_messages WHERE id = :messageId LIMIT 1")
+    suspend fun getMessageById(messageId: String): ChatMessageEntity?
+
+    @Query("UPDATE chat_messages SET isPending = :isPending, isUploading = :isUploading, isFailed = :isFailed, uploadProgress = :uploadProgress, mediaUrl = COALESCE(:mediaUrl, mediaUrl) WHERE id = :messageId")
+    suspend fun updateUploadState(
+        messageId: String,
+        isPending: Boolean,
+        isUploading: Boolean,
+        isFailed: Boolean,
+        uploadProgress: Int,
+        mediaUrl: String? = null
+    )
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessages(messages: List<ChatMessageEntity>)

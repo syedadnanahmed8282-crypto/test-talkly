@@ -17,7 +17,37 @@ object TalklyNotificationHelper {
 
     const val CHANNEL_MESSAGES_ID = "talkly_messages_channel"
     const val CHANNEL_CALLS_ID = "talkly_calls_channel"
+    const val SUMMARY_NOTIFICATION_ID = 99999
     private const val TAG = "Talkly_NotificationHelper"
+
+    @Volatile
+    var activeChatMemberId: String? = null
+
+    private val inMemoryProcessedMessageIds = HashSet<String>()
+
+    @Synchronized
+    fun isMessageProcessed(context: Context, messageId: String): Boolean {
+        if (messageId.isBlank()) return false
+        if (inMemoryProcessedMessageIds.contains(messageId)) return true
+        val prefs = context.getSharedPreferences("talkly_processed_notifications", Context.MODE_PRIVATE)
+        val processed = prefs.getBoolean("msg_$messageId", false)
+        if (processed) {
+            inMemoryProcessedMessageIds.add(messageId)
+        }
+        return processed
+    }
+
+    @Synchronized
+    fun markMessageProcessed(context: Context, messageId: String) {
+        if (messageId.isBlank()) return
+        inMemoryProcessedMessageIds.add(messageId)
+        try {
+            val prefs = context.getSharedPreferences("talkly_processed_notifications", Context.MODE_PRIVATE)
+            prefs.edit().putBoolean("msg_$messageId", true).apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to persist processed message ID $messageId: ${e.localizedMessage}")
+        }
+    }
 
     /**
      * Initializes notification channels with the user's system default notification and ringtone sounds.
@@ -84,14 +114,78 @@ object TalklyNotificationHelper {
     }
 
     /**
+     * Posts a SINGLE aggregated summary notification for batch missed messages.
+     */
+    fun postSummaryNotification(
+        context: Context,
+        totalUnreadCount: Int,
+        chatCount: Int
+    ) {
+        if (totalUnreadCount <= 0) return
+        try {
+            val intent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                SUMMARY_NOTIFICATION_ID,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val defaultNotificationUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val title = "Talkly Messages"
+            val text = if (chatCount > 1) {
+                "$totalUnreadCount new messages from $chatCount chats"
+            } else {
+                "$totalUnreadCount new messages"
+            }
+
+            val builder = NotificationCompat.Builder(context, CHANNEL_MESSAGES_ID)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setSound(defaultNotificationUri)
+                .setContentIntent(pendingIntent)
+
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            notificationManager?.notify(SUMMARY_NOTIFICATION_ID, builder.build())
+
+            playSystemNotificationSound(context)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error posting summary notification: ${e.localizedMessage}")
+        }
+    }
+
+    /**
      * Posts a notification for incoming chat messages using the Messages channel and system default tone.
      */
     fun postIncomingMessageNotification(
         context: Context,
         senderName: String,
         messageText: String,
-        chatMemberId: String = ""
+        chatMemberId: String = "",
+        messageId: String = ""
     ) {
+        if (chatMemberId.isNotBlank() && chatMemberId == activeChatMemberId) {
+            Log.d(TAG, "Chat $chatMemberId is active in foreground. Suppressing notification alert.")
+            if (messageId.isNotBlank()) markMessageProcessed(context, messageId)
+            return
+        }
+
+        if (messageId.isNotBlank() && isMessageProcessed(context, messageId)) {
+            Log.d(TAG, "Message $messageId already processed. Suppressing duplicate alert.")
+            return
+        }
+
+        if (messageId.isNotBlank()) {
+            markMessageProcessed(context, messageId)
+        }
+
         try {
             val intent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -124,6 +218,21 @@ object TalklyNotificationHelper {
             playSystemNotificationSound(context)
         } catch (e: Exception) {
             Log.e(TAG, "Error posting message notification: ${e.localizedMessage}")
+        }
+    }
+
+    /**
+     * Cancels notifications for a specific chat ID when the user enters the conversation screen.
+     */
+    fun cancelNotificationsForChat(context: Context, chatMemberId: String) {
+        try {
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            if (chatMemberId.isNotBlank()) {
+                notificationManager?.cancel(chatMemberId.hashCode())
+            }
+            notificationManager?.cancel(SUMMARY_NOTIFICATION_ID)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error cancelling notification for chat $chatMemberId: ${e.localizedMessage}")
         }
     }
 }

@@ -80,6 +80,20 @@ object FcmTokenManager {
         dataPayload: Map<String, String>
     ) {
         try {
+            val callerUid = dataPayload["callerUid"] ?: dataPayload["senderUid"] ?: ""
+            val callerPhone = dataPayload["callerPhone"] ?: ""
+            val callerPhoneSuffix = PhoneUtils.extractPhoneSuffix(callerPhone)
+
+            // Exclude sender from push notification
+            if (callerUid.isNotBlank() && targetUid.isNotBlank() && callerUid == targetUid) {
+                Log.d(TAG, "Skipping FCM push: targetUid matches callerUid ($callerUid)")
+                return
+            }
+            if (callerPhoneSuffix.isNotBlank() && targetPhoneSuffix.isNotBlank() && callerPhoneSuffix == targetPhoneSuffix) {
+                Log.d(TAG, "Skipping FCM push: targetPhoneSuffix matches callerPhoneSuffix ($callerPhoneSuffix)")
+                return
+            }
+
             val firestore = FirebaseFirestore.getInstance()
 
             // Find target FCM token
@@ -128,29 +142,46 @@ object FcmTokenManager {
 
     private fun dispatchFcmPushToToken(targetFcmToken: String, dataPayload: Map<String, String>) {
         try {
-            // Write to Firestore fcm_outbox trigger collection
+            // Write to Firestore fcm_outbox trigger collection for backend FCM Cloud Functions
             val firestore = FirebaseFirestore.getInstance()
             val pushDoc = mapOf(
                 "to" to targetFcmToken,
                 "priority" to "high",
+                "content_available" to true,
+                "time_to_live" to 0,
+                "direct_boot_ok" to true,
                 "data" to dataPayload,
                 "timestamp" to System.currentTimeMillis()
             )
             firestore.collection("fcm_outbox").add(pushDoc)
                 .addOnSuccessListener {
-                    Log.d(TAG, "Queued FCM high priority push in Firestore fcm_outbox")
+                    Log.d(TAG, "Queued high-priority FCM push (time_to_live: 0) in fcm_outbox")
                 }
 
-            // Also send direct legacy HTTP payload if legacy server key is available or via background request
+            // Also send direct legacy HTTP payload for instant notification delivery
             val json = JSONObject().apply {
                 put("to", targetFcmToken)
                 put("priority", "high")
                 put("content_available", true)
+                put("time_to_live", 0)
+                put("direct_boot_ok", true)
+
                 val dataObj = JSONObject()
                 dataPayload.forEach { (key, value) ->
                     dataObj.put(key, value)
                 }
                 put("data", dataObj)
+
+                val title = dataPayload["senderName"] ?: dataPayload["callerName"] ?: dataPayload["title"] ?: "Talkly"
+                val body = dataPayload["messageText"] ?: if (dataPayload["type"] == "INCOMING_CALL") "Incoming Call" else "New message"
+                val notifObj = JSONObject().apply {
+                    put("title", title)
+                    put("body", body)
+                    put("sound", "default")
+                    put("priority", "high")
+                    put("channel_id", if (dataPayload["type"] == "INCOMING_CALL") TalklyNotificationHelper.CHANNEL_CALLS_ID else TalklyNotificationHelper.CHANNEL_MESSAGES_ID)
+                }
+                put("notification", notifObj)
             }
 
             val body = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())

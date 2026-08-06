@@ -8,6 +8,8 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.family.talkly.data.models.ChatMessage
+import com.family.talkly.data.models.ReactionUtils
+import com.family.talkly.data.models.ReactionEntry
 import com.family.talkly.data.models.DEFAULT_FAMILY_MEMBERS
 import com.family.talkly.data.models.FamilyMember
 import com.family.talkly.data.models.MessageType
@@ -31,9 +33,11 @@ import com.family.talkly.data.models.UserStatusGroup
 import com.family.talkly.data.models.StatusViewer
 import com.family.talkly.data.models.StatusLiker
 import com.family.talkly.util.PhoneUtils
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.SupervisorJob
 
 class FirebaseChatRepository(private val context: Context) {
+
+    private val repositoryScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     companion object {
         const val TAG = "Talkly_FirebaseChat"
@@ -674,6 +678,19 @@ class FirebaseChatRepository(private val context: Context) {
                         if (doc != null) {
                             val avatar = doc.getString("profilePicUrl") ?: doc.getString("photoUrl") ?: doc.getString("photoURL") ?: doc.getString("avatarUrl") ?: doc.getString("profilePic")
                             val cover = doc.getString("coverPhotoUrl") ?: doc.getString("coverUrl")
+                            val docTs = doc.getLong("updatedAt") ?: System.currentTimeMillis()
+                            val avatarBusted = PhoneUtils.appendCacheBuster(avatar, docTs)
+                            val coverBusted = PhoneUtils.appendCacheBuster(cover, docTs)
+
+                            if ((!avatarBusted.isNullOrBlank() && avatarBusted != member.avatarUrl) ||
+                                (!coverBusted.isNullOrBlank() && coverBusted != member.coverPhotoUrl)) {
+                                try {
+                                    val imageLoader = coil.Coil.imageLoader(context)
+                                    imageLoader.memoryCache?.clear()
+                                    imageLoader.diskCache?.clear()
+                                } catch (e: Exception) {}
+                            }
+
                             val nameStr = doc.getString("name")
                             val bioStr = doc.getString("bio") ?: doc.getString("status")
 
@@ -689,8 +706,8 @@ class FirebaseChatRepository(private val context: Context) {
 
                             member.copy(
                                 name = if (!nameStr.isNullOrBlank() && nameStr != "Talkly User") nameStr else member.name,
-                                avatarUrl = if (!avatar.isNullOrBlank()) avatar else member.avatarUrl,
-                                coverPhotoUrl = if (!cover.isNullOrBlank()) cover else member.coverPhotoUrl,
+                                avatarUrl = if (!avatarBusted.isNullOrBlank()) avatarBusted else member.avatarUrl,
+                                coverPhotoUrl = if (!coverBusted.isNullOrBlank()) coverBusted else member.coverPhotoUrl,
                                 status = if (!bioStr.isNullOrBlank()) bioStr else member.status,
                                 isTyping = isTypingTargetedToMe || member.isTyping
                             )
@@ -724,7 +741,8 @@ class FirebaseChatRepository(private val context: Context) {
                 "isTyping" to isTyping,
                 "typingTo" to targetMemberId,
                 "isOnline" to true,
-                "lastActiveTimestamp" to System.currentTimeMillis()
+                "lastActiveTimestamp" to System.currentTimeMillis(),
+                "updatedAt" to System.currentTimeMillis()
             )
 
             if (!myId.isNullOrBlank() && myId != "self" && firestore != null) {
@@ -743,12 +761,15 @@ class FirebaseChatRepository(private val context: Context) {
                     firestore?.collection("family_members")
                         ?.document(myPhoneSuffix)
                         ?.set(typingData, com.google.firebase.firestore.SetOptions.merge())
+                    firestore?.collection("users")
+                        ?.document(myPhoneSuffix)
+                        ?.set(typingData, com.google.firebase.firestore.SetOptions.merge())
                 }
             } else if (firestore != null) {
                 // If local myId is not set, set directly on target member for fallback sync
                 firestore?.collection("family_members")
                     ?.document(targetMemberId)
-                    ?.set(mapOf("isTyping" to isTyping, "isOnline" to true), com.google.firebase.firestore.SetOptions.merge())
+                    ?.set(mapOf("isTyping" to isTyping, "isOnline" to true, "updatedAt" to System.currentTimeMillis()), com.google.firebase.firestore.SetOptions.merge())
             }
         } catch (e: Exception) {
             Log.w(TAG, "Firestore setTypingStatus error: ${e.localizedMessage}")
@@ -786,11 +807,16 @@ class FirebaseChatRepository(private val context: Context) {
         setFamilyMembersWithDeduplication(currentList)
 
         try {
+            val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+            val myPhone = sessionPrefs.getString("user_phone", "") ?: ""
+            val myPhoneSuffix = PhoneUtils.extractPhoneSuffix(myPhone)
+
             val presenceMap = mapOf(
                 "isOnline" to isOnline,
                 "lastSeen" to effectiveLastSeen,
                 "lastActiveTimestamp" to lastActiveTimestamp,
-                "isTyping" to if (!isOnline) false else false
+                "isTyping" to if (!isOnline) false else false,
+                "updatedAt" to System.currentTimeMillis()
             )
             firestore?.collection("family_members")
                 ?.document(memberId)
@@ -799,6 +825,15 @@ class FirebaseChatRepository(private val context: Context) {
             firestore?.collection("users")
                 ?.document(memberId)
                 ?.set(presenceMap, com.google.firebase.firestore.SetOptions.merge())
+
+            if (myPhoneSuffix.isNotBlank() && myPhoneSuffix != memberId) {
+                firestore?.collection("family_members")
+                    ?.document(myPhoneSuffix)
+                    ?.set(presenceMap, com.google.firebase.firestore.SetOptions.merge())
+                firestore?.collection("users")
+                    ?.document(myPhoneSuffix)
+                    ?.set(presenceMap, com.google.firebase.firestore.SetOptions.merge())
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Firestore setPresence error: ${e.localizedMessage}")
         }
@@ -973,7 +1008,7 @@ class FirebaseChatRepository(private val context: Context) {
         if (targetSuffix.isNotBlank()) updatedMap.remove(targetSuffix)
         _messagesMap.value = updatedMap
 
-        runBlocking {
+        repositoryScope.launch(Dispatchers.IO) {
             listOfNotNull(memberId.ifBlank { null }, canonicalId.ifBlank { null }, targetFirebaseUid.ifBlank { null }, targetSuffix.ifBlank { null })
                 .distinct()
                 .forEach { key ->
@@ -1059,8 +1094,30 @@ class FirebaseChatRepository(private val context: Context) {
 
     private val diskExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
+    private fun startRoomDatabaseObserver() {
+        repositoryScope.launch(Dispatchers.IO) {
+            try {
+                database.chatMessageDao().getAllMessages().collect { entities ->
+                    if (entities.isNotEmpty()) {
+                        val loadedMap = mutableMapOf<String, MutableList<ChatMessage>>()
+                        for (entity in entities) {
+                            val list = loadedMap.getOrPut(entity.chatKey) { mutableListOf() }
+                            list.add(entity.toChatMessage())
+                        }
+                        val resultMap = loadedMap.mapValues { entry -> entry.value.sortedBy { it.timestamp } }
+                        if (resultMap.isNotEmpty()) {
+                            _messagesMap.value = resultMap
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error in Room Database observer: ${e.localizedMessage}")
+            }
+        }
+    }
+
     private fun saveMessagesToDisk() {
-        diskExecutor.execute {
+        repositoryScope.launch(Dispatchers.IO) {
             try {
                 val currentMap = _messagesMap.value
                 val entities = mutableListOf<ChatMessageEntity>()
@@ -1103,12 +1160,10 @@ class FirebaseChatRepository(private val context: Context) {
                     rootObj.put(chatKey, arr)
                 }
 
-                // 1. Save to Room Database
-                runBlocking {
-                    database.chatMessageDao().clearAllMessages()
-                    if (entities.isNotEmpty()) {
-                        database.chatMessageDao().insertMessages(entities)
-                    }
+                // 1. Save to Room Database on IO thread
+                database.chatMessageDao().clearAllMessages()
+                if (entities.isNotEmpty()) {
+                    database.chatMessageDao().insertMessages(entities)
                 }
 
                 // 2. Save JSON backup
@@ -1121,106 +1176,105 @@ class FirebaseChatRepository(private val context: Context) {
     }
 
     private fun loadMessagesFromDisk() {
-        try {
-            // 1. Try loading from Room Database
-            val loadedEntities = runBlocking {
-                database.chatMessageDao().getAllMessagesSync()
-            }
-
-            if (loadedEntities.isNotEmpty()) {
-                val loadedMap = mutableMapOf<String, MutableList<ChatMessage>>()
-                for (entity in loadedEntities) {
-                    val list = loadedMap.getOrPut(entity.chatKey) { mutableListOf() }
-                    list.add(entity.toChatMessage())
-                }
-                val resultMap = loadedMap.mapValues { entry -> entry.value.sortedBy { it.timestamp } }
-                if (resultMap.isNotEmpty()) {
-                    _messagesMap.value = resultMap
-                    Log.i(TAG, "Loaded ${loadedEntities.size} messages from Room Database for offline support")
-                    return
-                }
-            }
-
-            // 2. Fallback: Load from JSON file if Room is empty
-            val file = java.io.File(context.filesDir, "cached_talkly_messages_v2.json")
-            if (!file.exists()) return
-            val jsonStr = file.readText()
-            if (jsonStr.isBlank()) return
-            val rootObj = org.json.JSONObject(jsonStr)
-            val loadedMap = mutableMapOf<String, List<ChatMessage>>()
-            val keys = rootObj.keys()
-            while (keys.hasNext()) {
-                val chatKey = keys.next()
-                val arr = rootObj.getJSONArray(chatKey)
-                val msgList = mutableListOf<ChatMessage>()
-                for (i in 0 until arr.length()) {
-                    val obj = arr.getJSONObject(i)
-                    val id = obj.optString("id", "")
-                    if (id.isBlank()) continue
-                    val senderId = obj.optString("senderId", "self")
-                    val senderName = obj.optString("senderName", "You")
-                    val receiverId = obj.optString("receiverId", "")
-                    val typeStr = obj.optString("messageType", "TEXT")
-                    val type = try { MessageType.valueOf(typeStr) } catch (e: Exception) { MessageType.TEXT }
-                    val textContent = obj.optString("textContent", "")
-                    val mediaUrl = if (obj.has("mediaUrl") && !obj.isNull("mediaUrl")) obj.getString("mediaUrl") else null
-                    val timestamp = obj.optLong("timestamp", System.currentTimeMillis())
-                    val callType = if (obj.has("callType") && !obj.isNull("callType")) obj.getString("callType") else null
-                    val callDurationSec = obj.optInt("callDurationSec", 0)
-                    val isDelivered = obj.optBoolean("isDelivered", false)
-                    val isRead = obj.optBoolean("isRead", false)
-                    val readAtTimestamp = if (obj.has("readAtTimestamp") && !obj.isNull("readAtTimestamp")) obj.getLong("readAtTimestamp") else null
-                    val reaction = if (obj.has("reaction") && !obj.isNull("reaction")) obj.getString("reaction") else null
-                    val isStarred = obj.optBoolean("isStarred", false)
-                    val isPinned = obj.optBoolean("isPinned", false)
-                    val replyToMessageId = if (obj.has("replyToMessageId") && !obj.isNull("replyToMessageId")) obj.getString("replyToMessageId") else null
-                    val replyToSenderName = if (obj.has("replyToSenderName") && !obj.isNull("replyToSenderName")) obj.getString("replyToSenderName") else null
-                    val replyToText = if (obj.has("replyToText") && !obj.isNull("replyToText")) obj.getString("replyToText") else null
-                    val isEdited = obj.optBoolean("isEdited", false)
-                    val isDeletedForEveryone = obj.optBoolean("isDeletedForEveryone", false)
-                    val deletedForUsers = mutableListOf<String>()
-                    if (obj.has("deletedForUsers")) {
-                        val delArr = obj.getJSONArray("deletedForUsers")
-                        for (d in 0 until delArr.length()) {
-                            deletedForUsers.add(delArr.getString(d))
-                        }
+        repositoryScope.launch(Dispatchers.IO) {
+            try {
+                // 1. Try loading from Room Database
+                val loadedEntities = database.chatMessageDao().getAllMessagesSync()
+                if (loadedEntities.isNotEmpty()) {
+                    val loadedMap = mutableMapOf<String, MutableList<ChatMessage>>()
+                    for (entity in loadedEntities) {
+                        val list = loadedMap.getOrPut(entity.chatKey) { mutableListOf() }
+                        list.add(entity.toChatMessage())
                     }
-
-                    msgList.add(
-                        ChatMessage(
-                            id = id,
-                            senderId = senderId,
-                            senderName = senderName,
-                            receiverId = receiverId,
-                            messageType = type,
-                            textContent = textContent,
-                            mediaUrl = mediaUrl,
-                            timestamp = timestamp,
-                            callType = callType,
-                            callDurationSec = callDurationSec,
-                            isDelivered = isDelivered,
-                            isRead = isRead,
-                            readAtTimestamp = readAtTimestamp,
-                            reaction = reaction,
-                            isStarred = isStarred,
-                            isPinned = isPinned,
-                            replyToMessageId = replyToMessageId,
-                            replyToSenderName = replyToSenderName,
-                            replyToText = replyToText,
-                            isEdited = isEdited,
-                            isDeletedForEveryone = isDeletedForEveryone,
-                            deletedForUsers = deletedForUsers
-                        )
-                    )
+                    val resultMap = loadedMap.mapValues { entry -> entry.value.sortedBy { it.timestamp } }
+                    if (resultMap.isNotEmpty()) {
+                        _messagesMap.value = resultMap
+                        Log.i(TAG, "Loaded ${loadedEntities.size} messages from Room Database for offline support")
+                        return@launch
+                    }
                 }
-                loadedMap[chatKey] = msgList.sortedBy { it.timestamp }
+
+                // 2. Fallback: Load from JSON file if Room is empty
+                val file = java.io.File(context.filesDir, "cached_talkly_messages_v2.json")
+                if (!file.exists()) return@launch
+                val jsonStr = file.readText()
+                if (jsonStr.isBlank()) return@launch
+                val rootObj = org.json.JSONObject(jsonStr)
+                val loadedMap = mutableMapOf<String, List<ChatMessage>>()
+                val keys = rootObj.keys()
+                while (keys.hasNext()) {
+                    val chatKey = keys.next()
+                    val arr = rootObj.getJSONArray(chatKey)
+                    val msgList = mutableListOf<ChatMessage>()
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.getJSONObject(i)
+                        val id = obj.optString("id", "")
+                        if (id.isBlank()) continue
+                        val senderId = obj.optString("senderId", "self")
+                        val senderName = obj.optString("senderName", "You")
+                        val receiverId = obj.optString("receiverId", "")
+                        val typeStr = obj.optString("messageType", "TEXT")
+                        val type = try { MessageType.valueOf(typeStr) } catch (e: Exception) { MessageType.TEXT }
+                        val textContent = obj.optString("textContent", "")
+                        val mediaUrl = if (obj.has("mediaUrl") && !obj.isNull("mediaUrl")) obj.getString("mediaUrl") else null
+                        val timestamp = obj.optLong("timestamp", System.currentTimeMillis())
+                        val callType = if (obj.has("callType") && !obj.isNull("callType")) obj.getString("callType") else null
+                        val callDurationSec = obj.optInt("callDurationSec", 0)
+                        val isDelivered = obj.optBoolean("isDelivered", false)
+                        val isRead = obj.optBoolean("isRead", false)
+                        val readAtTimestamp = if (obj.has("readAtTimestamp") && !obj.isNull("readAtTimestamp")) obj.getLong("readAtTimestamp") else null
+                        val reaction = if (obj.has("reaction") && !obj.isNull("reaction")) obj.getString("reaction") else null
+                        val isStarred = obj.optBoolean("isStarred", false)
+                        val isPinned = obj.optBoolean("isPinned", false)
+                        val replyToMessageId = if (obj.has("replyToMessageId") && !obj.isNull("replyToMessageId")) obj.getString("replyToMessageId") else null
+                        val replyToSenderName = if (obj.has("replyToSenderName") && !obj.isNull("replyToSenderName")) obj.getString("replyToSenderName") else null
+                        val replyToText = if (obj.has("replyToText") && !obj.isNull("replyToText")) obj.getString("replyToText") else null
+                        val isEdited = obj.optBoolean("isEdited", false)
+                        val isDeletedForEveryone = obj.optBoolean("isDeletedForEveryone", false)
+                        val deletedForUsers = mutableListOf<String>()
+                        if (obj.has("deletedForUsers")) {
+                            val delArr = obj.getJSONArray("deletedForUsers")
+                            for (d in 0 until delArr.length()) {
+                                deletedForUsers.add(delArr.getString(d))
+                            }
+                        }
+
+                        msgList.add(
+                            ChatMessage(
+                                id = id,
+                                senderId = senderId,
+                                senderName = senderName,
+                                receiverId = receiverId,
+                                messageType = type,
+                                textContent = textContent,
+                                mediaUrl = mediaUrl,
+                                timestamp = timestamp,
+                                callType = callType,
+                                callDurationSec = callDurationSec,
+                                isDelivered = isDelivered,
+                                isRead = isRead,
+                                readAtTimestamp = readAtTimestamp,
+                                reaction = reaction,
+                                isStarred = isStarred,
+                                isPinned = isPinned,
+                                replyToMessageId = replyToMessageId,
+                                replyToSenderName = replyToSenderName,
+                                replyToText = replyToText,
+                                isEdited = isEdited,
+                                isDeletedForEveryone = isDeletedForEveryone,
+                                deletedForUsers = deletedForUsers
+                            )
+                        )
+                    }
+                    loadedMap[chatKey] = msgList.sortedBy { it.timestamp }
+                }
+                if (loadedMap.isNotEmpty()) {
+                    _messagesMap.value = loadedMap
+                    saveMessagesToDisk()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading messages from disk: ${e.message}")
             }
-            if (loadedMap.isNotEmpty()) {
-                _messagesMap.value = loadedMap
-                saveMessagesToDisk()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error loading messages from disk: ${e.message}")
         }
     }
 
@@ -1234,6 +1288,7 @@ class FirebaseChatRepository(private val context: Context) {
     }
 
     private fun seedInitialFamilyChats() {
+        startRoomDatabaseObserver()
         loadMessagesFromDisk()
         autoStartRealtimeSyncIfLoggedIn()
     }
@@ -1280,6 +1335,13 @@ class FirebaseChatRepository(private val context: Context) {
 
     fun markMessagesAsRead(memberId: String) {
         val canonicalId = getCanonicalMemberId(memberId)
+
+        // Cancel pending notifications for this conversation
+        com.family.talkly.util.TalklyNotificationHelper.cancelNotificationsForChat(context, memberId)
+        if (canonicalId != memberId) {
+            com.family.talkly.util.TalklyNotificationHelper.cancelNotificationsForChat(context, canonicalId)
+        }
+
         val currentMessages = getMessagesForMember(canonicalId)
         if (currentMessages.isEmpty()) return
         var updatedAny = false
@@ -1350,7 +1412,14 @@ class FirebaseChatRepository(private val context: Context) {
         }
     }
 
-    fun toggleMessageReaction(memberId: String, messageId: String, reactionEmoji: String) {
+    fun toggleMessageReaction(
+        memberId: String,
+        messageId: String,
+        reactionEmoji: String,
+        currentUserId: String = "self",
+        currentUserName: String = "You",
+        currentUserAvatar: String? = null
+    ) {
         val canonicalId = getCanonicalMemberId(memberId)
         val rawList = _messagesMap.value[canonicalId] ?: _messagesMap.value[memberId] ?: emptyList()
         if (rawList.isEmpty()) return
@@ -1369,18 +1438,54 @@ class FirebaseChatRepository(private val context: Context) {
             ?: fallbackPrefs.getString("user_uid", null)
             ?: "self"
 
+        val effectiveUid = if (currentUserId != "self" && currentUserId.isNotBlank()) currentUserId else senderUid
+
         var newReactionValue: String? = null
 
         val updatedMessages = rawList.map { msg ->
             if (msg.id == messageId) {
-                val newReaction = if (msg.reaction == reactionEmoji) null else reactionEmoji
-                newReactionValue = newReaction
-                msg.copy(reaction = newReaction)
+                val currentEntries = ReactionUtils.parseReactions(msg.reaction, msg.senderId, msg.senderName, msg.timestamp)
+                val userEntry = currentEntries.firstOrNull { 
+                    it.userId == effectiveUid || it.userId == "self" || (effectiveUid == "self" && it.userId == senderUid)
+                }
+
+                val newEntries = currentEntries.toMutableList()
+                if (userEntry != null) {
+                    if (userEntry.emoji == reactionEmoji) {
+                        // Same emoji -> REMOVE user's reaction (toggle off)
+                        newEntries.removeAll { 
+                            it.userId == effectiveUid || it.userId == "self" || (effectiveUid == "self" && it.userId == senderUid)
+                        }
+                    } else {
+                        // Different emoji -> UPDATE user's reaction
+                        val idx = newEntries.indexOf(userEntry)
+                        if (idx >= 0) {
+                            newEntries[idx] = userEntry.copy(
+                                emoji = reactionEmoji,
+                                timestamp = System.currentTimeMillis()
+                            )
+                        }
+                    }
+                } else {
+                    // Add new reaction entry for this user
+                    newEntries.add(
+                        ReactionEntry(
+                            userId = effectiveUid,
+                            userName = currentUserName,
+                            emoji = reactionEmoji,
+                            timestamp = System.currentTimeMillis(),
+                            avatarUrl = currentUserAvatar
+                        )
+                    )
+                }
+
+                newReactionValue = ReactionUtils.serializeReactions(newEntries)
+                msg.copy(reaction = newReactionValue)
             } else {
                 msg
             }
         }
-        
+
         val updatedMap = _messagesMap.value.toMutableMap()
         updatedMap[canonicalId] = updatedMessages
         if (canonicalId != memberId) {
@@ -1389,12 +1494,17 @@ class FirebaseChatRepository(private val context: Context) {
         _messagesMap.value = updatedMap
         saveMessagesToDisk()
 
+        val roomId = if (senderUid.isNotBlank() && senderUid != "self" && resolvedTargetUid.isNotBlank() && resolvedTargetUid != "self") {
+            getChatRoomId(senderUid, resolvedTargetUid)
+        } else null
+
         val targetDocs = listOfNotNull(
             canonicalId.ifBlank { null },
             memberId.ifBlank { null },
             resolvedTargetUid.ifBlank { null },
             targetSuffix.ifBlank { null },
-            senderUid.ifBlank { null }
+            senderUid.ifBlank { null },
+            roomId?.ifBlank { null }
         ).distinct()
 
         targetDocs.forEach { docId ->
@@ -1418,20 +1528,23 @@ class FirebaseChatRepository(private val context: Context) {
             ?: sessionPrefs.getString("user_uid", null)
             ?: fallbackPrefs.getString("user_uid", null)
             ?: "self"
+        val currentPhone = sessionPrefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", "") ?: ""
+        val currentSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(currentPhone)
 
         val rawList = _messagesMap.value[canonicalId] ?: _messagesMap.value[memberId] ?: emptyList()
         var updatedMsg: ChatMessage? = null
 
-        val updatedList = rawList.map { msg ->
+        val updatedList = rawList.filterNot { msg ->
             if (msg.id == messageId) {
                 val currentDeleted = msg.deletedForUsers.toMutableList()
                 if (!currentDeleted.contains(currentUid)) currentDeleted.add(currentUid)
                 if (!currentDeleted.contains("self")) currentDeleted.add("self")
+                if (currentSuffix.isNotBlank() && !currentDeleted.contains(currentSuffix)) currentDeleted.add(currentSuffix)
                 val newMsg = msg.copy(deletedForUsers = currentDeleted)
                 updatedMsg = newMsg
-                newMsg
+                true
             } else {
-                msg
+                false
             }
         }
 
@@ -1441,15 +1554,43 @@ class FirebaseChatRepository(private val context: Context) {
         _messagesMap.value = updatedMap
         saveMessagesToDisk()
 
-        if (currentUid.isNotBlank() && currentUid != "self" && updatedMsg != null) {
+        repositoryScope.launch(Dispatchers.IO) {
+            try {
+                database.chatMessageDao().deleteMessageById(messageId)
+            } catch (e: Exception) {
+                Log.w(TAG, "Error purging message $messageId from local Room DB: ${e.localizedMessage}")
+            }
+        }
+
+        val targetMember = _familyMembers.value.firstOrNull {
+            it.id == canonicalId || it.id == memberId || it.firebaseUid == canonicalId || it.firebaseUid == memberId
+        }
+        val targetPhone = targetMember?.phone ?: if (memberId.startsWith("+") || memberId.all { it.isDigit() }) memberId else ""
+        val targetSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(targetPhone)
+        val resolvedTargetUid = targetMember?.firebaseUid ?: if (!canonicalId.startsWith("contact_") && !canonicalId.contains(" ")) canonicalId else ""
+
+        val roomId = if (currentUid.isNotBlank() && currentUid != "self" && resolvedTargetUid.isNotBlank() && resolvedTargetUid != "self") {
+            getChatRoomId(currentUid, resolvedTargetUid)
+        } else null
+
+        val targetDocs = listOfNotNull(
+            canonicalId.ifBlank { null },
+            memberId.ifBlank { null },
+            resolvedTargetUid.ifBlank { null },
+            targetSuffix.ifBlank { null },
+            currentUid.ifBlank { null },
+            roomId?.ifBlank { null }
+        ).distinct()
+
+        targetDocs.forEach { docId ->
             try {
                 firestore?.collection("family_chats")
-                    ?.document(currentUid)
+                    ?.document(docId)
                     ?.collection("messages")
                     ?.document(messageId)
                     ?.update("deletedForUsers", updatedMsg?.deletedForUsers)
             } catch (e: Exception) {
-                Log.w(TAG, "Error updating deletedForUsers in Firestore: ${e.localizedMessage}")
+                Log.w(TAG, "Error updating deletedForUsers in Firestore doc $docId: ${e.localizedMessage}")
             }
         }
     }
@@ -1496,12 +1637,17 @@ class FirebaseChatRepository(private val context: Context) {
             ?: fallbackPrefs.getString("user_uid", null)
             ?: "self"
 
+        val roomId = if (senderUid.isNotBlank() && senderUid != "self" && resolvedTargetUid.isNotBlank() && resolvedTargetUid != "self") {
+            getChatRoomId(senderUid, resolvedTargetUid)
+        } else null
+
         val targetDocs = listOfNotNull(
             canonicalId.ifBlank { null },
             memberId.ifBlank { null },
             resolvedTargetUid.ifBlank { null },
             targetSuffix.ifBlank { null },
-            senderUid.ifBlank { null }
+            senderUid.ifBlank { null },
+            roomId?.ifBlank { null }
         ).distinct()
 
         val updateData = mapOf(
@@ -1566,12 +1712,17 @@ class FirebaseChatRepository(private val context: Context) {
             ?: fallbackPrefs.getString("user_uid", null)
             ?: "self"
 
+        val roomId = if (senderUid.isNotBlank() && senderUid != "self" && resolvedTargetUid.isNotBlank() && resolvedTargetUid != "self") {
+            getChatRoomId(senderUid, resolvedTargetUid)
+        } else null
+
         val targetDocs = listOfNotNull(
             canonicalId.ifBlank { null },
             memberId.ifBlank { null },
             resolvedTargetUid.ifBlank { null },
             targetSuffix.ifBlank { null },
-            senderUid.ifBlank { null }
+            senderUid.ifBlank { null },
+            roomId?.ifBlank { null }
         ).distinct()
 
         val updateData = mapOf(
@@ -1625,28 +1776,44 @@ class FirebaseChatRepository(private val context: Context) {
         saveMessagesToDisk()
     }
 
-    fun togglePinMessage(memberId: String, messageId: String) {
+    fun togglePinMessage(memberId: String, messageId: String): Boolean {
         val canonicalId = getCanonicalMemberId(memberId)
         val currentMessages = getMessagesForMember(canonicalId)
-        if (currentMessages.isEmpty()) return
+        if (currentMessages.isEmpty()) return false
+
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val currentUid = currentSyncedUserId
+            ?: sessionPrefs.getString("user_uid", null)
+            ?: fallbackPrefs.getString("user_uid", null)
+            ?: "self"
+
+        val targetMsg = currentMessages.firstOrNull { it.id == messageId } ?: return false
+
+        // Permission check for unpinning
+        if (targetMsg.isPinned) {
+            val canUnpin = targetMsg.pinnedBy.isNullOrBlank() ||
+                    targetMsg.pinnedBy == "self" ||
+                    targetMsg.pinnedBy == currentUid ||
+                    targetMsg.senderId == "self" ||
+                    targetMsg.senderId == currentUid
+            if (!canUnpin) {
+                Log.w(TAG, "User $currentUid does not have permission to unpin message $messageId pinned by ${targetMsg.pinnedBy}")
+                return false
+            }
+        }
+
+        val newPinned = !targetMsg.isPinned
+        val newPinnedBy = if (newPinned) currentUid else null
+
         val updatedMessages = currentMessages.map { msg ->
             if (msg.id == messageId) {
-                val newPinned = !msg.isPinned
-                val updatedMsg = msg.copy(isPinned = newPinned)
-                try {
-                    firestore?.collection("family_chats")
-                        ?.document(canonicalId)
-                        ?.collection("messages")
-                        ?.document(messageId)
-                        ?.update("isPinned", newPinned)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error updating pin message in Firestore: ${e.localizedMessage}")
-                }
-                updatedMsg
+                msg.copy(isPinned = newPinned, pinnedBy = newPinnedBy)
             } else {
                 msg
             }
         }
+
         val updatedMap = _messagesMap.value.toMutableMap()
         updatedMap[canonicalId] = updatedMessages
         if (canonicalId != memberId) {
@@ -1654,6 +1821,45 @@ class FirebaseChatRepository(private val context: Context) {
         }
         _messagesMap.value = updatedMap
         saveMessagesToDisk()
+
+        val targetMember = _familyMembers.value.firstOrNull {
+            it.id == canonicalId || it.id == memberId || it.firebaseUid == canonicalId || it.firebaseUid == memberId
+        }
+        val targetPhone = targetMember?.phone ?: if (memberId.startsWith("+") || memberId.all { it.isDigit() }) memberId else ""
+        val targetSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(targetPhone)
+        val resolvedTargetUid = targetMember?.firebaseUid ?: if (!canonicalId.startsWith("contact_") && !canonicalId.contains(" ")) canonicalId else ""
+
+        val roomId = if (currentUid.isNotBlank() && currentUid != "self" && resolvedTargetUid.isNotBlank() && resolvedTargetUid != "self") {
+            getChatRoomId(currentUid, resolvedTargetUid)
+        } else null
+
+        val targetDocs = listOfNotNull(
+            canonicalId.ifBlank { null },
+            memberId.ifBlank { null },
+            resolvedTargetUid.ifBlank { null },
+            targetSuffix.ifBlank { null },
+            currentUid.ifBlank { null },
+            roomId?.ifBlank { null }
+        ).distinct()
+
+        val updateData = mutableMapOf<String, Any?>(
+            "isPinned" to newPinned,
+            "pinnedBy" to newPinnedBy
+        )
+
+        targetDocs.forEach { docId ->
+            try {
+                firestore?.collection("family_chats")
+                    ?.document(docId)
+                    ?.collection("messages")
+                    ?.document(messageId)
+                    ?.update(updateData)
+            } catch (e: Exception) {
+                Log.w(TAG, "Error updating pin in Firestore doc $docId: ${e.localizedMessage}")
+            }
+        }
+
+        return true
     }
 
     fun togglePinMember(memberId: String) {
@@ -1699,6 +1905,7 @@ class FirebaseChatRepository(private val context: Context) {
                 Log.w(TAG, "Listen failed for messages: ${error.localizedMessage}")
             } else if (snapshot != null && !snapshot.isEmpty) {
                 val currentMap = _messagesMap.value.toMutableMap()
+                val batchUnreadMessages = mutableListOf<Pair<ChatMessage, String>>()
 
                 for (doc in snapshot.documents) {
                     try {
@@ -1718,6 +1925,7 @@ class FirebaseChatRepository(private val context: Context) {
                         val reaction = doc.getString("reaction")
                         val isStarred = doc.getBoolean("isStarred") ?: false
                         val isPinned = doc.getBoolean("isPinned") ?: false
+                        val pinnedBy = doc.getString("pinnedBy")
                         val replyToMessageId = doc.getString("replyToMessageId")
                         val replyToSenderName = doc.getString("replyToSenderName")
                         val replyToText = doc.getString("replyToText")
@@ -1762,6 +1970,7 @@ class FirebaseChatRepository(private val context: Context) {
                             reaction = reaction,
                             isStarred = isStarred,
                             isPinned = isPinned,
+                            pinnedBy = pinnedBy,
                             replyToMessageId = replyToMessageId,
                             replyToSenderName = replyToSenderName,
                             replyToText = replyToText,
@@ -1783,31 +1992,32 @@ class FirebaseChatRepository(private val context: Context) {
                             val preservedDelivered = existing.isDelivered || message.isDelivered
                             val preservedRead = existing.isRead || message.isRead
                             val preservedReadAt = message.readAtTimestamp ?: existing.readAtTimestamp
+                            val preservedDeletedForUsers = (message.deletedForUsers + existing.deletedForUsers).distinct()
                             existingMsgs[existingIndex] = message.copy(
                                 isDelivered = preservedDelivered,
                                 isRead = preservedRead,
-                                readAtTimestamp = preservedReadAt
+                                readAtTimestamp = preservedReadAt,
+                                deletedForUsers = preservedDeletedForUsers
                             )
                         } else {
                             existingMsgs.add(message)
-                            if (isInitialMessageSyncDone && senderId != "self" && senderId != currentUserId && !isRead) {
-                                val displayContent = when (type) {
-                                    MessageType.TEXT -> textContent
-                                    MessageType.IMAGE -> "📷 Photo"
-                                    MessageType.VIDEO -> "📹 Video"
-                                    MessageType.VOICE_NOTE -> "🎵 Voice message"
-                                    MessageType.CALL_LOG -> "📞 Call"
-                                }
-                                com.family.talkly.util.TalklyNotificationHelper.postIncomingMessageNotification(
-                                    context = context,
-                                    senderName = if (senderName.isNotBlank() && senderName != "Talkly User") senderName else "New Message",
-                                    messageText = displayContent,
-                                    chatMemberId = canonicalOtherPartyId
-                                )
-                            }
                         }
-                        existingMsgs.sortBy { it.timestamp }
-                        currentMap[canonicalOtherPartyId] = existingMsgs
+
+                        // Deduplication & notification tracking
+                        if (senderId == "self" || senderId == currentUserId || isRead) {
+                            com.family.talkly.util.TalklyNotificationHelper.markMessageProcessed(context, id)
+                        } else if (canonicalOtherPartyId == com.family.talkly.util.TalklyNotificationHelper.activeChatMemberId) {
+                            com.family.talkly.util.TalklyNotificationHelper.markMessageProcessed(context, id)
+                        } else if (!com.family.talkly.util.TalklyNotificationHelper.isMessageProcessed(context, id)) {
+                            batchUnreadMessages.add(Pair(message, canonicalOtherPartyId))
+                        }
+
+                        val filteredMsgs = existingMsgs.filterNot { msg ->
+                            (currentUserId != null && msg.deletedForUsers.contains(currentUserId)) ||
+                            msg.deletedForUsers.contains("self") ||
+                            (userSuffix.isNotBlank() && msg.deletedForUsers.contains(userSuffix))
+                        }.sortedBy { it.timestamp }
+                        currentMap[canonicalOtherPartyId] = filteredMsgs
                         if (canonicalOtherPartyId != rawOtherPartyId && currentMap.containsKey(rawOtherPartyId)) {
                             currentMap.remove(rawOtherPartyId)
                         }
@@ -1819,6 +2029,38 @@ class FirebaseChatRepository(private val context: Context) {
 
                 _messagesMap.value = currentMap
                 saveMessagesToDisk()
+
+                // Batch process notifications cleanly
+                if (batchUnreadMessages.isNotEmpty()) {
+                    if (!isInitialMessageSyncDone || batchUnreadMessages.size > 1) {
+                        val uniqueChats = batchUnreadMessages.map { it.second }.distinct().size
+                        com.family.talkly.util.TalklyNotificationHelper.postSummaryNotification(
+                            context = context,
+                            totalUnreadCount = batchUnreadMessages.size,
+                            chatCount = uniqueChats
+                        )
+                        batchUnreadMessages.forEach { (msg, _) ->
+                            com.family.talkly.util.TalklyNotificationHelper.markMessageProcessed(context, msg.id)
+                        }
+                    } else if (isInitialMessageSyncDone && batchUnreadMessages.size == 1) {
+                        val (msg, canonicalOtherPartyId) = batchUnreadMessages.first()
+                        val displayContent = when (msg.messageType) {
+                            MessageType.TEXT -> msg.textContent
+                            MessageType.IMAGE -> "📷 Photo"
+                            MessageType.VIDEO -> "📹 Video"
+                            MessageType.VOICE_NOTE -> "🎵 Voice message"
+                            MessageType.CALL_LOG -> "📞 Call"
+                        }
+                        com.family.talkly.util.TalklyNotificationHelper.postIncomingMessageNotification(
+                            context = context,
+                            senderName = if (msg.senderName.isNotBlank() && msg.senderName != "Talkly User") msg.senderName else "New Message",
+                            messageText = displayContent,
+                            chatMemberId = canonicalOtherPartyId,
+                            messageId = msg.id
+                        )
+                    }
+                }
+
                 isInitialMessageSyncDone = true
             }
         }
@@ -1881,8 +2123,17 @@ class FirebaseChatRepository(private val context: Context) {
         _messagesMap.value = currentMap
         saveMessagesToDisk()
 
+        // Clear Coil memory and disk caches to purge stale avatars
+        try {
+            val imageLoader = coil.Coil.imageLoader(context)
+            imageLoader.memoryCache?.clear()
+            imageLoader.diskCache?.clear()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed clearing Coil image cache in invalidateLocalCacheAndSyncPrimaryProfile: ${e.localizedMessage}")
+        }
+
         // Merge & normalize local statuses for self profile
-        val updatedStatuses = _statuses.value.map { item ->
+        val updatedStatuses = _statuses.value.filter { !it.isExpired(_simulatedTimeOffsetMs.value) }.map { item ->
             val isSelf = item.userId == "self" ||
                     item.userId == primaryUid ||
                     (userPhone.isNotBlank() && item.userId == userPhone) ||
@@ -1896,8 +2147,10 @@ class FirebaseChatRepository(private val context: Context) {
         _statuses.value = updatedStatuses
         saveStatusesToPrefs()
 
-        // Restart realtime message listener with primary user ID
+        // Restart realtime message listener, status listener, and user verification listener
         startRealtimeMessageSync(primaryUid)
+        setupFirestoreStatusesListener()
+        setupFirestoreUsersVerificationListener()
     }
 
     fun resetSessionOnLogout() {
@@ -1906,11 +2159,38 @@ class FirebaseChatRepository(private val context: Context) {
             messagesListener = null
             secondaryMessagesListener?.remove()
             secondaryMessagesListener = null
+            thirdMessagesListener?.remove()
+            thirdMessagesListener = null
+            membersListener?.remove()
+            membersListener = null
+            usersCollectionListener?.remove()
+            usersCollectionListener = null
+            statusesListener?.remove()
+            statusesListener = null
+            messageRequestsListener?.remove()
+            messageRequestsListener = null
+            contactsSavedMeListener?.remove()
+            contactsSavedMeListener = null
+
             currentSyncedUserId = null
             _messagesMap.value = emptyMap()
             _familyMembers.value = emptyList()
             _statuses.value = emptyList()
+            _messageRequests.value = emptyList()
+            _contactsWhoSavedMe.value = emptySet()
+            _blockedUserIds.value = emptySet()
+            _deletedContactIds.value = emptySet()
+
             contactPrefs.edit().clear().apply()
+
+            repositoryScope.launch(Dispatchers.IO) {
+                try {
+                    database.chatMessageDao().clearAllMessages()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error clearing Room DB on logout: ${e.localizedMessage}")
+                }
+            }
+
             try {
                 val file = java.io.File(context.filesDir, "cached_talkly_messages_v2.json")
                 if (file.exists()) file.delete()
@@ -2351,20 +2631,18 @@ class FirebaseChatRepository(private val context: Context) {
                             }
                         }
 
-                        if (firestoreStatuses.isNotEmpty()) {
-                            val mergedMap = mutableMapOf<String, StatusItem>()
-                            _statuses.value.forEach { local ->
-                                if (!local.isExpired(_simulatedTimeOffsetMs.value)) {
-                                    mergedMap[local.id] = local
-                                }
+                        val mergedMap = mutableMapOf<String, StatusItem>()
+                        _statuses.value.forEach { local ->
+                            if (!local.isExpired(_simulatedTimeOffsetMs.value)) {
+                                mergedMap[local.id] = local
                             }
-                            firestoreStatuses.forEach { remote ->
-                                mergedMap[remote.id] = remote
-                            }
-
-                            _statuses.value = mergedMap.values.sortedByDescending { it.timestamp }
-                            saveStatusesToPrefs()
                         }
+                        firestoreStatuses.forEach { remote ->
+                            mergedMap[remote.id] = remote
+                        }
+
+                        _statuses.value = mergedMap.values.sortedByDescending { it.timestamp }
+                        saveStatusesToPrefs()
                     }
                 }
         } catch (e: Exception) {
@@ -2750,6 +3028,58 @@ class FirebaseChatRepository(private val context: Context) {
                                             timestamp = ts
                                         )
                                     )
+
+                                    if (status == "ACCEPTED") {
+                                        val partnerUid = if (isByMe) rId else sId
+                                        val partnerPhone = if (isByMe) rPhone else sPhone
+                                        val partnerSuffix = if (isByMe) rSuffix else sSuffix
+                                        val partnerName = if (isByMe) rName else sName
+                                        val partnerAvatar = if (isByMe) "" else sAvatar
+                                        val partnerContactId = if (partnerUid.isNotBlank() && partnerUid != "self" && !partnerUid.startsWith("contact_")) partnerUid else "contact_${partnerSuffix.ifBlank { partnerPhone.replace("+", "") }}"
+
+                                        val currentList = _familyMembers.value.toMutableList()
+                                        val existingIdx = currentList.indexOfFirst { m ->
+                                            m.id == partnerContactId ||
+                                            (partnerUid.isNotBlank() && (m.id == partnerUid || m.firebaseUid == partnerUid)) ||
+                                            (partnerSuffix.isNotBlank() && PhoneUtils.extractPhoneSuffix(m.phone) == partnerSuffix)
+                                        }
+                                        if (existingIdx != -1) {
+                                            val existing = currentList[existingIdx]
+                                            currentList[existingIdx] = existing.copy(
+                                                isRegisteredOnTalkly = true,
+                                                phone = if (existing.phone.isBlank()) partnerPhone else existing.phone,
+                                                avatarUrl = existing.avatarUrl ?: partnerAvatar.ifBlank { null },
+                                                firebaseUid = existing.firebaseUid ?: (if (partnerUid.isNotBlank() && !partnerUid.startsWith("contact_")) partnerUid else null)
+                                            )
+                                        } else {
+                                            currentList.add(
+                                                0,
+                                                FamilyMember(
+                                                    id = partnerContactId,
+                                                    name = partnerName.ifBlank { "Talkly User" },
+                                                    relation = "Contact",
+                                                    avatarUrl = partnerAvatar.ifBlank { null },
+                                                    status = "Available on Talkly 💬",
+                                                    phone = partnerPhone,
+                                                    isOnline = true,
+                                                    isTyping = false,
+                                                    lastSeen = "Online",
+                                                    unreadCount = 0,
+                                                    isPinned = false,
+                                                    isRegisteredOnTalkly = true,
+                                                    firebaseUid = if (partnerUid.isNotBlank() && !partnerUid.startsWith("contact_")) partnerUid else null
+                                                )
+                                            )
+                                        }
+                                        setFamilyMembersWithDeduplication(currentList)
+                                        saveContactsToPrefs()
+
+                                        val currentSavedMe = _contactsWhoSavedMe.value.toMutableSet()
+                                        if (partnerSuffix.isNotBlank()) currentSavedMe.add(partnerSuffix)
+                                        if (partnerUid.isNotBlank()) currentSavedMe.add(partnerUid)
+                                        currentSavedMe.add(partnerContactId)
+                                        _contactsWhoSavedMe.value = currentSavedMe
+                                    }
                                 }
                             } catch (e: Exception) {
                                 Log.w(TAG, "Error parsing message request doc: ${e.localizedMessage}")
@@ -2767,7 +3097,7 @@ class FirebaseChatRepository(private val context: Context) {
             contactsSavedMeListener = firestore?.collectionGroup("contacts")
                 ?.addSnapshotListener { snap, _ ->
                     if (snap != null && !snap.isEmpty) {
-                        val savedMeSet = mutableSetOf<String>()
+                        val savedMeSet = _contactsWhoSavedMe.value.toMutableSet()
                         for (doc in snap.documents) {
                             val cSuffix = doc.getString("phoneSuffix") ?: ""
                             val cPhone = doc.getString("phone") ?: ""
@@ -2796,7 +3126,16 @@ class FirebaseChatRepository(private val context: Context) {
         }
 
         val targetPhone = targetMember.phone
-        val targetSuffix = PhoneUtils.extractPhoneSuffix(targetPhone)
+        val targetPhoneSuffix = PhoneUtils.extractPhoneSuffix(targetPhone)
+        val targetIdSuffix = PhoneUtils.extractPhoneSuffix(targetMember.id)
+        val targetUidSuffix = targetMember.firebaseUid?.let { PhoneUtils.extractPhoneSuffix(it) } ?: ""
+        val targetSuffix = when {
+            targetPhoneSuffix.isNotBlank() -> targetPhoneSuffix
+            targetIdSuffix.isNotBlank() -> targetIdSuffix
+            targetUidSuffix.isNotBlank() -> targetUidSuffix
+            else -> ""
+        }
+
         val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
         val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
         val myPhone = sessionPrefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", "") ?: ""
@@ -2833,7 +3172,7 @@ class FirebaseChatRepository(private val context: Context) {
                 _contactsWhoSavedMe.value.contains(targetMember.id) ||
                 (targetMember.firebaseUid != null && _contactsWhoSavedMe.value.contains(targetMember.firebaseUid))
 
-        return iHaveTargetSaved && targetHasMeSaved
+        return (iHaveTargetSaved && targetHasMeSaved) || hasAcceptedRequest
     }
 
     fun sendNextMessageRequest(
@@ -2963,17 +3302,18 @@ class FirebaseChatRepository(private val context: Context) {
             if (currentUid.isNotBlank() && currentUid != "self") {
                 try {
                     val docKey = if (senderSuffix.isNotBlank()) senderSuffix else contactId
+                    val contactData = mapOf(
+                        "uid" to (if (senderUid.isNotBlank() && !senderUid.startsWith("contact_")) senderUid else null),
+                        "phoneSuffix" to senderSuffix,
+                        "phone" to senderPhone,
+                        "name" to realName,
+                        "avatarUrl" to realAvatar,
+                        "is_friend" to true,
+                        "status" to "ACCEPTED",
+                        "savedAt" to System.currentTimeMillis()
+                    )
                     firestore?.collection("users")?.document(currentUid)?.collection("contacts")?.document(docKey)
-                        ?.set(
-                            mapOf(
-                                "uid" to (if (senderUid.isNotBlank() && !senderUid.startsWith("contact_")) senderUid else null),
-                                "phoneSuffix" to senderSuffix,
-                                "phone" to senderPhone,
-                                "name" to realName,
-                                "avatarUrl" to realAvatar,
-                                "savedAt" to System.currentTimeMillis()
-                            )
-                        )
+                        ?.set(contactData, com.google.firebase.firestore.SetOptions.merge())
                 } catch (e: Exception) {
                     Log.w(TAG, "Error saving contact to User B contacts: ${e.localizedMessage}")
                 }
@@ -2983,21 +3323,28 @@ class FirebaseChatRepository(private val context: Context) {
             if (senderUid.isNotBlank() && senderUid != "self" && !senderUid.startsWith("contact_")) {
                 try {
                     val myDocKey = if (mySuffix.isNotBlank()) mySuffix else currentUid
+                    val reciprocalData = mapOf(
+                        "uid" to currentUid,
+                        "phoneSuffix" to mySuffix,
+                        "phone" to myPhone,
+                        "name" to myName,
+                        "avatarUrl" to myAvatar,
+                        "is_friend" to true,
+                        "status" to "ACCEPTED",
+                        "savedAt" to System.currentTimeMillis()
+                    )
                     firestore?.collection("users")?.document(senderUid)?.collection("contacts")?.document(myDocKey)
-                        ?.set(
-                            mapOf(
-                                "uid" to currentUid,
-                                "phoneSuffix" to mySuffix,
-                                "phone" to myPhone,
-                                "name" to myName,
-                                "avatarUrl" to myAvatar,
-                                "savedAt" to System.currentTimeMillis()
-                            )
-                        )
+                        ?.set(reciprocalData, com.google.firebase.firestore.SetOptions.merge())
                 } catch (e: Exception) {
                     Log.w(TAG, "Error saving reciprocal contact to User A contacts: ${e.localizedMessage}")
                 }
             }
+
+            val currentSavedMe = _contactsWhoSavedMe.value.toMutableSet()
+            if (senderSuffix.isNotBlank()) currentSavedMe.add(senderSuffix)
+            if (senderUid.isNotBlank()) currentSavedMe.add(senderUid)
+            currentSavedMe.add(contactId)
+            _contactsWhoSavedMe.value = currentSavedMe
 
             onComplete?.invoke()
         }

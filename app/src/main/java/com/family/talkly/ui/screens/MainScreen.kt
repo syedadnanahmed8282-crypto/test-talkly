@@ -281,7 +281,14 @@ fun MainScreen(
                 chatRepository.triggerSimulatedTypingReply(currentMember.id)
             },
             onToggleReaction = { messageId, reactionEmoji ->
-                chatRepository.toggleMessageReaction(currentMember.id, messageId, reactionEmoji)
+                chatRepository.toggleMessageReaction(
+                    memberId = currentMember.id,
+                    messageId = messageId,
+                    reactionEmoji = reactionEmoji,
+                    currentUserId = currentUserProfile?.uid ?: "self",
+                    currentUserName = currentUserProfile?.name ?: "You",
+                    currentUserAvatar = currentUserProfile?.profilePicUrl
+                )
             },
             onDeleteForYou = { messageId ->
                 chatRepository.deleteMessageForYou(currentMember.id, messageId)
@@ -341,7 +348,8 @@ fun MainScreen(
             },
             onClearChatHistory = {
                 chatRepository.deleteChatHistory(currentMember.id)
-            }
+            },
+            currentUserProfile = currentUserProfile
         )
         return
     }
@@ -420,6 +428,14 @@ fun MainScreen(
         },
         onUnblockUser = { memberId ->
             chatRepository.unblockUser(memberId)
+        },
+        onRefresh = {
+            val uid = currentUserProfile?.uid ?: ""
+            if (uid.isNotBlank()) {
+                chatRepository.invalidateLocalCacheAndSyncPrimaryProfile(uid)
+            } else {
+                chatRepository.startRealtimeMessageSync(null)
+            }
         }
     )
 }

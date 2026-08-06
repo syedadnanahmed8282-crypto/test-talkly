@@ -132,6 +132,18 @@ class ZegoCallEngineManager(private val context: Context) {
     init {
         Log.i(TAG, "ZEGOCloud Express Engine initialized with AppID: $ZEGO_APP_ID")
         initZegoExpressEngine(context)
+
+        // Safety lifecycle state manager listener: force stop outgoing/incoming sounds on connected/ended state transitions
+        scope.launch {
+            _callState.collect { info ->
+                when (info.state) {
+                    CallState.ACTIVE, CallState.ENDED, CallState.IDLE -> {
+                        callSoundManager.stopAllSounds()
+                    }
+                    else -> {}
+                }
+            }
+        }
     }
 
     @Synchronized
@@ -147,6 +159,26 @@ class ZegoCallEngineManager(private val context: Context) {
             }
 
             expressEngine = ZegoExpressEngine.createEngine(profile, object : IZegoEventHandler() {
+                override fun onRoomUserUpdate(
+                    roomID: String?,
+                    updateType: ZegoUpdateType?,
+                    userList: ArrayList<ZegoUser>?
+                ) {
+                    Log.d(TAG, "onRoomUserUpdate: roomID=$roomID, updateType=$updateType, users=${userList?.size}")
+                    if (updateType == ZegoUpdateType.ADD && !userList.isNullOrEmpty()) {
+                        val currentState = _callState.value.state
+                        if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) {
+                            Log.d(TAG, "Remote peer joined Zego room: stopping outgoing ringtone immediately")
+                            ringingTimeoutJob?.cancel()
+                            callSoundManager.stopAllSounds()
+                            val isVideo = (_callState.value.callType == CallType.VIDEO)
+                            callSoundManager.configureAudioForActiveCall(isSpeakerOn = isVideo, isMuted = _callState.value.isMuted)
+                            _callState.value = _callState.value.copy(state = CallState.ACTIVE, isSpeakerOn = isVideo)
+                            startCallTimer()
+                        }
+                    }
+                }
+
                 override fun onRoomStreamUpdate(
                     roomID: String?,
                     updateType: ZegoUpdateType?,
@@ -157,7 +189,16 @@ class ZegoCallEngineManager(private val context: Context) {
                     Log.d(TAG, "onRoomStreamUpdate: roomID=$roomID, updateType=$updateType, streams=${streamList.size}")
 
                     if (updateType == ZegoUpdateType.ADD) {
+                        Log.d(TAG, "Remote stream ADDED: stopping outgoing ringtone and configuring active audio")
+                        ringingTimeoutJob?.cancel()
                         callSoundManager.stopAllSounds()
+                        val isVideo = (_callState.value.callType == CallType.VIDEO)
+                        callSoundManager.configureAudioForActiveCall(isSpeakerOn = isVideo, isMuted = _callState.value.isMuted)
+                        _callState.value = _callState.value.copy(
+                            state = CallState.ACTIVE,
+                            isSpeakerOn = isVideo
+                        )
+
                         for (stream in streamList) {
                             val streamID = stream.streamID
                             Log.d(TAG, "Remote stream ADDED: streamID=$streamID by user=${stream.user?.userID}")
@@ -207,6 +248,17 @@ class ZegoCallEngineManager(private val context: Context) {
                     extendedData: JSONObject?
                 ) {
                     Log.d(TAG, "onPlayerStateUpdate: streamID=$streamID, state=$state, errorCode=$errorCode")
+                    if (state == ZegoPlayerState.PLAYING) {
+                        Log.d(TAG, "Remote player state PLAYING: stopping ringtone immediately")
+                        ringingTimeoutJob?.cancel()
+                        callSoundManager.stopAllSounds()
+                        val isVideo = (_callState.value.callType == CallType.VIDEO)
+                        callSoundManager.configureAudioForActiveCall(isSpeakerOn = isVideo, isMuted = _callState.value.isMuted)
+                        _callState.value = _callState.value.copy(
+                            state = CallState.ACTIVE,
+                            isRemoteStreamPlaying = true
+                        )
+                    }
                 }
             })
             Log.i(TAG, "ZegoExpressEngine created successfully")
@@ -459,14 +511,48 @@ class ZegoCallEngineManager(private val context: Context) {
 
         val myProfile = currentUserProfile ?: getLocalUserProfile()
         val myUid = myProfile.uid
-        val mySuffix = myProfile.phoneSuffix
+        val myPhone = myProfile.phoneNumber
+        val mySuffix = myProfile.phoneSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(myPhone) }
 
-        val isMeCaller = (myUid.isNotBlank() && callerUid == myUid) || (mySuffix.isNotBlank() && callerSuffix == mySuffix)
-        val isMeReceiver = (myUid.isNotBlank() && receiverUid == myUid) || (mySuffix.isNotBlank() && receiverSuffix == mySuffix) || (!isMeCaller)
+        val isMeCaller = (myUid.isNotBlank() && myUid != "self" && callerUid == myUid) ||
+                (mySuffix.isNotBlank() && callerSuffix.isNotBlank() && callerSuffix == mySuffix) ||
+                (myPhone.isNotBlank() && callerPhone.isNotBlank() && callerPhone == myPhone) ||
+                ((_callState.value.state == CallState.OUTGOING_CALLING || _callState.value.state == CallState.OUTGOING_RINGING) && _callState.value.roomID == roomID)
+
+        val isMeReceiver = !isMeCaller && (
+                (myUid.isNotBlank() && myUid != "self" && receiverUid == myUid) ||
+                (mySuffix.isNotBlank() && receiverSuffix.isNotBlank() && receiverSuffix == mySuffix) ||
+                (myPhone.isNotBlank() && receiverPhone.isNotBlank() && receiverPhone == myPhone)
+        )
 
         when (status) {
-            "RINGING" -> {
+            "CALLING", "RINGING" -> {
                 if (isMeReceiver && !isMeCaller) {
+                    val callTimestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
+                    val callAgeMs = System.currentTimeMillis() - callTimestamp
+                    if (callAgeMs > 45_000L) {
+                        Log.d(TAG, "Ignoring stale incoming call (age: ${callAgeMs}ms)")
+                        try {
+                            firestore?.collection("active_calls")?.document("user_$myUid")?.update("status", "MISSED")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to update stale call status: ${e.localizedMessage}")
+                        }
+                        return
+                    }
+
+                    // Fire PEER_RINGING ACK back to caller instantly
+                    try {
+                        val ringingAck = mapOf("status" to "PEER_RINGING", "updatedAt" to System.currentTimeMillis())
+                        if (id.isNotBlank()) {
+                            firestore?.collection("active_calls")?.document(id)?.set(ringingAck, com.google.firebase.firestore.SetOptions.merge())
+                        }
+                        if (callerUid.isNotBlank()) {
+                            firestore?.collection("active_calls")?.document("user_$callerUid")?.set(ringingAck, com.google.firebase.firestore.SetOptions.merge())
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error sending PEER_RINGING ACK: ${e.localizedMessage}")
+                    }
+
                     val currentState = _callState.value.state
                     if (currentState == CallState.IDLE || currentState == CallState.ENDED) {
                         callSoundManager.startIncomingRingtone()
@@ -488,6 +574,15 @@ class ZegoCallEngineManager(private val context: Context) {
                             roomID = roomID,
                             durationSeconds = 0
                         )
+                    }
+                }
+            }
+            "PEER_RINGING" -> {
+                if (isMeCaller) {
+                    val currentState = _callState.value.state
+                    if (currentState == CallState.OUTGOING_CALLING) {
+                        Log.d(TAG, "Recipient device received signal. Transitioning state to OUTGOING_RINGING")
+                        _callState.value = _callState.value.copy(state = CallState.OUTGOING_RINGING)
                     }
                 }
             }
@@ -590,7 +685,7 @@ class ZegoCallEngineManager(private val context: Context) {
             "receiverPhone" to targetPhone,
             "receiverSuffix" to targetSuffix,
             "callType" to callType.name,
-            "status" to "RINGING",
+            "status" to "CALLING",
             "roomID" to roomID,
             "timestamp" to System.currentTimeMillis()
         )
@@ -625,22 +720,15 @@ class ZegoCallEngineManager(private val context: Context) {
 
         ringingTimeoutJob?.cancel()
 
-        scope.launch {
-            delay(1500)
-            if (_callState.value.state == CallState.OUTGOING_CALLING) {
-                _callState.value = _callState.value.copy(state = CallState.OUTGOING_RINGING)
-            }
-        }
-
         ringingTimeoutJob = scope.launch {
             delay(30000)
             val currentState = _callState.value.state
             if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) {
-                Log.d(TAG, "Call timed out after 30s: No answer from ${member.name}")
-                android.widget.Toast.makeText(context, "No answer from ${member.name}", android.widget.Toast.LENGTH_SHORT).show()
+                Log.d(TAG, "Call timed out after 30s: ${member.name} is unavailable or unreachable")
+                android.widget.Toast.makeText(context, "${member.name} is unavailable / unreachable", android.widget.Toast.LENGTH_SHORT).show()
 
                 val timedOutData = callData.toMutableMap()
-                timedOutData["status"] = "TIMED_OUT"
+                timedOutData["status"] = "UNAVAILABLE"
                 publishCallSignalToTargets(callerProfile, targetUid, targetSuffix, timedOutData)
 
                 val msgText = if (callType == CallType.VIDEO) "Missed video call 📹" else "Missed audio call 📞"

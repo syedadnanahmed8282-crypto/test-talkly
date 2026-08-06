@@ -1,6 +1,14 @@
 package com.family.talkly
 
+import android.app.KeyguardManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -50,6 +58,22 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // Turn screen on and show over lockscreen for incoming call wake-up
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+            val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+            keyguardManager?.requestDismissKeyguard(this, null)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            )
+        }
+
         try {
             if (FirebaseApp.getApps(applicationContext).isEmpty()) {
                 FirebaseApp.initializeApp(applicationContext)
@@ -66,6 +90,9 @@ class MainActivity : ComponentActivity() {
 
         com.family.talkly.util.TalklyNotificationHelper.initNotificationChannels(applicationContext)
         com.family.talkly.util.FcmTokenManager.syncFcmToken(applicationContext)
+
+        // Request battery optimization exemption for uninterrupted push delivery
+        requestBatteryOptimizationExemption()
 
         // Schedule WorkManager job for deleting expired Firestore messages (>48 hours old)
         DeleteExpiredMessagesWorker.schedulePeriodicCleanup(applicationContext)
@@ -153,6 +180,12 @@ class MainActivity : ComponentActivity() {
                                     chatRepository.resetSessionOnLogout()
                                     zegoManager.clearSession()
                                     authManager.logout()
+
+                                    val intent = android.content.Intent(this@MainActivity, MainActivity::class.java).apply {
+                                        flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
+                                    }
+                                    startActivity(intent)
+                                    finish()
                                 },
                                 onSaveProfile = { name, bio, picUrl, coverUrl ->
                                     authManager.saveUserProfile(
@@ -235,6 +268,22 @@ class MainActivity : ComponentActivity() {
                 )
                 zegoManager.setIncomingCallFromKilledState(incomingMember, roomId, callType)
             }
+        }
+    }
+
+    private fun requestBatteryOptimizationExemption() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                if (powerManager != null && !powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "Battery optimization request failed/ignored: ${e.localizedMessage}")
         }
     }
 }

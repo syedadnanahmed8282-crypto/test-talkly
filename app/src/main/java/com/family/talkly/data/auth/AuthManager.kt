@@ -93,6 +93,9 @@ class AuthManager(private val context: Context) {
 
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    @Volatile
+    private var isLoggingOut = false
+
     private val _authState = MutableStateFlow<AuthState>(AuthState.InitialCheck)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
 
@@ -110,6 +113,10 @@ class AuthManager(private val context: Context) {
      * Checks local session and Firebase Auth current user to resume session
      */
     fun checkCurrentSession() {
+        if (isLoggingOut) {
+            _authState.value = AuthState.Unauthenticated
+            return
+        }
         try {
             val isLoggedIn = prefs.getBoolean(KEY_IS_LOGGED_IN, false)
             val savedUid = prefs.getString(KEY_UID, null)
@@ -171,6 +178,7 @@ class AuthManager(private val context: Context) {
         onSuccess: () -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
+        isLoggingOut = false
         if (phoneNumber.isBlank() || password.isBlank() || name.isBlank()) {
             val err = "Please enter your name, phone number, and password."
             _authState.value = AuthState.Error(err)
@@ -236,6 +244,7 @@ class AuthManager(private val context: Context) {
         onSuccess: () -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
+        isLoggingOut = false
         if (phoneNumber.isBlank() || password.isBlank()) {
             val err = "Please enter both mobile phone number and password."
             _authState.value = AuthState.Error(err)
@@ -720,12 +729,12 @@ class AuthManager(private val context: Context) {
     private var currentUserSnapshotListener: ListenerRegistration? = null
 
     fun setupCurrentUserSnapshotListener(uid: String) {
-        if (uid.isBlank()) return
+        if (isLoggingOut || uid.isBlank()) return
         currentUserSnapshotListener?.remove()
         try {
             currentUserSnapshotListener = getFirestore().collection("users").document(uid)
                 .addSnapshotListener { snapshot, error ->
-                    if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                    if (isLoggingOut || error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
                     val name = snapshot.getString("name") ?: ""
                     val pic = snapshot.getString("profilePicUrl")
                         ?: snapshot.getString("photoUrl")
@@ -756,13 +765,27 @@ class AuthManager(private val context: Context) {
                             currentProfile?.coverPhotoUrl ?: ""
                         }
 
+                        val updateTimestamp = snapshot.getLong("updatedAt") ?: System.currentTimeMillis()
+                        val effectivePicBusted = PhoneUtils.appendCacheBuster(effectivePic, updateTimestamp) ?: effectivePic
+                        val effectiveCoverBusted = PhoneUtils.appendCacheBuster(effectiveCover, updateTimestamp) ?: effectiveCover
+
+                        if (effectivePicBusted != currentProfile?.profilePicUrl || effectiveCoverBusted != currentProfile?.coverPhotoUrl) {
+                            try {
+                                val imageLoader = coil.Coil.imageLoader(context)
+                                imageLoader.memoryCache?.clear()
+                                imageLoader.diskCache?.clear()
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed clearing Coil image cache: ${e.localizedMessage}")
+                            }
+                        }
+
                         val updatedProfile = UserProfile(
                             uid = uid,
                             name = name,
                             phoneNumber = if (phone.isNotBlank()) phone else (currentProfile?.phoneNumber ?: ""),
                             phoneSuffix = PhoneUtils.extractPhoneSuffix(phone),
-                            profilePicUrl = effectivePic,
-                            coverPhotoUrl = effectiveCover,
+                            profilePicUrl = effectivePicBusted,
+                            coverPhotoUrl = effectiveCoverBusted,
                             bio = bio
                         )
                         saveLocalSession(uid, updatedProfile.name, updatedProfile.phoneNumber, updatedProfile.profilePicUrl, updatedProfile.bio, updatedProfile.coverPhotoUrl)
@@ -778,6 +801,7 @@ class AuthManager(private val context: Context) {
      * Checks Firestore 'users/{uid}' collection to see if user has completed profile setup
      */
     private fun checkUserProfileInFirestore(uid: String, phoneNumber: String) {
+        if (isLoggingOut) return
         setupCurrentUserSnapshotListener(uid)
         performAutomaticAccountMerge(uid, phoneNumber)
     }
@@ -941,6 +965,10 @@ class AuthManager(private val context: Context) {
                 deleteOldStorageFile(oldCoverUrl)
             }
 
+            val saveTimestamp = System.currentTimeMillis()
+            finalPicUrl = PhoneUtils.appendCacheBuster(finalPicUrl, saveTimestamp) ?: finalPicUrl
+            finalCoverUrl = PhoneUtils.appendCacheBuster(finalCoverUrl, saveTimestamp) ?: finalCoverUrl
+
             saveLocalSession(uid, name, phone, finalPicUrl, bio, finalCoverUrl)
 
             // Force clear Coil image memory & disk caches to prevent stale image rendering
@@ -1080,17 +1108,36 @@ class AuthManager(private val context: Context) {
     }
 
     fun logout() {
+        isLoggingOut = true
+        try {
+            currentUserSnapshotListener?.remove()
+            currentUserSnapshotListener = null
+        } catch (e: Exception) {
+            Log.w(TAG, "Error detaching snapshot listener on logout: ${e.localizedMessage}")
+        }
+
         try {
             getFirebaseAuth().signOut()
         } catch (e: Exception) {
             Log.w(TAG, "Sign out exception: ${e.localizedMessage}")
         }
-        prefs.edit().clear().apply()
-        try {
-            context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE).edit().clear().apply()
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed clearing talkly_user_session prefs: ${e.message}")
+
+        val prefNames = listOf(
+            PREFS_NAME,
+            "talkly_user_session",
+            "talkly_saved_contacts_prefs",
+            "talkly_theme_prefs",
+            "talkly_fcm_prefs",
+            "talkly_call_prefs"
+        )
+        prefNames.forEach { pName ->
+            try {
+                context.getSharedPreferences(pName, Context.MODE_PRIVATE).edit().clear().apply()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed clearing prefs $pName: ${e.message}")
+            }
         }
+
         _authState.value = AuthState.Unauthenticated
     }
 }

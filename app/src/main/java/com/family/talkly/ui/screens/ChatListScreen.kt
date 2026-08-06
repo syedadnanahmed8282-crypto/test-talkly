@@ -74,6 +74,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CallMissed
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import com.family.talkly.ui.theme.LocalIsDarkTheme
 import com.family.talkly.ui.theme.PrimaryDarkPurple
 import com.family.talkly.ui.theme.SecondaryLightSage
@@ -139,7 +142,8 @@ fun ChatListScreen(
     onSendStatusReply: ((targetUserId: String, replyText: String) -> Unit)? = null,
     blockedUserIds: Set<String> = emptySet(),
     onBlockUser: ((String) -> Unit)? = null,
-    onUnblockUser: ((String) -> Unit)? = null
+    onUnblockUser: ((String) -> Unit)? = null,
+    onRefresh: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     var selectedHeaderTab by remember { mutableIntStateOf(0) } // 0: Chats, 1: Saved Contacts
@@ -570,13 +574,28 @@ fun ChatListScreen(
             )
         }
     ) { innerPadding ->
-        Box(
+        var isRefreshing by remember { mutableStateOf(false) }
+        val coroutineScope = rememberCoroutineScope()
+
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = {
+                coroutineScope.launch {
+                    isRefreshing = true
+                    onRefresh?.invoke()
+                    kotlinx.coroutines.delay(1200)
+                    isRefreshing = false
+                }
+            },
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
                 .background(PrimaryDarkPurple)
         ) {
-            Column(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
                 if (selectedHeaderTab == 0) {
                     // Family Quick Status / Stories Bar
                     Column(
@@ -585,11 +604,11 @@ fun ChatListScreen(
                             .background(PrimaryDarkPurple)
                             .padding(vertical = 12.dp)
                     ) {
-                        val selfGroup = statusGroups.firstOrNull { it.userId == "self" }
+                        val selfGroup = statusGroups.firstOrNull { it.userId == "self" || it.userId == currentUid || (currentUserProfile?.uid != null && it.userId == currentUserProfile.uid) }
                         val hasMyStatus = selfGroup != null && selfGroup.statuses.isNotEmpty()
-                        val contactGroups = remember(statusGroups) {
+                        val contactGroups = remember(statusGroups, currentUid, currentUserProfile?.uid) {
                             statusGroups
-                                .filter { it.userId != "self" && it.statuses.isNotEmpty() }
+                                .filter { it.userId != "self" && it.userId != currentUid && (currentUserProfile?.uid == null || it.userId != currentUserProfile.uid) && it.statuses.isNotEmpty() }
                                 .sortedByDescending { it.hasUnseen }
                         }
 
@@ -1161,6 +1180,7 @@ fun ChatListScreen(
             }
         }
     }
+}
 }
 
 @Composable

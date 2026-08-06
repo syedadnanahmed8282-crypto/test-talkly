@@ -88,11 +88,13 @@ import java.io.FileOutputStream
 @Composable
 fun ImageCropDialog(
     imageUri: Uri,
+    isCoverCrop: Boolean = false,
     onDismiss: () -> Unit,
     onImageCropped: (Uri) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val density = LocalContext.current.resources.displayMetrics.density
 
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
@@ -100,7 +102,11 @@ fun ImageCropDialog(
     var rotationDegrees by remember { mutableIntStateOf(0) }
     var isProcessing by remember { mutableStateOf(false) }
 
-    val cropBoxSizeDp = 260.dp
+    val cropBoxWidthDp = if (isCoverCrop) 330.dp else 270.dp
+    val cropBoxHeightDp = if (isCoverCrop) 185.dp else 270.dp
+
+    val boxWidthPx = cropBoxWidthDp.value * density
+    val boxHeightPx = cropBoxHeightDp.value * density
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -112,17 +118,17 @@ fun ImageCropDialog(
     ) {
         Surface(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(12.dp),
+                .fillMaxWidth(0.96f)
+                .padding(8.dp),
             shape = RoundedCornerShape(24.dp),
             color = Color(0xFF111B21)
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .fillMaxWidth()
                     .padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.SpaceBetween
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // Header Bar
                 Row(
@@ -139,7 +145,7 @@ fun ImageCropDialog(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Crop Profile Picture",
+                            text = if (isCoverCrop) "Crop Cover Photo" else "Crop Profile Picture",
                             fontWeight = FontWeight.Bold,
                             fontSize = 18.sp,
                             color = Color.White
@@ -159,21 +165,20 @@ fun ImageCropDialog(
                 }
 
                 Text(
-                    text = "Pinch to zoom, drag to align photo inside circle",
+                    text = if (isCoverCrop) "Pinch to zoom, drag to align inside cover box" else "Pinch to zoom, drag to align photo inside circle",
                     fontSize = 12.sp,
-                    color = Color.Gray,
-                    modifier = Modifier.padding(bottom = 8.dp)
+                    color = Color.Gray
                 )
 
                 // Crop Viewport Box
                 Box(
                     modifier = Modifier
-                        .size(cropBoxSizeDp)
+                        .size(width = cropBoxWidthDp, height = cropBoxHeightDp)
                         .clipToBounds()
                         .background(Color.Black)
                         .pointerInput(Unit) {
                             detectTransformGestures { _, pan, zoom, _ ->
-                                scale = (scale * zoom).coerceIn(1f, 4f)
+                                scale = (scale * zoom).coerceIn(1f, 5f)
                                 offsetX += pan.x
                                 offsetY += pan.y
                             }
@@ -196,39 +201,72 @@ fun ImageCropDialog(
                             )
                     )
 
-                    // Overlay Mask with Circular Crop Frame
+                    // Overlay Mask
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         val canvasWidth = size.width
                         val canvasHeight = size.height
-                        val radius = canvasWidth / 2f - 8.dp.toPx()
 
-                        // Dark semi-transparent backdrop outside circle
-                        val path = Path().apply {
-                            fillType = PathFillType.EvenOdd
-                            addRect(Rect(0f, 0f, canvasWidth, canvasHeight))
-                            addOval(Rect(center.x - radius, center.y - radius, center.x + radius, center.y + radius))
+                        if (isCoverCrop) {
+                            val cornerRadius = 14.dp.toPx()
+                            val strokeWidthPx = 3.dp.toPx()
+                            val halfStroke = strokeWidthPx / 2f
+
+                            val path = Path().apply {
+                                fillType = PathFillType.EvenOdd
+                                addRect(Rect(0f, 0f, canvasWidth, canvasHeight))
+                                addRoundRect(
+                                    androidx.compose.ui.geometry.RoundRect(
+                                        rect = Rect(halfStroke, halfStroke, canvasWidth - halfStroke, canvasHeight - halfStroke),
+                                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(cornerRadius, cornerRadius)
+                                    )
+                                )
+                            }
+                            drawPath(path = path, color = Color.Black.copy(alpha = 0.65f))
+
+                            drawRoundRect(
+                                color = WhatsappGreen,
+                                topLeft = Offset(halfStroke, halfStroke),
+                                size = Size(canvasWidth - strokeWidthPx, canvasHeight - strokeWidthPx),
+                                cornerRadius = androidx.compose.ui.geometry.CornerRadius(cornerRadius, cornerRadius),
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokeWidthPx)
+                            )
+
+                            // Grid lines inside crop box
+                            val gridColor = Color.White.copy(alpha = 0.25f)
+                            val strokeW = 1.dp.toPx()
+                            val hThird = canvasHeight / 3f
+                            val wThird = canvasWidth / 3f
+
+                            drawLine(gridColor, Offset(0f, hThird), Offset(canvasWidth, hThird), strokeWidth = strokeW)
+                            drawLine(gridColor, Offset(0f, hThird * 2f), Offset(canvasWidth, hThird * 2f), strokeWidth = strokeW)
+                            drawLine(gridColor, Offset(wThird, 0f), Offset(wThird, canvasHeight), strokeWidth = strokeW)
+                            drawLine(gridColor, Offset(wThird * 2f, 0f), Offset(wThird * 2f, canvasHeight), strokeWidth = strokeW)
+                        } else {
+                            val radius = canvasWidth / 2f - 6.dp.toPx()
+
+                            val path = Path().apply {
+                                fillType = PathFillType.EvenOdd
+                                addRect(Rect(0f, 0f, canvasWidth, canvasHeight))
+                                addOval(Rect(center.x - radius, center.y - radius, center.x + radius, center.y + radius))
+                            }
+                            drawPath(path = path, color = Color.Black.copy(alpha = 0.65f))
+
+                            drawCircle(
+                                color = WhatsappGreen,
+                                radius = radius,
+                                center = center,
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx())
+                            )
+
+                            val thirdR = radius * 0.33f
+                            val gridColor = Color.White.copy(alpha = 0.25f)
+                            val strokeW = 1.dp.toPx()
+
+                            drawLine(gridColor, Offset(center.x - radius * 0.9f, center.y - thirdR), Offset(center.x + radius * 0.9f, center.y - thirdR), strokeWidth = strokeW)
+                            drawLine(gridColor, Offset(center.x - radius * 0.9f, center.y + thirdR), Offset(center.x + radius * 0.9f, center.y + thirdR), strokeWidth = strokeW)
+                            drawLine(gridColor, Offset(center.x - thirdR, center.y - radius * 0.9f), Offset(center.x - thirdR, center.y + radius * 0.9f), strokeWidth = strokeW)
+                            drawLine(gridColor, Offset(center.x + thirdR, center.y - radius * 0.9f), Offset(center.x + thirdR, center.y + radius * 0.9f), strokeWidth = strokeW)
                         }
-                        drawPath(path = path, color = Color.Black.copy(alpha = 0.65f))
-
-                        // Green boundary ring around crop circle
-                        drawCircle(
-                            color = WhatsappGreen,
-                            radius = radius,
-                            center = center,
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx())
-                        )
-
-                        // Subtle Grid lines inside crop aperture
-                        val thirdR = radius * 0.33f
-                        val gridColor = Color.White.copy(alpha = 0.25f)
-                        val strokeW = 1.dp.toPx()
-
-                        // Horizontal lines
-                        drawLine(gridColor, Offset(center.x - radius * 0.9f, center.y - thirdR), Offset(center.x + radius * 0.9f, center.y - thirdR), strokeWidth = strokeW)
-                        drawLine(gridColor, Offset(center.x - radius * 0.9f, center.y + thirdR), Offset(center.x + radius * 0.9f, center.y + thirdR), strokeWidth = strokeW)
-                        // Vertical lines
-                        drawLine(gridColor, Offset(center.x - thirdR, center.y - radius * 0.9f), Offset(center.x - thirdR, center.y + radius * 0.9f), strokeWidth = strokeW)
-                        drawLine(gridColor, Offset(center.x + thirdR, center.y - radius * 0.9f), Offset(center.x + thirdR, center.y + radius * 0.9f), strokeWidth = strokeW)
                     }
                 }
 
@@ -253,7 +291,7 @@ fun ImageCropDialog(
                         Slider(
                             value = scale,
                             onValueChange = { scale = it },
-                            valueRange = 1f..4f,
+                            valueRange = 1f..5f,
                             modifier = Modifier.weight(1f),
                             colors = SliderDefaults.colors(
                                 thumbColor = WhatsappGreen,
@@ -263,7 +301,7 @@ fun ImageCropDialog(
                         )
 
                         IconButton(
-                            onClick = { scale = (scale + 0.2f).coerceAtMost(4f) }
+                            onClick = { scale = (scale + 0.2f).coerceAtMost(5f) }
                         ) {
                             Icon(imageVector = Icons.Default.Add, contentDescription = "Zoom In", tint = Color.White)
                         }
@@ -325,14 +363,15 @@ fun ImageCropDialog(
                                     offsetX = offsetX,
                                     offsetY = offsetY,
                                     rotationDegrees = rotationDegrees,
-                                    viewportSizePx = 600
+                                    boxWidthPx = boxWidthPx,
+                                    boxHeightPx = boxHeightPx,
+                                    isCoverCrop = isCoverCrop
                                 )
                                 withContext(Dispatchers.Main) {
                                     isProcessing = false
                                     if (croppedUri != null) {
                                         onImageCropped(croppedUri)
                                     } else {
-                                        // Fallback to original image uri if crop calculation failed
                                         onImageCropped(imageUri)
                                     }
                                 }
@@ -363,7 +402,9 @@ private fun cropAndSaveImage(
     offsetX: Float,
     offsetY: Float,
     rotationDegrees: Int,
-    viewportSizePx: Int = 600
+    boxWidthPx: Float,
+    boxHeightPx: Float,
+    isCoverCrop: Boolean
 ): Uri? {
     return try {
         val inputStream = context.contentResolver.openInputStream(imageUri) ?: return null
@@ -372,7 +413,6 @@ private fun cropAndSaveImage(
 
         if (originalBitmap == null) return null
 
-        // Apply rotation if needed
         val rotatedBitmap = if (rotationDegrees != 0) {
             val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
             Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
@@ -380,35 +420,42 @@ private fun cropAndSaveImage(
             originalBitmap
         }
 
-        // Target output size: square bitmap of viewportSizePx x viewportSizePx
-        val outputBitmap = Bitmap.createBitmap(viewportSizePx, viewportSizePx, Bitmap.Config.ARGB_8888)
+        val outputWidthPx = if (isCoverCrop) 1200 else 800
+        val outputHeightPx = if (isCoverCrop) 675 else 800
+
+        val outputBitmap = Bitmap.createBitmap(outputWidthPx, outputHeightPx, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(outputBitmap)
 
         val srcW = rotatedBitmap.width.toFloat()
         val srcH = rotatedBitmap.height.toFloat()
 
-        // Base fit scale to fit image in square viewport
-        val baseScale = maxOf(viewportSizePx / srcW, viewportSizePx / srcH)
-        val totalScale = baseScale * scale
+        // ContentScale.Fit scale factor matching AsyncImage inside the viewport Box
+        val fitScale = minOf(boxWidthPx / srcW, boxHeightPx / srcH)
+        val renderedW = srcW * fitScale
+        val renderedH = srcH * fitScale
 
-        val scaledW = srcW * totalScale
-        val scaledH = srcH * totalScale
+        val finalW = renderedW * scale
+        val finalH = renderedH * scale
 
-        val normOffsetX = (offsetX / 260f) * viewportSizePx
-        val normOffsetY = (offsetY / 260f) * viewportSizePx
+        val imageLeftInBox = (boxWidthPx - finalW) / 2f + offsetX
+        val imageTopInBox = (boxHeightPx - finalH) / 2f + offsetY
 
-        val left = (viewportSizePx - scaledW) / 2f + normOffsetX
-        val top = (viewportSizePx - scaledH) / 2f + normOffsetY
+        val scaleRatioX = outputWidthPx.toFloat() / boxWidthPx
+        val scaleRatioY = outputHeightPx.toFloat() / boxHeightPx
 
-        val destRect = RectF(left, top, left + scaledW, top + scaledH)
+        val outLeft = imageLeftInBox * scaleRatioX
+        val outTop = imageTopInBox * scaleRatioY
+        val outRight = outLeft + (finalW * scaleRatioX)
+        val outBottom = outTop + (finalH * scaleRatioY)
 
+        val destRect = RectF(outLeft, outTop, outRight, outBottom)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
         canvas.drawBitmap(rotatedBitmap, null, destRect, paint)
 
-        // Save cropped output bitmap to local cache file
-        val avatarFile = File(context.cacheDir, "cropped_avatar_${System.currentTimeMillis()}.jpg")
+        val prefix = if (isCoverCrop) "cropped_cover_" else "cropped_avatar_"
+        val avatarFile = File(context.cacheDir, "${prefix}${System.currentTimeMillis()}.jpg")
         FileOutputStream(avatarFile).use { out ->
-            outputBitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+            outputBitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
         }
 
         Uri.fromFile(avatarFile)

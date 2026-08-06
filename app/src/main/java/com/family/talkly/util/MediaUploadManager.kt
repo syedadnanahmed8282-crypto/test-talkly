@@ -1,0 +1,101 @@
+package com.family.talkly.util
+
+import android.content.Context
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
+import androidx.work.Data
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import com.family.talkly.data.local.TalklyDatabase
+import com.family.talkly.data.local.entity.ChatMessageEntity
+import com.family.talkly.data.models.MessageType
+import com.family.talkly.worker.MediaUploadWorker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import java.util.concurrent.TimeUnit
+
+object MediaUploadManager {
+
+    fun enqueueMediaUpload(
+        context: Context,
+        messageId: String,
+        chatKey: String,
+        recipientId: String,
+        messageType: MessageType,
+        localMediaUrl: String,
+        textContent: String = "",
+        replyToId: String? = null,
+        replyToName: String? = null,
+        replyToText: String? = null
+    ) {
+        val appContext = context.applicationContext
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val db = TalklyDatabase.getInstance(appContext)
+            val dao = db.chatMessageDao()
+
+            val existing = dao.getMessageById(messageId)
+            if (existing == null) {
+                val entity = ChatMessageEntity(
+                    id = messageId,
+                    chatKey = chatKey,
+                    senderId = "self",
+                    senderName = "You",
+                    receiverId = recipientId,
+                    messageType = messageType.name,
+                    textContent = textContent,
+                    mediaUrl = localMediaUrl,
+                    timestamp = System.currentTimeMillis(),
+                    isPending = true,
+                    isUploading = true,
+                    isFailed = false,
+                    uploadProgress = 0,
+                    replyToMessageId = replyToId,
+                    replyToSenderName = replyToName,
+                    replyToText = replyToText
+                )
+                dao.insertMessage(entity)
+            } else {
+                dao.updateUploadState(
+                    messageId = messageId,
+                    isPending = true,
+                    isUploading = true,
+                    isFailed = false,
+                    uploadProgress = 0,
+                    mediaUrl = localMediaUrl
+                )
+            }
+
+            val inputData = Data.Builder()
+                .putString("message_id", messageId)
+                .putString("chat_key", chatKey)
+                .putString("recipient_id", recipientId)
+                .putString("message_type", messageType.name)
+                .putString("local_media_url", localMediaUrl)
+                .putString("text_content", textContent)
+                .putString("reply_to_id", replyToId ?: "")
+                .putString("reply_to_name", replyToName ?: "")
+                .putString("reply_to_text", replyToText ?: "")
+                .build()
+
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+
+            val workRequest = OneTimeWorkRequestBuilder<MediaUploadWorker>()
+                .setInputData(inputData)
+                .setConstraints(constraints)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
+                .build()
+
+            WorkManager.getInstance(appContext).enqueueUniqueWork(
+                "work_upload_${messageId}",
+                ExistingWorkPolicy.REPLACE,
+                workRequest
+            )
+        }
+    }
+}
