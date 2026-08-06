@@ -95,6 +95,11 @@ class FirebaseChatRepository(private val context: Context) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    private val demoIdsSet = setOf(
+        "safwan", "israfel", "jolil", "samim", "akhter", "osman", "mohammad_raiu",
+        "dr_rashed", "monju", "sk_farid", "mom", "dad", "grandma", "brother", "sister"
+    )
+
     init {
         try {
             if (com.google.firebase.FirebaseApp.getApps(context).isEmpty()) {
@@ -160,11 +165,6 @@ class FirebaseChatRepository(private val context: Context) {
     fun isUserBlocked(userId: String): Boolean {
         return _blockedUserIds.value.contains(userId)
     }
-
-    private val demoIdsSet = setOf(
-        "safwan", "israfel", "jolil", "samim", "akhter", "osman", "mohammad_raiu",
-        "dr_rashed", "monju", "sk_farid", "mom", "dad", "grandma", "brother", "sister"
-    )
 
     private fun setFamilyMembersWithDeduplication(newList: List<FamilyMember>) {
         val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)

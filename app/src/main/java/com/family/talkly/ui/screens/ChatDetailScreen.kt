@@ -64,6 +64,8 @@ import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
@@ -2045,33 +2047,6 @@ fun ChatDetailScreen(
                 }
             }
 
-            // Quick Emoji Row
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color.White)
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                listOf("❤️", "👍", "🤗", "🍪", "🍲", "📸").forEach { emoji ->
-                    Text(
-                        text = emoji,
-                        fontSize = 20.sp,
-                        modifier = Modifier
-                            .clickable {
-                                onSendMessage(
-                                    emoji, MessageType.TEXT, null,
-                                    replyingToMessage?.id,
-                                    replyingToMessage?.senderName,
-                                    replyingToMessage?.textContent?.ifEmpty { "Media" }
-                                )
-                                replyingToMessage = null
-                            }
-                            .padding(4.dp)
-                    )
-                }
-            }
-
             // Editing Banner Bar directly above input field
             AnimatedVisibility(
                 visible = editingMessage != null,
@@ -2460,13 +2435,13 @@ fun ChatDetailScreen(
                     ) {
                         IconButton(
                             onClick = { showAttachmentDialog = true },
-                            modifier = Modifier.size(42.dp)
+                            modifier = Modifier.size(40.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.AttachFile,
+                                imageVector = Icons.Outlined.AttachFile,
                                 contentDescription = "Attach",
                                 tint = WhatsappTeal,
-                                modifier = Modifier.size(24.dp)
+                                modifier = Modifier.size(22.dp)
                             )
                         }
 
@@ -2555,7 +2530,7 @@ fun ChatDetailScreen(
                             modifier = Modifier.size(44.dp)
                         ) {
                             Icon(
-                                imageVector = if (textInput.isNotBlank()) Icons.AutoMirrored.Filled.Send else Icons.Default.Mic,
+                                imageVector = if (textInput.isNotBlank()) Icons.AutoMirrored.Filled.Send else Icons.Outlined.Mic,
                                 contentDescription = if (textInput.isNotBlank()) "Send" else "Record Audio",
                                 modifier = Modifier.size(20.dp)
                             )
