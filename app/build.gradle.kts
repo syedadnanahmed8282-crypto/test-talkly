@@ -15,12 +15,22 @@ android {
 
   defaultConfig {
     applicationId = "com.family.talkly"
-    minSdk = 24
+    minSdk = 23
     targetSdk = 36
     versionCode = 1
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    ndk {
+      abiFilters.addAll(setOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
+    }
+  }
+
+  splits {
+    abi {
+      isEnable = false
+    }
   }
 
   signingConfigs {
@@ -30,12 +40,26 @@ android {
       storePassword = System.getenv("STORE_PASSWORD")
       keyAlias = "upload"
       keyPassword = System.getenv("KEY_PASSWORD")
+      enableV1Signing = true
+      enableV2Signing = true
+      enableV3Signing = true
+      enableV4Signing = true
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
       storePassword = "android"
       keyAlias = "androiddebugkey"
       keyPassword = "android"
+      enableV1Signing = true
+      enableV2Signing = true
+      enableV3Signing = true
+      enableV4Signing = true
+    }
+    getByName("debug") {
+      enableV1Signing = true
+      enableV2Signing = true
+      enableV3Signing = true
+      enableV4Signing = true
     }
   }
 
