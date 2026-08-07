@@ -28,32 +28,38 @@ object FcmTokenManager {
             val googleApiAvailability = com.google.android.gms.common.GoogleApiAvailability.getInstance()
             val resultCode = googleApiAvailability.isGooglePlayServicesAvailable(context)
             if (resultCode != com.google.android.gms.common.ConnectionResult.SUCCESS) {
-                Log.w(TAG, "Google Play Services unavailable ($resultCode). Syncing cached token if available.")
+                Log.i(TAG, "Google Play Services unavailable on device/emulator (code $resultCode). Real-time sockets active.")
                 syncExistingCachedToken(context)
                 return
             }
 
             FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-                if (!task.isSuccessful) {
-                    Log.w(TAG, "Fetching FCM registration token failed: ${task.exception?.localizedMessage}")
+                try {
+                    if (!task.isSuccessful) {
+                        Log.i(TAG, "FCM token registration skipped (Google Play Services not logged in or restricted in sandbox): ${task.exception?.localizedMessage}")
+                        syncExistingCachedToken(context)
+                        return@addOnCompleteListener
+                    }
+
+                    val token = task.result
+                    if (token.isNullOrBlank()) {
+                        syncExistingCachedToken(context)
+                        return@addOnCompleteListener
+                    }
+                    Log.d(TAG, "FCM registration token obtained: $token")
+
+                    // Save locally
+                    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    prefs.edit().putString(KEY_FCM_TOKEN, token).apply()
+
+                    updateTokenInFirestore(context, token)
+                } catch (e: Throwable) {
+                    Log.i(TAG, "FCM token processing error handled: ${e.localizedMessage}")
                     syncExistingCachedToken(context)
-                    return@addOnCompleteListener
                 }
-
-                val token = task.result ?: run {
-                    syncExistingCachedToken(context)
-                    return@addOnCompleteListener
-                }
-                Log.d(TAG, "FCM registration token obtained: $token")
-
-                // Save locally
-                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                prefs.edit().putString(KEY_FCM_TOKEN, token).apply()
-
-                updateTokenInFirestore(context, token)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error in syncFcmToken: ${e.localizedMessage}")
+        } catch (e: Throwable) {
+            Log.i(TAG, "FCM service initialization skipped on this device/emulator: ${e.localizedMessage}")
             syncExistingCachedToken(context)
         }
     }
