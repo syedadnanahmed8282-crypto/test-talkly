@@ -3,6 +3,7 @@ package com.family.talkly.worker
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Build
 import android.util.Log
@@ -102,7 +103,7 @@ class MediaUploadWorker(
 
             if (messageType == MessageType.VIDEO) {
                 val compressedFile = uploader.compressVideo(uri) { progress, statusText ->
-                    val overallProgress = (progress * 0.3).toInt().coerceIn(5, 30)
+                    val overallProgress = ((progress / 100.0) * 30).toInt().coerceIn(0, 30)
                     updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
                 }
 
@@ -118,12 +119,12 @@ class MediaUploadWorker(
 
                 val remotePath = "chats/media/${System.currentTimeMillis()}_vid.mp4"
                 finalRemoteUrl = uploader.uploadToFirebaseStorage(compressedFile, remotePath) { progress, statusText ->
-                    val overallProgress = (30 + (progress * 0.68)).toInt().coerceIn(30, 98)
+                    val overallProgress = (30 + ((progress / 100.0) * 70)).toInt().coerceIn(30, 100)
                     updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
                 }
             } else if (messageType == MessageType.IMAGE) {
                 val compressedFile = uploader.compressImage(uri) { progress, statusText ->
-                    val overallProgress = (progress * 0.3).toInt().coerceIn(5, 30)
+                    val overallProgress = ((progress / 100.0) * 30).toInt().coerceIn(0, 30)
                     updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
                 }
 
@@ -139,7 +140,7 @@ class MediaUploadWorker(
 
                 val remotePath = "chats/media/${System.currentTimeMillis()}_img.jpg"
                 finalRemoteUrl = uploader.uploadToFirebaseStorage(compressedFile, remotePath) { progress, statusText ->
-                    val overallProgress = (30 + (progress * 0.68)).toInt().coerceIn(30, 98)
+                    val overallProgress = (30 + ((progress / 100.0) * 70)).toInt().coerceIn(30, 100)
                     updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
                 }
             } else if (messageType == MessageType.VOICE_NOTE) {
@@ -251,7 +252,11 @@ class MediaUploadWorker(
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
 
-        return ForegroundInfo(notificationId, notification)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(notificationId, notification)
+        }
     }
 
     private fun showErrorNotification(notificationId: Int, text: String) {

@@ -59,6 +59,11 @@
             android:foregroundServiceType="phoneCall|microphone">
         </service>
 
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+
         <activity
             android:name="com.family.talkly.MainActivity"
             android:exported="true"

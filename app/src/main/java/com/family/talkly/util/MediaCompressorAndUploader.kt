@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import androidx.exifinterface.media.ExifInterface
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaExtractor
@@ -13,11 +14,13 @@ import android.media.MediaMuxer
 import android.net.Uri
 import android.util.Log
 import com.google.firebase.storage.FirebaseStorage
+import com.google.firebase.storage.StorageException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.text.DecimalFormat
@@ -45,193 +48,376 @@ class MediaCompressorAndUploader(private val context: Context) {
     }
 
     /**
-     * Compresses an image Uri to a 1080p target max resolution, 75% quality JPEG.
+     * Compresses an image Uri safely handling EXIF rotation, downsampling, and recycling bitmaps to prevent memory leaks.
      */
     suspend fun compressImage(
         imageUri: Uri,
         onProgress: (Int, String) -> Unit
     ): File = withContext(Dispatchers.IO) {
-        onProgress(10, "Reading image dimensions...")
-        val inputStreamForSize = try {
-            openInputStreamForUri(imageUri)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to open input stream for imageUri $imageUri: ${e.localizedMessage}")
-            null
-        }
+        try {
+            onProgress(10, "Reading image properties...")
 
-        if (inputStreamForSize != null) {
-            try {
-                val options = BitmapFactory.Options().apply {
-                    inJustDecodeBounds = true
-                }
-                BitmapFactory.decodeStream(inputStreamForSize, null, options)
-                inputStreamForSize.close()
+            // 1. Read EXIF Orientation
+            val rotationDegrees = getRotationDegrees(imageUri)
 
-                val originalWidth = options.outWidth
-                val originalHeight = options.outHeight
-                Log.d(TAG, "Original Image Dimensions: ${originalWidth}x${originalHeight}")
-
-                onProgress(25, "Calculating scale factor...")
-                var inSampleSize = 1
-                if (originalWidth > MAX_IMAGE_DIMENSION || originalHeight > MAX_IMAGE_DIMENSION) {
-                    val halfWidth = originalWidth / 2
-                    val halfHeight = originalHeight / 2
-                    while ((halfWidth / inSampleSize) >= MAX_IMAGE_DIMENSION || (halfHeight / inSampleSize) >= MAX_IMAGE_DIMENSION) {
-                        inSampleSize *= 2
-                    }
-                }
-
-                onProgress(40, "Decoding sampled bitmap...")
-                val decodeOptions = BitmapFactory.Options().apply {
-                    this.inSampleSize = inSampleSize
-                    inPreferredConfig = Bitmap.Config.ARGB_8888
-                }
-
-                val inputStreamForBitmap = openInputStreamForUri(imageUri)
-                val sampledBitmap = BitmapFactory.decodeStream(inputStreamForBitmap, null, decodeOptions)
-                inputStreamForBitmap?.close()
-
-                if (sampledBitmap != null) {
-                    onProgress(65, "Rescaling to max resolution...")
-                    val width = sampledBitmap.width
-                    val height = sampledBitmap.height
-                    val maxDim = maxOf(width, height)
-
-                    val finalBitmap = if (maxDim > MAX_IMAGE_DIMENSION) {
-                        val scale = MAX_IMAGE_DIMENSION.toFloat() / maxDim.toFloat()
-                        val scaledW = (width * scale).toInt()
-                        val scaledH = (height * scale).toInt()
-                        Bitmap.createScaledBitmap(sampledBitmap, scaledW, scaledH, true)
-                    } else {
-                        sampledBitmap
-                    }
-
-                    onProgress(85, "Compressing to $JPEG_QUALITY% JPEG quality...")
-                    val outputFile = File(context.cacheDir, "compressed_img_${System.currentTimeMillis()}.jpg")
-                    val outputStream = FileOutputStream(outputFile)
-                    finalBitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, outputStream)
-                    outputStream.flush()
-                    outputStream.close()
-
-                    if (finalBitmap != sampledBitmap) {
-                        sampledBitmap.recycle()
-                    }
-                    sampledBitmap.recycle()
-
-                    if (outputFile.exists() && outputFile.length() > 0) {
-                        onProgress(100, "Image compressed successfully!")
-                        return@withContext outputFile
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Image compression error: ${e.localizedMessage}", e)
+            // 2. Decode image dimensions safely
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            openInputStreamForUri(imageUri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, options)
             }
+
+            val originalWidth = options.outWidth
+            val originalHeight = options.outHeight
+
+            if (originalWidth <= 0 || originalHeight <= 0) {
+                throw IllegalArgumentException("Invalid image dimensions")
+            }
+
+            // 3. Downsample ratio calculation
+            var inSampleSize = 1
+            if (originalWidth > MAX_IMAGE_DIMENSION || originalHeight > MAX_IMAGE_DIMENSION) {
+                val halfWidth = originalWidth / 2
+                val halfHeight = originalHeight / 2
+                while ((halfWidth / inSampleSize) >= MAX_IMAGE_DIMENSION || (halfHeight / inSampleSize) >= MAX_IMAGE_DIMENSION) {
+                    inSampleSize *= 2
+                }
+            }
+
+            onProgress(30, "Decoding image...")
+            val decodeOptions = BitmapFactory.Options().apply {
+                this.inSampleSize = inSampleSize
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+
+            var sampledBitmap: Bitmap? = null
+            openInputStreamForUri(imageUri)?.use { stream ->
+                sampledBitmap = BitmapFactory.decodeStream(stream, null, decodeOptions)
+            }
+
+            sampledBitmap?.let { bitmap ->
+                onProgress(60, "Resizing and Rotating...")
+
+                // 4. Handle Rotation & Resizing atomically
+                val rotatedAndScaledBitmap = transformBitmap(bitmap, rotationDegrees)
+
+                // Recycle intermediate bitmap if a new transformed bitmap was created
+                if (rotatedAndScaledBitmap != bitmap) {
+                    bitmap.recycle()
+                }
+
+                onProgress(80, "Saving compressed image...")
+                val outputFile = File(context.cacheDir, "compressed_img_${System.currentTimeMillis()}.jpg")
+
+                FileOutputStream(outputFile).use { outputStream ->
+                    rotatedAndScaledBitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, outputStream)
+                    outputStream.flush()
+                }
+
+                // Recycle final bitmap memory
+                rotatedAndScaledBitmap.recycle()
+
+                onProgress(100, "Done")
+                return@withContext outputFile
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Image compression error: ${e.localizedMessage}", e)
         }
 
-        // Fallback: Copy image Uri directly to a cache file
+        // Fallback if decoding fails
         Log.w(TAG, "Image compression fallback triggered for $imageUri")
+        onProgress(50, "Falling back to direct copy...")
         val fallbackFile = File(context.cacheDir, "fallback_img_${System.currentTimeMillis()}.jpg")
         copyUriToFile(imageUri, fallbackFile, onProgress)
-        if (fallbackFile.exists() && fallbackFile.length() > 0) {
-            onProgress(100, "Image prepared successfully!")
-            return@withContext fallbackFile
+        return@withContext fallbackFile
+    }
+
+    // Helper to extract EXIF rotation degrees
+    private fun getRotationDegrees(imageUri: Uri): Float {
+        return try {
+            openInputStreamForUri(imageUri)?.use { stream ->
+                val exifInterface = ExifInterface(stream)
+                when (exifInterface.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
+                    ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                    ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                    ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                    else -> 0f
+                }
+            } ?: 0f
+        } catch (e: Exception) {
+            0f
+        }
+    }
+
+    // Helper for matrix scaling and rotation
+    private fun transformBitmap(bitmap: Bitmap, rotationDegrees: Float): Bitmap {
+        val width = bitmap.width
+        val height = bitmap.height
+        val maxDim = maxOf(width, height)
+
+        val matrix = Matrix()
+
+        if (maxDim > MAX_IMAGE_DIMENSION) {
+            val scale = MAX_IMAGE_DIMENSION.toFloat() / maxDim.toFloat()
+            matrix.postScale(scale, scale)
         }
 
-        throw java.io.FileNotFoundException("Failed to prepare image file for Uri: $imageUri")
+        if (rotationDegrees != 0f) {
+            matrix.postRotate(rotationDegrees)
+        }
+
+        return Bitmap.createBitmap(bitmap, 0, 0, width, height, matrix, true)
     }
 
     /**
-     * Compresses video down to WhatsApp/Imo standard HD 720p (H.264 AVC + AAC audio) with 1.8-2.5 Mbps target bitrate.
-     * Operates asynchronously on background thread with smooth progress callbacks.
+     * Compresses video down to WhatsApp/Imo standard HD 720p (H.264 AVC + AAC audio) with 2.0 Mbps target bitrate.
+     * Operates asynchronously on background thread with hardware encoder transcoding and fallback direct copy.
      */
     suspend fun compressVideo(
         videoUri: Uri,
         onProgress: (Int, String) -> Unit
     ): File = withContext(Dispatchers.IO) {
-        // If Uri points directly to an already compressed video in cache, reuse it directly
-        if (videoUri.scheme == "file" || videoUri.scheme == null) {
-            val rawPath = videoUri.path ?: videoUri.toString()
-            val localFile = File(rawPath)
-            if (localFile.exists() && localFile.name.startsWith("compressed_vid_") && localFile.length() > 0) {
-                Log.i(TAG, "Reusing existing compressed video file: ${localFile.absolutePath} (${formatFileSize(localFile.length())})")
-                onProgress(100, "Video compressed successfully (${formatFileSize(localFile.length())})")
-                return@withContext localFile
-            }
-        }
+        onProgress(5, "Analyzing video stream...")
 
-        onProgress(5, "Analyzing video dimensions & bitrate specs...")
         val retriever = MediaMetadataRetriever()
         var origWidth = 1280
         var origHeight = 720
-        var origBitrate = 5_000_000
+        var rotation = 0
 
         try {
             retriever.setDataSource(context, videoUri)
-            val wStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
-            val hStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
-            val bStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
-
-            origWidth = wStr?.toIntOrNull() ?: 1280
-            origHeight = hStr?.toIntOrNull() ?: 720
-            origBitrate = bStr?.toIntOrNull() ?: 5_000_000
-            retriever.release()
+            origWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 1280
+            origHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 720
+            rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
         } catch (e: Exception) {
-            Log.w(TAG, "MediaMetadataRetriever warning: ${e.localizedMessage}")
+            Log.w(TAG, "Metadata retrieval error: ${e.localizedMessage}")
+        } finally {
+            try {
+                retriever.release()
+            } catch (ignored: Exception) {}
         }
 
+        // 1. Calculate WhatsApp Standard Target Dimensions (720p Max)
         val maxDim = maxOf(origWidth, origHeight)
         val scaleFactor = if (maxDim > 1280) 1280f / maxDim.toFloat() else 1.0f
-        val targetWidth = ((origWidth * scaleFactor) / 2).toInt() * 2 // even width for H.264 AVC
-        val targetHeight = ((origHeight * scaleFactor) / 2).toInt() * 2 // even height for H.264 AVC
-        val targetBitrate = 1_800_000 // 1.8 Mbps WhatsApp standard bitrate for 720p HD
-
-        Log.d(TAG, "Video compression specs: ${origWidth}x${origHeight} ($origBitrate bps) -> Target: ${targetWidth}x${targetHeight} at $targetBitrate bps")
+        val targetWidth = ((origWidth * scaleFactor) / 2).toInt() * 2 // Must be even integer for H.264
+        val targetHeight = ((origHeight * scaleFactor) / 2).toInt() * 2
 
         val outputFile = File(context.cacheDir, "compressed_vid_${System.currentTimeMillis()}.mp4")
 
-        try {
-            onProgress(25, "Compressing video stream to HD 720p H.264 (${targetWidth}x${targetHeight})...")
-            copyUriToFile(videoUri, outputFile, onProgress)
-        } catch (e: Exception) {
-            Log.e(TAG, "Video compression attempt failed: ${e.localizedMessage}", e)
-        }
+        onProgress(20, "Compressing video (H.264 / AAC)...")
 
-        // Validate compressed video output
-        if (outputFile.exists() && outputFile.length() > 0) {
-            val fileSize = outputFile.length()
-            Log.d(TAG, "Compressed H.264 video output valid: ${formatFileSize(fileSize)} (path=${outputFile.absolutePath})")
-            onProgress(100, "Video compressed successfully (${formatFileSize(fileSize)})")
-            return@withContext outputFile
-        }
-
-        // FALLBACK: Copy video Uri directly to a secondary temporary file if output file missing or 0 bytes
-        Log.w(TAG, "Compressed video file missing or 0 bytes. Initiating fallback copy from Uri $videoUri")
-        val fallbackFile = File(context.cacheDir, "fallback_vid_${System.currentTimeMillis()}.mp4")
         try {
-            copyUriToFile(videoUri, fallbackFile, onProgress)
-            if (fallbackFile.exists() && fallbackFile.length() > 0) {
-                Log.i(TAG, "Direct video fallback copy succeeded: ${fallbackFile.absolutePath} (${formatFileSize(fallbackFile.length())})")
-                onProgress(100, "Video prepared (${formatFileSize(fallbackFile.length())})")
-                return@withContext fallbackFile
+            // 2. Perform Real Video Transcoding using Hardware Encoder
+            val success = executeVideoTranscoding(
+                inputUri = videoUri,
+                outputFile = outputFile,
+                targetWidth = targetWidth,
+                targetHeight = targetHeight,
+                bitrate = 2_000_000, // 2 Mbps target bitrate for crisp quality & small size
+                onProgressCallback = { percent ->
+                    onProgress(20 + (percent * 0.75).toInt(), "Compressing: $percent%")
+                }
+            )
+
+            if (success && outputFile.exists() && outputFile.length() > 0) {
+                onProgress(100, "Compression complete")
+                return@withContext outputFile
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Video fallback copy failed: ${e.localizedMessage}", e)
+            Log.e(TAG, "Hardware compression failed, falling back: ${e.localizedMessage}")
         }
 
-        // Check if videoUri points directly to a local File on disk
-        if (videoUri.scheme == "file" || videoUri.scheme == null) {
-            val rawPath = videoUri.path ?: videoUri.toString()
-            val directFile = File(rawPath)
-            if (directFile.exists() && directFile.length() > 0) {
-                Log.i(TAG, "Using direct original video file: ${directFile.absolutePath} (${formatFileSize(directFile.length())})")
-                onProgress(100, "Original video prepared!")
-                return@withContext directFile
+        // Fallback if hardware transcoding fails
+        onProgress(50, "Direct copying fallback...")
+        copyUriToFile(videoUri, outputFile, onProgress)
+        return@withContext outputFile
+    }
+
+    private suspend fun executeVideoTranscoding(
+        inputUri: Uri,
+        outputFile: File,
+        targetWidth: Int,
+        targetHeight: Int,
+        bitrate: Int,
+        onProgressCallback: (Int) -> Unit
+    ): Boolean = withContext(Dispatchers.IO) {
+        var extractor: MediaExtractor? = null
+        var muxer: MediaMuxer? = null
+        try {
+            extractor = MediaExtractor()
+            if (inputUri.scheme == "file" || inputUri.scheme == null) {
+                extractor.setDataSource(inputUri.path ?: inputUri.toString())
+            } else {
+                context.contentResolver.openFileDescriptor(inputUri, "r")?.use { pfd ->
+                    extractor.setDataSource(pfd.fileDescriptor)
+                } ?: run {
+                    extractor.setDataSource(context, inputUri, null)
+                }
             }
-        }
 
-        val errMsg = "Failed to process video: Object does not exist at location for Uri $videoUri"
-        Log.e(TAG, errMsg)
-        throw java.io.FileNotFoundException(errMsg)
+            val trackCount = extractor.trackCount
+            var videoTrackIndex = -1
+            var audioTrackIndex = -1
+            var videoFormat: MediaFormat? = null
+            var audioFormat: MediaFormat? = null
+            var durationUs = 0L
+
+            for (i in 0 until trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+                if (mime.startsWith("video/") && videoTrackIndex < 0) {
+                    videoTrackIndex = i
+                    videoFormat = format
+                    if (format.containsKey(MediaFormat.KEY_DURATION)) {
+                        durationUs = format.getLong(MediaFormat.KEY_DURATION)
+                    }
+                } else if (mime.startsWith("audio/") && audioTrackIndex < 0) {
+                    audioTrackIndex = i
+                    audioFormat = format
+                }
+            }
+
+            if (videoTrackIndex < 0 || videoFormat == null) {
+                Log.w(TAG, "No video track found in Uri: $inputUri")
+                return@withContext false
+            }
+
+            muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+
+            val encoderFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, targetWidth, targetHeight).apply {
+                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+                setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            }
+
+            val videoCodec = try {
+                MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            } catch (e: Exception) {
+                Log.w(TAG, "Hardware AVC encoder creation failed: ${e.localizedMessage}")
+                null
+            }
+
+            if (videoCodec != null && durationUs > 0) {
+                videoCodec.configure(encoderFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                val inputSurface = videoCodec.createInputSurface()
+                videoCodec.start()
+
+                val mimeType = videoFormat.getString(MediaFormat.KEY_MIME) ?: MediaFormat.MIMETYPE_VIDEO_AVC
+                val decoder = MediaCodec.createDecoderByType(mimeType)
+                decoder.configure(videoFormat, inputSurface, null, 0)
+                decoder.start()
+
+                extractor.selectTrack(videoTrackIndex)
+
+                val bufferInfo = MediaCodec.BufferInfo()
+                var isEncoderEOS = false
+                var isDecoderEOS = false
+                var muxerStarted = false
+                var muxerVideoIndex = -1
+                var muxerAudioIndex = -1
+
+                if (audioTrackIndex >= 0 && audioFormat != null) {
+                    muxerAudioIndex = muxer.addTrack(audioFormat)
+                }
+
+                var lastProgress = 0
+                val timeoutUs = 10000L
+
+                while (!isEncoderEOS) {
+                    if (!isDecoderEOS) {
+                        val inBufIdx = decoder.dequeueInputBuffer(timeoutUs)
+                        if (inBufIdx >= 0) {
+                            val inputBuf = decoder.getInputBuffer(inBufIdx)
+                            if (inputBuf != null) {
+                                val sampleSize = extractor.readSampleData(inputBuf, 0)
+                                if (sampleSize < 0) {
+                                    decoder.queueInputBuffer(inBufIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                    isDecoderEOS = true
+                                } else {
+                                    val presentationTimeUs = extractor.sampleTime
+                                    decoder.queueInputBuffer(inBufIdx, 0, sampleSize, presentationTimeUs, 0)
+                                    extractor.advance()
+                                }
+                            }
+                        }
+                    }
+
+                    val decBufIdx = decoder.dequeueOutputBuffer(bufferInfo, timeoutUs)
+                    if (decBufIdx >= 0) {
+                        val doRender = bufferInfo.size != 0
+                        decoder.releaseOutputBuffer(decBufIdx, doRender)
+                        if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                            videoCodec.signalEndOfInputStream()
+                        }
+                    }
+
+                    val encBufIdx = videoCodec.dequeueOutputBuffer(bufferInfo, timeoutUs)
+                    if (encBufIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        if (!muxerStarted) {
+                            muxerVideoIndex = muxer.addTrack(videoCodec.outputFormat)
+                            muxer.start()
+                            muxerStarted = true
+                        }
+                    } else if (encBufIdx >= 0) {
+                        val encodedData = videoCodec.getOutputBuffer(encBufIdx)
+                        if (encodedData != null && muxerStarted) {
+                            if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                                bufferInfo.size = 0
+                            }
+                            if (bufferInfo.size != 0) {
+                                encodedData.position(bufferInfo.offset)
+                                encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                                muxer.writeSampleData(muxerVideoIndex, encodedData, bufferInfo)
+
+                                val progress = ((bufferInfo.presentationTimeUs.toDouble() / durationUs.toDouble()) * 100).toInt().coerceIn(0, 99)
+                                if (progress > lastProgress) {
+                                    lastProgress = progress
+                                    onProgressCallback(progress)
+                                }
+                            }
+                        }
+                        videoCodec.releaseOutputBuffer(encBufIdx, false)
+                        if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                            isEncoderEOS = true
+                        }
+                    }
+                }
+
+                if (audioTrackIndex >= 0 && muxerAudioIndex >= 0 && muxerStarted) {
+                    extractor.unselectTrack(videoTrackIndex)
+                    extractor.selectTrack(audioTrackIndex)
+                    extractor.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                    val audioBuf = ByteBuffer.allocate(256 * 1024)
+                    val audioBufferInfo = MediaCodec.BufferInfo()
+                    while (true) {
+                        val sampleSize = extractor.readSampleData(audioBuf, 0)
+                        if (sampleSize < 0) break
+                        audioBufferInfo.offset = 0
+                        audioBufferInfo.size = sampleSize
+                        audioBufferInfo.presentationTimeUs = extractor.sampleTime
+                        audioBufferInfo.flags = extractor.sampleFlags
+                        muxer.writeSampleData(muxerAudioIndex, audioBuf, audioBufferInfo)
+                        extractor.advance()
+                    }
+                }
+
+                try { decoder.stop(); decoder.release() } catch (e: Exception) {}
+                try { videoCodec.stop(); videoCodec.release() } catch (e: Exception) {}
+
+                onProgressCallback(100)
+                return@withContext true
+            } else {
+                return@withContext false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "executeVideoTranscoding error: ${e.localizedMessage}", e)
+            return@withContext false
+        } finally {
+            try { extractor?.release() } catch (e: Exception) {}
+            try { muxer?.stop(); muxer?.release() } catch (e: Exception) {}
+        }
     }
 
     private fun getFirebaseStorageInstance(): FirebaseStorage {
@@ -244,22 +430,18 @@ class MediaCompressorAndUploader(private val context: Context) {
                 defaultStorage
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Default FirebaseStorage.getInstance() failed (${e.localizedMessage}). Retrying with explicit bucket URL...")
-            try {
-                FirebaseStorage.getInstance("gs://familycallapp-e6b21.firebasestorage.app")
-            } catch (e2: Exception) {
-                FirebaseStorage.getInstance("gs://familycallapp-e6b21.appspot.com")
-            }
+            FirebaseStorage.getInstance("gs://familycallapp-e6b21.firebasestorage.app")
         }
-        // Enforce 300-second (5 minutes) network & socket timeouts for large media uploads
-        storage.maxUploadRetryTimeMillis = 300_000L
-        storage.maxOperationRetryTimeMillis = 300_000L
+
+        // Allow extended network retry durations for high-payload media streams
+        storage.maxUploadRetryTimeMillis = 600_000L // 10 minutes total retry limit
+        storage.maxOperationRetryTimeMillis = 300_000L // 5 minutes max per operation
         return storage
     }
 
     /**
-     * Uploads compressed file to Firebase Storage with 5-minute timeouts, 2MB byte chunk handling,
-     * smooth snapshot progress reporting, and fail-safe local file preservation.
+     * Uploads compressed file to Firebase Storage with native resumable putFile upload,
+     * smooth snapshot progress reporting, and coroutine retry handling.
      */
     suspend fun uploadToFirebaseStorage(
         file: File,
@@ -275,41 +457,38 @@ class MediaCompressorAndUploader(private val context: Context) {
             throw java.io.FileNotFoundException(errorMsg)
         }
 
-        onProgress(5, "Connecting to Firebase Storage server...")
         val storage = getFirebaseStorageInstance()
+        val storageRef = storage.reference.child(remotePath)
+        val fileUri = Uri.fromFile(canonicalFile)
+        val totalBytes = canonicalFile.length()
+
         var lastException: Exception? = null
 
-        // Up to 5 retries with exponential backoff for chunked resumable upload
-        for (attempt in 1..5) {
+        // Perform native resumable upload using standard putFile (do NOT use putStream)
+        for (attempt in 1..3) {
             try {
-                val storageRef = storage.reference.child(remotePath)
-                val fileUri = Uri.fromFile(canonicalFile)
-                val totalBytes = canonicalFile.length()
-                Log.d(TAG, "Attempt $attempt/5: Uploading ${formatFileSize(totalBytes)} ($fileUri) to '${storageRef.path}'")
+                onProgress(0, "Initiating upload session...")
 
-                val uploadTask = if (attempt == 1) {
-                    storageRef.putFile(fileUri)
-                } else {
-                    Log.i(TAG, "Attempt $attempt/5: Resuming session / streaming byte buffer for ${canonicalFile.name}")
-                    storageRef.putStream(java.io.FileInputStream(canonicalFile))
-                }
+                val uploadTask = storageRef.putFile(fileUri)
 
                 uploadTask.addOnProgressListener { snapshot ->
                     val bytesSent = snapshot.bytesTransferred
                     val total = if (snapshot.totalByteCount > 0) snapshot.totalByteCount else totalBytes
                     if (total > 0) {
                         val progressPercent = ((100.0 * bytesSent) / total).toInt().coerceIn(0, 100)
-                        val sentMbOrKb = formatFileSize(bytesSent)
-                        val totalMbOrKb = formatFileSize(total)
                         onProgress(
                             progressPercent,
-                            "Uploading ($sentMbOrKb / $totalMbOrKb) $progressPercent%"
+                            "Uploading (${formatFileSize(bytesSent)} / ${formatFileSize(total)})$progressPercent%"
                         )
                     }
+                }.addOnFailureListener { exception ->
+                    Log.e("FirebaseStorage", "Upload failed: ${exception.localizedMessage}")
                 }
 
+                // Await upload completion safely
                 uploadTask.await()
-                onProgress(92, "Finalizing cloud storage link...")
+
+                // Fetch final download URL
                 val downloadUri = storageRef.downloadUrl.await()
                 onProgress(100, "Media upload complete!")
 
@@ -324,19 +503,25 @@ class MediaCompressorAndUploader(private val context: Context) {
                 }
 
                 return@withContext downloadUri.toString()
+
             } catch (e: Exception) {
                 lastException = e
-                Log.e(TAG, "Firebase Storage upload attempt $attempt/5 failed for ${canonicalFile.name}: ${e.localizedMessage}", e)
-                if (attempt < 5) {
-                    val backoffMs = 1000L * (1 shl (attempt - 1)) // 1s, 2s, 4s, 8s exponential backoff
-                    onProgress(10, "Network fluctuation detected. Retrying chunk upload ($attempt/5 in ${backoffMs/1000}s)...")
-                    kotlinx.coroutines.delay(backoffMs)
+
+                // Check if it's a recoverable storage exception
+                if (e is StorageException || e is IOException) {
+                    if (attempt < 3) {
+                        val backoffMs = 2000L * attempt
+                        onProgress(10, "Connection dropped. Re-establishing session ($attempt/3)...")
+                        kotlinx.coroutines.delay(backoffMs)
+                        continue
+                    }
+                } else {
+                    throw e // Non-network failure, break immediately
                 }
             }
         }
 
-        // Do NOT delete local file on error so user can tap 'Retry Upload' without losing processed media
-        throw java.io.IOException("Video upload timed out after 5 chunked retries (${formatFileSize(canonicalFile.length())}): ${lastException?.localizedMessage ?: "Connection interrupted"}")
+        throw IOException("Video upload failed after retries: ${lastException?.localizedMessage}")
     }
 
     fun encodeFileToBase64(file: File): String {

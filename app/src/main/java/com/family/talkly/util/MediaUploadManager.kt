@@ -8,6 +8,7 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.WorkRequest
 import com.family.talkly.data.local.TalklyDatabase
 import com.family.talkly.data.local.entity.ChatMessageEntity
 import com.family.talkly.data.models.MessageType
@@ -88,7 +89,11 @@ object MediaUploadManager {
             val workRequest = OneTimeWorkRequestBuilder<MediaUploadWorker>()
                 .setInputData(inputData)
                 .setConstraints(constraints)
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
+                .setBackoffCriteria(
+                    BackoffPolicy.EXPONENTIAL,
+                    WorkRequest.MIN_BACKOFF_MILLIS,
+                    TimeUnit.MILLISECONDS
+                )
                 .build()
 
             WorkManager.getInstance(appContext).enqueueUniqueWork(
