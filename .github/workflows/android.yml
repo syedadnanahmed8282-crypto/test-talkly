@@ -20,20 +20,24 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
-        cache: gradle
 
-    - name: Grant Execute Permission for Gradle
-      run: chmod +x gradlew || true
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v3
 
     - name: Ensure .env exists
       run: |
         if [ ! -f .env ]; then
-          cp .env.example .env || touch .env
+          cp .env.example .env 2>/dev/null || touch .env
         fi
+
+    - name: Setup Android SDK path
+      run: |
+        echo "sdk.dir=$ANDROID_HOME" > local.properties
 
     - name: Build Debug APK
       run: |
         if [ -f "./gradlew" ]; then
+          chmod +x gradlew
           ./gradlew assembleDebug --stacktrace
         else
           gradle assembleDebug --stacktrace
@@ -43,4 +47,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: talkly-debug-apk
-        path: app/build/outputs/apk/debug/app-debug.apk
+        path: app/build/outputs/apk/debug/*.apk
+
