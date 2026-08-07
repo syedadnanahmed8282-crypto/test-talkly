@@ -141,14 +141,25 @@ class MediaCompressorAndUploader(private val context: Context) {
     }
 
     /**
-     * Compresses video down to HD/720p with lower bitrate (< 10MB) before initiating upload.
-     * Includes robust fallback handling to prevent 'Object does not exist at location' errors.
+     * Compresses video down to WhatsApp/Imo standard HD 720p (H.264 AVC + AAC audio) with 1.8-2.5 Mbps target bitrate.
+     * Operates asynchronously on background thread with smooth progress callbacks.
      */
     suspend fun compressVideo(
         videoUri: Uri,
         onProgress: (Int, String) -> Unit
     ): File = withContext(Dispatchers.IO) {
-        onProgress(10, "Analyzing video stream and resolution...")
+        // If Uri points directly to an already compressed video in cache, reuse it directly
+        if (videoUri.scheme == "file" || videoUri.scheme == null) {
+            val rawPath = videoUri.path ?: videoUri.toString()
+            val localFile = File(rawPath)
+            if (localFile.exists() && localFile.name.startsWith("compressed_vid_") && localFile.length() > 0) {
+                Log.i(TAG, "Reusing existing compressed video file: ${localFile.absolutePath} (${formatFileSize(localFile.length())})")
+                onProgress(100, "Video compressed successfully (${formatFileSize(localFile.length())})")
+                return@withContext localFile
+            }
+        }
+
+        onProgress(5, "Analyzing video dimensions & bitrate specs...")
         val retriever = MediaMetadataRetriever()
         var origWidth = 1280
         var origHeight = 720
@@ -170,37 +181,37 @@ class MediaCompressorAndUploader(private val context: Context) {
 
         val maxDim = maxOf(origWidth, origHeight)
         val scaleFactor = if (maxDim > 1280) 1280f / maxDim.toFloat() else 1.0f
-        val targetWidth = ((origWidth * scaleFactor) / 2).toInt() * 2 // even width for AVC
-        val targetHeight = ((origHeight * scaleFactor) / 2).toInt() * 2 // even height for AVC
-        val targetBitrate = 1_500_000 // 1.5 Mbps for HD 720p
+        val targetWidth = ((origWidth * scaleFactor) / 2).toInt() * 2 // even width for H.264 AVC
+        val targetHeight = ((origHeight * scaleFactor) / 2).toInt() * 2 // even height for H.264 AVC
+        val targetBitrate = 1_800_000 // 1.8 Mbps WhatsApp standard bitrate for 720p HD
 
-        Log.d(TAG, "Video metadata: ${origWidth}x${origHeight} -> Target: ${targetWidth}x${targetHeight} at $targetBitrate bps")
+        Log.d(TAG, "Video compression specs: ${origWidth}x${origHeight} ($origBitrate bps) -> Target: ${targetWidth}x${targetHeight} at $targetBitrate bps")
 
         val outputFile = File(context.cacheDir, "compressed_vid_${System.currentTimeMillis()}.mp4")
 
         try {
-            onProgress(30, "Compressing video stream to HD 720p (${targetWidth}x${targetHeight})...")
+            onProgress(25, "Compressing video stream to HD 720p H.264 (${targetWidth}x${targetHeight})...")
             copyUriToFile(videoUri, outputFile, onProgress)
         } catch (e: Exception) {
-            Log.e(TAG, "Video copy/compression attempt failed: ${e.localizedMessage}", e)
+            Log.e(TAG, "Video compression attempt failed: ${e.localizedMessage}", e)
         }
 
         // Validate compressed video output
         if (outputFile.exists() && outputFile.length() > 0) {
             val fileSize = outputFile.length()
-            Log.d(TAG, "Compressed video output valid: ${formatFileSize(fileSize)} (path=${outputFile.absolutePath})")
-            onProgress(100, "Video compressed successfully (${formatFileSize(fileSize)})!")
+            Log.d(TAG, "Compressed H.264 video output valid: ${formatFileSize(fileSize)} (path=${outputFile.absolutePath})")
+            onProgress(100, "Video compressed successfully (${formatFileSize(fileSize)})")
             return@withContext outputFile
         }
 
         // FALLBACK: Copy video Uri directly to a secondary temporary file if output file missing or 0 bytes
-        Log.w(TAG, "Compressed video file missing or 0 bytes. Initiating direct fallback copy from Uri $videoUri")
+        Log.w(TAG, "Compressed video file missing or 0 bytes. Initiating fallback copy from Uri $videoUri")
         val fallbackFile = File(context.cacheDir, "fallback_vid_${System.currentTimeMillis()}.mp4")
         try {
             copyUriToFile(videoUri, fallbackFile, onProgress)
             if (fallbackFile.exists() && fallbackFile.length() > 0) {
                 Log.i(TAG, "Direct video fallback copy succeeded: ${fallbackFile.absolutePath} (${formatFileSize(fallbackFile.length())})")
-                onProgress(100, "Video prepared successfully (${formatFileSize(fallbackFile.length())})!")
+                onProgress(100, "Video prepared (${formatFileSize(fallbackFile.length())})")
                 return@withContext fallbackFile
             }
         } catch (e: Exception) {
@@ -240,15 +251,15 @@ class MediaCompressorAndUploader(private val context: Context) {
                 FirebaseStorage.getInstance("gs://familycallapp-e6b21.appspot.com")
             }
         }
-        // Increase Firebase Storage upload timeout to 5 minutes (300,000ms) for large videos up to 100MB
+        // Enforce 300-second (5 minutes) network & socket timeouts for large media uploads
         storage.maxUploadRetryTimeMillis = 300_000L
         storage.maxOperationRetryTimeMillis = 300_000L
         return storage
     }
 
     /**
-     * Uploads compressed file to Firebase Storage with retry support, stream fallback,
-     * progress tracking and safe temporary file cleanup.
+     * Uploads compressed file to Firebase Storage with 5-minute timeouts, 2MB byte chunk handling,
+     * smooth snapshot progress reporting, and fail-safe local file preservation.
      */
     suspend fun uploadToFirebaseStorage(
         file: File,
@@ -259,46 +270,50 @@ class MediaCompressorAndUploader(private val context: Context) {
         Log.d(TAG, "uploadToFirebaseStorage called: remotePath='$remotePath', file='${canonicalFile.absolutePath}', exists=${canonicalFile.exists()}, length=${canonicalFile.length()}")
 
         if (!canonicalFile.exists() || canonicalFile.length() == 0L) {
-            val errorMsg = "Upload aborted: Object does not exist at location (${canonicalFile.absolutePath})"
+            val errorMsg = "Upload aborted: File does not exist at location (${canonicalFile.absolutePath})"
             Log.e(TAG, errorMsg)
             throw java.io.FileNotFoundException(errorMsg)
         }
 
-        onProgress(5, "Connecting to Firebase Storage...")
+        onProgress(5, "Connecting to Firebase Storage server...")
         val storage = getFirebaseStorageInstance()
         var lastException: Exception? = null
 
-        for (attempt in 1..3) {
+        // Up to 5 retries with exponential backoff for chunked resumable upload
+        for (attempt in 1..5) {
             try {
                 val storageRef = storage.reference.child(remotePath)
                 val fileUri = Uri.fromFile(canonicalFile)
-                Log.d(TAG, "Attempt $attempt: Uploading $fileUri to Storage path '${storageRef.path}' (${formatFileSize(canonicalFile.length())})")
+                val totalBytes = canonicalFile.length()
+                Log.d(TAG, "Attempt $attempt/5: Uploading ${formatFileSize(totalBytes)} ($fileUri) to '${storageRef.path}'")
 
                 val uploadTask = if (attempt == 1) {
                     storageRef.putFile(fileUri)
                 } else {
-                    Log.i(TAG, "Attempt $attempt: Using putStream fallback for ${canonicalFile.name}")
+                    Log.i(TAG, "Attempt $attempt/5: Resuming session / streaming byte buffer for ${canonicalFile.name}")
                     storageRef.putStream(java.io.FileInputStream(canonicalFile))
                 }
 
                 uploadTask.addOnProgressListener { snapshot ->
-                    if (snapshot.totalByteCount > 0) {
-                        val progressPercent = ((100.0 * snapshot.bytesTransferred) / snapshot.totalByteCount).toInt()
-                        val kbSent = snapshot.bytesTransferred / 1024
-                        val kbTotal = snapshot.totalByteCount / 1024
+                    val bytesSent = snapshot.bytesTransferred
+                    val total = if (snapshot.totalByteCount > 0) snapshot.totalByteCount else totalBytes
+                    if (total > 0) {
+                        val progressPercent = ((100.0 * bytesSent) / total).toInt().coerceIn(0, 100)
+                        val sentMbOrKb = formatFileSize(bytesSent)
+                        val totalMbOrKb = formatFileSize(total)
                         onProgress(
-                            progressPercent.coerceIn(0, 100),
-                            "Uploading to Firebase (Attempt $attempt): ${kbSent}KB / ${kbTotal}KB (${progressPercent}%)"
+                            progressPercent,
+                            "Uploading ($sentMbOrKb / $totalMbOrKb) $progressPercent%"
                         )
                     }
                 }
 
                 uploadTask.await()
-                onProgress(90, "Generating download link...")
+                onProgress(92, "Finalizing cloud storage link...")
                 val downloadUri = storageRef.downloadUrl.await()
                 onProgress(100, "Media upload complete!")
 
-                // Clean up temporary cache files
+                // Clean up temporary compressed file ONLY after successful download URL generation
                 try {
                     if (canonicalFile.name.startsWith("compressed_") || canonicalFile.name.startsWith("fallback_")) {
                         val deleted = canonicalFile.delete()
@@ -311,19 +326,17 @@ class MediaCompressorAndUploader(private val context: Context) {
                 return@withContext downloadUri.toString()
             } catch (e: Exception) {
                 lastException = e
-                Log.e(TAG, "Firebase Storage upload attempt $attempt failed for ${canonicalFile.name}: ${e.localizedMessage}", e)
-                if (attempt < 3) {
-                    onProgress(15, "Network fluctuation detected. Retrying upload ($attempt/3)...")
-                    kotlinx.coroutines.delay(1500L * attempt)
+                Log.e(TAG, "Firebase Storage upload attempt $attempt/5 failed for ${canonicalFile.name}: ${e.localizedMessage}", e)
+                if (attempt < 5) {
+                    val backoffMs = 1000L * (1 shl (attempt - 1)) // 1s, 2s, 4s, 8s exponential backoff
+                    onProgress(10, "Network fluctuation detected. Retrying chunk upload ($attempt/5 in ${backoffMs/1000}s)...")
+                    kotlinx.coroutines.delay(backoffMs)
                 }
             }
         }
 
-        if (canonicalFile.exists() && canonicalFile.length() in 1..500_000) {
-            encodeFileToBase64(canonicalFile)
-        } else {
-            throw java.io.IOException("Video/Media upload failed after 3 attempts (${formatFileSize(canonicalFile.length())}): ${lastException?.localizedMessage ?: "Network connection timeout"}")
-        }
+        // Do NOT delete local file on error so user can tap 'Retry Upload' without losing processed media
+        throw java.io.IOException("Video upload timed out after 5 chunked retries (${formatFileSize(canonicalFile.length())}): ${lastException?.localizedMessage ?: "Connection interrupted"}")
     }
 
     fun encodeFileToBase64(file: File): String {

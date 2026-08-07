@@ -25,49 +25,83 @@ object FcmTokenManager {
      */
     fun syncFcmToken(context: Context) {
         try {
+            val googleApiAvailability = com.google.android.gms.common.GoogleApiAvailability.getInstance()
+            val resultCode = googleApiAvailability.isGooglePlayServicesAvailable(context)
+            if (resultCode != com.google.android.gms.common.ConnectionResult.SUCCESS) {
+                Log.w(TAG, "Google Play Services unavailable ($resultCode). Syncing cached token if available.")
+                syncExistingCachedToken(context)
+                return
+            }
+
             FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
                 if (!task.isSuccessful) {
-                    Log.w(TAG, "Fetching FCM registration token failed", task.exception)
+                    Log.w(TAG, "Fetching FCM registration token failed: ${task.exception?.localizedMessage}")
+                    syncExistingCachedToken(context)
                     return@addOnCompleteListener
                 }
 
-                val token = task.result ?: return@addOnCompleteListener
+                val token = task.result ?: run {
+                    syncExistingCachedToken(context)
+                    return@addOnCompleteListener
+                }
                 Log.d(TAG, "FCM registration token obtained: $token")
 
                 // Save locally
                 val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 prefs.edit().putString(KEY_FCM_TOKEN, token).apply()
 
-                val uid = FirebaseAuth.getInstance().currentUser?.uid
-                    ?: prefs.getString("user_uid", null)
-                val phone = prefs.getString("user_phone", "") ?: ""
-                val phoneSuffix = PhoneUtils.extractPhoneSuffix(phone)
-
-                val firestore = FirebaseFirestore.getInstance()
-
-                if (!uid.isNullOrBlank()) {
-                    val tokenMap = mapOf(
-                        "fcmToken" to token,
-                        "lastTokenUpdate" to System.currentTimeMillis()
-                    )
-                    firestore.collection("users").document(uid)
-                        .set(tokenMap, SetOptions.merge())
-                        .addOnSuccessListener {
-                            Log.d(TAG, "Successfully updated FCM token for user $uid")
-                        }
-                }
-
-                if (phoneSuffix.isNotBlank()) {
-                    val phoneMap = mapOf("fcmToken" to token)
-                    firestore.collection("users_phone_index").document(phoneSuffix)
-                        .set(phoneMap, SetOptions.merge())
-                        .addOnSuccessListener {
-                            Log.d(TAG, "Successfully updated FCM token for phone suffix $phoneSuffix")
-                        }
-                }
+                updateTokenInFirestore(context, token)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error in syncFcmToken: ${e.localizedMessage}")
+            syncExistingCachedToken(context)
+        }
+    }
+
+    private fun syncExistingCachedToken(context: Context) {
+        try {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val cachedToken = prefs.getString(KEY_FCM_TOKEN, null)
+            if (!cachedToken.isNullOrBlank()) {
+                updateTokenInFirestore(context, cachedToken)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error syncing cached FCM token: ${e.localizedMessage}")
+        }
+    }
+
+    private fun updateTokenInFirestore(context: Context, token: String) {
+        try {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val uid = FirebaseAuth.getInstance().currentUser?.uid
+                ?: prefs.getString("user_uid", null)
+            val phone = prefs.getString("user_phone", "") ?: ""
+            val phoneSuffix = PhoneUtils.extractPhoneSuffix(phone)
+
+            val firestore = FirebaseFirestore.getInstance()
+
+            if (!uid.isNullOrBlank()) {
+                val tokenMap = mapOf(
+                    "fcmToken" to token,
+                    "lastTokenUpdate" to System.currentTimeMillis()
+                )
+                firestore.collection("users").document(uid)
+                    .set(tokenMap, SetOptions.merge())
+                    .addOnSuccessListener {
+                        Log.d(TAG, "Successfully updated FCM token for user $uid")
+                    }
+            }
+
+            if (phoneSuffix.isNotBlank()) {
+                val phoneMap = mapOf("fcmToken" to token)
+                firestore.collection("users_phone_index").document(phoneSuffix)
+                    .set(phoneMap, SetOptions.merge())
+                    .addOnSuccessListener {
+                        Log.d(TAG, "Successfully updated FCM token for phone suffix $phoneSuffix")
+                    }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating token in Firestore: ${e.localizedMessage}")
         }
     }
 

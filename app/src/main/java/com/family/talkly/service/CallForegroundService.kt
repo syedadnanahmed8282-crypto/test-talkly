@@ -45,6 +45,24 @@ class CallForegroundService : Service() {
             roomId: String,
             callType: String
         ) {
+            val prefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+            val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+            val currentUid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+                ?: prefs.getString("user_uid", null)
+                ?: fallbackPrefs.getString("user_uid", null) ?: ""
+            val currentPhone = prefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", null) ?: ""
+            val currentSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(currentPhone)
+            val callerSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(callerPhone)
+
+            val isSelfCall = (currentUid.isNotBlank() && currentUid != "self" && callerUid == currentUid) ||
+                    (currentPhone.isNotBlank() && callerPhone.isNotBlank() && callerPhone == currentPhone) ||
+                    (currentSuffix.isNotBlank() && callerSuffix.isNotBlank() && callerSuffix == currentSuffix)
+
+            if (isSelfCall) {
+                Log.d(TAG, "CLIENT-SIDE GUARD: Refusing to start incoming call service for self-call (callerUid=$callerUid)")
+                return
+            }
+
             val intent = Intent(context, CallForegroundService::class.java).apply {
                 action = ACTION_START_INCOMING_CALL
                 putExtra(EXTRA_CALLER_NAME, callerName)

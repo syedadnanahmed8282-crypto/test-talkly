@@ -102,24 +102,44 @@ class MediaUploadWorker(
 
             if (messageType == MessageType.VIDEO) {
                 val compressedFile = uploader.compressVideo(uri) { progress, statusText ->
-                    val overallProgress = (progress * 0.4).toInt().coerceIn(5, 40)
+                    val overallProgress = (progress * 0.3).toInt().coerceIn(5, 30)
                     updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
                 }
 
+                val compressedPath = compressedFile.absolutePath
+                dao.updateUploadState(
+                    messageId = messageId,
+                    isPending = true,
+                    isUploading = true,
+                    isFailed = false,
+                    uploadProgress = 30,
+                    mediaUrl = compressedPath
+                )
+
                 val remotePath = "chats/media/${System.currentTimeMillis()}_vid.mp4"
                 finalRemoteUrl = uploader.uploadToFirebaseStorage(compressedFile, remotePath) { progress, statusText ->
-                    val overallProgress = (40 + (progress * 0.58)).toInt().coerceIn(40, 98)
+                    val overallProgress = (30 + (progress * 0.68)).toInt().coerceIn(30, 98)
                     updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
                 }
             } else if (messageType == MessageType.IMAGE) {
                 val compressedFile = uploader.compressImage(uri) { progress, statusText ->
-                    val overallProgress = (progress * 0.4).toInt().coerceIn(5, 40)
+                    val overallProgress = (progress * 0.3).toInt().coerceIn(5, 30)
                     updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
                 }
 
+                val compressedPath = compressedFile.absolutePath
+                dao.updateUploadState(
+                    messageId = messageId,
+                    isPending = true,
+                    isUploading = true,
+                    isFailed = false,
+                    uploadProgress = 30,
+                    mediaUrl = compressedPath
+                )
+
                 val remotePath = "chats/media/${System.currentTimeMillis()}_img.jpg"
                 finalRemoteUrl = uploader.uploadToFirebaseStorage(compressedFile, remotePath) { progress, statusText ->
-                    val overallProgress = (40 + (progress * 0.58)).toInt().coerceIn(40, 98)
+                    val overallProgress = (30 + (progress * 0.68)).toInt().coerceIn(30, 98)
                     updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
                 }
             } else if (messageType == MessageType.VOICE_NOTE) {

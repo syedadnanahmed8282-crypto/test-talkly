@@ -247,6 +247,24 @@ class MainActivity : ComponentActivity() {
             val roomId = intent.getStringExtra("room_id") ?: ""
             val callTypeStr = intent.getStringExtra("call_type") ?: "VIDEO"
 
+            val prefs = getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+            val fallbackPrefs = getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+            val currentUid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+                ?: prefs.getString("user_uid", null)
+                ?: fallbackPrefs.getString("user_uid", null) ?: ""
+            val currentPhone = prefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", null) ?: ""
+            val currentSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(currentPhone)
+            val callerSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(callerPhone)
+
+            val isSelfCall = (currentUid.isNotBlank() && currentUid != "self" && callerUid == currentUid) ||
+                    (currentPhone.isNotBlank() && callerPhone.isNotBlank() && callerPhone == currentPhone) ||
+                    (currentSuffix.isNotBlank() && callerSuffix.isNotBlank() && callerSuffix == currentSuffix)
+
+            if (isSelfCall) {
+                android.util.Log.d("MainActivity", "CLIENT-SIDE GUARD: Discarding open_incoming_call intent for self-call (callerUid=$callerUid)")
+                return
+            }
+
             com.family.talkly.service.CallForegroundService.stopCallService(applicationContext)
 
             if (roomId.isNotBlank()) {

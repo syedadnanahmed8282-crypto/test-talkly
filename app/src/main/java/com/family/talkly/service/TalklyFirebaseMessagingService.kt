@@ -61,8 +61,8 @@ class TalklyFirebaseMessagingService : FirebaseMessagingService() {
                 data.containsKey("callerUid") -> {
 
                     val callerName = data["callerName"] ?: "Talkly User"
-                    val callerUid = data["callerUid"] ?: ""
-                    val callerPhone = data["callerPhone"] ?: ""
+                    val callerUid = data["caller_id"] ?: data["callerId"] ?: data["callerUid"] ?: data["caller_uid"] ?: ""
+                    val callerPhone = data["callerPhone"] ?: data["caller_phone"] ?: ""
                     val callerAvatar = data["callerAvatarUrl"] ?: data["callerAvatar"] ?: ""
                     val roomId = data["roomID"] ?: data["roomId"] ?: ""
                     val callType = data["callType"] ?: "VIDEO"
@@ -83,7 +83,7 @@ class TalklyFirebaseMessagingService : FirebaseMessagingService() {
                             (currentSuffix.isNotBlank() && callerSuffix.isNotBlank() && callerSuffix == currentSuffix)
 
                     if (isSelfCall) {
-                        Log.d(TAG, "Ignoring self-call FCM push notification (callerUid=$callerUid matches current user)")
+                        Log.d(TAG, "CLIENT-SIDE GUARD: Discarding self-call FCM push notification (callerUid=$callerUid, currentUid=$currentUid)")
                         return
                     }
 

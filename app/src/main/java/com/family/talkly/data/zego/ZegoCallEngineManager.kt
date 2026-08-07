@@ -586,7 +586,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     }
                 }
             }
-            "ACCEPTED" -> {
+            "ACCEPTED", "PEER_ANSWERED" -> {
                 if (isMeCaller) {
                     val currentState = _callState.value.state
                     if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) {
@@ -777,6 +777,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     "type" to "INCOMING_CALL",
                     "callerName" to callerProfile.name,
                     "callerUid" to callerProfile.uid,
+                    "caller_id" to callerProfile.uid,
                     "callerPhone" to callerProfile.phoneNumber,
                     "callerAvatarUrl" to callerProfile.profilePicUrl,
                     "roomID" to (data["roomID"] as? String ?: ""),
@@ -835,6 +836,24 @@ class ZegoCallEngineManager(private val context: Context) {
     }
 
     fun triggerIncomingCall(member: FamilyMember, callType: CallType) {
+        val myProfile = currentUserProfile ?: getLocalUserProfile()
+        val myUid = myProfile.uid
+        val myPhone = myProfile.phoneNumber
+        val mySuffix = myProfile.phoneSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(myPhone) }
+
+        val memberUid = member.firebaseUid ?: ""
+        val memberPhone = member.phone
+        val memberSuffix = PhoneUtils.extractPhoneSuffix(memberPhone)
+
+        val isSelf = (myUid.isNotBlank() && myUid != "self" && (memberUid == myUid || member.id == myUid)) ||
+                (myPhone.isNotBlank() && memberPhone.isNotBlank() && memberPhone == myPhone) ||
+                (mySuffix.isNotBlank() && memberSuffix.isNotBlank() && memberSuffix == mySuffix)
+
+        if (isSelf) {
+            Log.d(TAG, "CLIENT-SIDE GUARD: Refusing to trigger incoming call from self-member")
+            return
+        }
+
         val roomID = "incoming_room_${member.id}"
         callSoundManager.startIncomingRingtone()
         _callState.value = CurrentCallInfo(
