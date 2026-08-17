@@ -99,7 +99,7 @@ class TalklyFirebaseMessagingService : FirebaseMessagingService() {
                                 callType = callType
                             )
                         }
-                        "ENDED", "DECLINED", "CANCELLED", "TIMED_OUT" -> {
+                        "ENDED", "DECLINED", "CANCELLED", "TIMED_OUT", "ACCEPTED", "ANSWERED", "PEER_ANSWERED" -> {
                             CallForegroundService.stopCallService(applicationContext)
                         }
                     }

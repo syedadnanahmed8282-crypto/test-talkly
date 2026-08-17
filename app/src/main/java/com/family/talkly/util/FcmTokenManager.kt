@@ -25,18 +25,34 @@ object FcmTokenManager {
      */
     fun syncFcmToken(context: Context) {
         try {
-            val googleApiAvailability = com.google.android.gms.common.GoogleApiAvailability.getInstance()
-            val resultCode = googleApiAvailability.isGooglePlayServicesAvailable(context)
+            val resultCode = try {
+                val googleApiAvailability = com.google.android.gms.common.GoogleApiAvailability.getInstance()
+                googleApiAvailability.isGooglePlayServicesAvailable(context)
+            } catch (e: Throwable) {
+                Log.w(TAG, "Google Play Services availability check skipped: ${e.localizedMessage}")
+                com.google.android.gms.common.ConnectionResult.SERVICE_INVALID
+            }
+
             if (resultCode != com.google.android.gms.common.ConnectionResult.SUCCESS) {
                 Log.i(TAG, "Google Play Services unavailable on device/emulator (code $resultCode). Real-time sockets active.")
                 syncExistingCachedToken(context)
                 return
             }
 
-            FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+            val fcmInstance = try {
+                FirebaseMessaging.getInstance().apply {
+                    isAutoInitEnabled = false
+                }
+            } catch (e: Throwable) {
+                Log.i(TAG, "FirebaseMessaging initialization bypassed: ${e.localizedMessage}")
+                syncExistingCachedToken(context)
+                return
+            }
+
+            fcmInstance.token.addOnCompleteListener { task ->
                 try {
                     if (!task.isSuccessful) {
-                        Log.i(TAG, "FCM token registration skipped (Google Play Services not logged in or restricted in sandbox): ${task.exception?.localizedMessage}")
+                        Log.i(TAG, "FCM token registration skipped (Google Play Services restricted or offline): ${task.exception?.localizedMessage}")
                         syncExistingCachedToken(context)
                         return@addOnCompleteListener
                     }

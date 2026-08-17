@@ -591,6 +591,11 @@ class ZegoCallEngineManager(private val context: Context) {
                     val currentState = _callState.value.state
                     if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) {
                         ringingTimeoutJob?.cancel()
+                        try {
+                            com.family.talkly.service.CallForegroundService.stopCallService(context)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error stopping foreground service: ${e.localizedMessage}")
+                        }
                         callSoundManager.stopAllSounds()
                         val isVideo = (_callState.value.callType == CallType.VIDEO)
                         callSoundManager.configureAudioForActiveCall(isSpeakerOn = isVideo, isMuted = _callState.value.isMuted)
@@ -796,6 +801,11 @@ class ZegoCallEngineManager(private val context: Context) {
     }
 
     fun setIncomingCallFromKilledState(member: FamilyMember, roomID: String, callType: CallType) {
+        try {
+            com.family.talkly.service.CallForegroundService.stopCallService(context)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping foreground service in setIncomingCallFromKilledState: ${e.localizedMessage}")
+        }
         callSoundManager.stopAllSounds()
         _callState.value = CurrentCallInfo(
             state = CallState.INCOMING_RINGING,
@@ -867,6 +877,11 @@ class ZegoCallEngineManager(private val context: Context) {
 
     fun acceptCall() {
         ringingTimeoutJob?.cancel()
+        try {
+            com.family.talkly.service.CallForegroundService.stopCallService(context)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping foreground service in acceptCall: ${e.localizedMessage}")
+        }
         callSoundManager.stopAllSounds()
         val current = _callState.value
         val member = current.targetMember
@@ -893,6 +908,11 @@ class ZegoCallEngineManager(private val context: Context) {
 
     fun declineCall() {
         ringingTimeoutJob?.cancel()
+        try {
+            com.family.talkly.service.CallForegroundService.stopCallService(context)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping foreground service in declineCall: ${e.localizedMessage}")
+        }
         callSoundManager.stopAllSounds()
         val current = _callState.value
         val member = current.targetMember
@@ -928,6 +948,11 @@ class ZegoCallEngineManager(private val context: Context) {
 
     fun endCall() {
         ringingTimeoutJob?.cancel()
+        try {
+            com.family.talkly.service.CallForegroundService.stopCallService(context)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping foreground service in endCall: ${e.localizedMessage}")
+        }
         callSoundManager.stopAllSounds()
         val current = _callState.value
         val member = current.targetMember
@@ -958,13 +983,13 @@ class ZegoCallEngineManager(private val context: Context) {
     private fun endCallInternal(reason: String) {
         ringingTimeoutJob?.cancel()
         timerJob?.cancel()
-        callSoundManager.stopAllSounds()
-        callSoundManager.resetAudioMode()
         try {
             com.family.talkly.service.CallForegroundService.stopCallService(context)
         } catch (e: Exception) {
             Log.w(TAG, "Error stopping foreground call service: ${e.localizedMessage}")
         }
+        callSoundManager.stopAllSounds()
+        callSoundManager.resetAudioMode()
         leaveCallRoom()
         _callState.value = _callState.value.copy(state = CallState.ENDED)
 

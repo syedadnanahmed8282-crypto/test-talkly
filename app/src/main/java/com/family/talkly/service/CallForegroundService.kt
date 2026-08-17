@@ -36,6 +36,17 @@ class CallForegroundService : Service() {
         const val EXTRA_ROOM_ID = "room_id"
         const val EXTRA_CALL_TYPE = "call_type"
 
+        @Volatile
+        private var activeServiceInstance: CallForegroundService? = null
+
+        fun stopRingtoneImmediately() {
+            try {
+                activeServiceInstance?.stopRingtone()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error stopping ringtone directly in memory: ${e.localizedMessage}")
+            }
+        }
+
         fun startCallService(
             context: Context,
             callerName: String,
@@ -89,6 +100,8 @@ class CallForegroundService : Service() {
             callType: String,
             roomId: String
         ) {
+            // Guarantee incoming ringtone is stopped immediately before active call notification transitions
+            stopRingtoneImmediately()
             val intent = Intent(context, CallForegroundService::class.java).apply {
                 action = ACTION_START_ACTIVE_CALL
                 putExtra(EXTRA_CALLER_NAME, callerName)
@@ -107,15 +120,26 @@ class CallForegroundService : Service() {
         }
 
         fun stopCallService(context: Context) {
+            // First stop ringtone in memory immediately to avoid any OS Intent delivery latency delay
+            stopRingtoneImmediately()
             val intent = Intent(context, CallForegroundService::class.java).apply {
                 action = ACTION_STOP_INCOMING_CALL
             }
-            context.startService(intent)
+            try {
+                context.startService(intent)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to startService for stopCallService: ${e.localizedMessage}")
+            }
         }
     }
 
     private var ringtone: Ringtone? = null
     private var wakeLock: PowerManager.WakeLock? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        activeServiceInstance = this
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -247,7 +271,7 @@ class CallForegroundService : Service() {
         }
     }
 
-    private fun stopRingtone() {
+    fun stopRingtone() {
         try {
             ringtone?.let {
                 if (it.isPlaying) {
@@ -415,6 +439,9 @@ class CallForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        if (activeServiceInstance == this) {
+            activeServiceInstance = null
+        }
         stopSelfAndRingtone()
         super.onDestroy()
     }

@@ -13,17 +13,23 @@ import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
 import android.net.Uri
 import android.util.Log
-import com.google.firebase.storage.FirebaseStorage
-import com.google.firebase.storage.StorageException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okio.BufferedSink
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.text.DecimalFormat
+import java.util.concurrent.TimeUnit
 
 sealed class MediaProcessingState {
     object Idle : MediaProcessingState()
@@ -420,28 +426,34 @@ class MediaCompressorAndUploader(private val context: Context) {
         }
     }
 
-    private fun getFirebaseStorageInstance(): FirebaseStorage {
-        val storage = try {
-            val defaultStorage = FirebaseStorage.getInstance()
-            val bucket = defaultStorage.app.options.storageBucket
-            if (bucket.isNullOrBlank()) {
-                FirebaseStorage.getInstance("gs://familycallapp-e6b21.firebasestorage.app")
-            } else {
-                defaultStorage
-            }
-        } catch (e: Exception) {
-            FirebaseStorage.getInstance("gs://familycallapp-e6b21.firebasestorage.app")
-        }
+    private class ProgressRequestBody(
+        private val file: File,
+        private val contentType: okhttp3.MediaType?,
+        private val onProgress: (bytesWritten: Long, totalBytes: Long) -> Unit
+    ) : RequestBody() {
+        override fun contentType(): okhttp3.MediaType? = contentType
+        override fun contentLength(): Long = file.length()
 
-        // Allow extended network retry durations for high-payload media streams
-        storage.maxUploadRetryTimeMillis = 600_000L // 10 minutes total retry limit
-        storage.maxOperationRetryTimeMillis = 300_000L // 5 minutes max per operation
-        return storage
+        override fun writeTo(sink: BufferedSink) {
+            val totalLength = file.length()
+            val buffer = ByteArray(16384)
+            var uploaded = 0L
+            file.inputStream().use { input ->
+                var read: Int
+                while (input.read(buffer).also { read = it } != -1) {
+                    sink.write(buffer, 0, read)
+                    uploaded += read
+                    if (totalLength > 0) {
+                        onProgress(uploaded, totalLength)
+                    }
+                }
+            }
+        }
     }
 
     /**
-     * Uploads compressed file to Firebase Storage with native resumable putFile upload,
-     * smooth snapshot progress reporting, and coroutine retry handling.
+     * Uploads compressed file to Cloudinary with unsigned upload API,
+     * progress reporting, and coroutine retry handling.
      */
     suspend fun uploadToFirebaseStorage(
         file: File,
@@ -449,7 +461,7 @@ class MediaCompressorAndUploader(private val context: Context) {
         onProgress: (Int, String) -> Unit
     ): String = withContext(Dispatchers.IO) {
         val canonicalFile = file.absoluteFile
-        Log.d(TAG, "uploadToFirebaseStorage called: remotePath='$remotePath', file='${canonicalFile.absolutePath}', exists=${canonicalFile.exists()}, length=${canonicalFile.length()}")
+        Log.d(TAG, "uploadToFirebaseStorage (Cloudinary) called: remotePath='$remotePath', file='${canonicalFile.absolutePath}', exists=${canonicalFile.exists()}, length=${canonicalFile.length()}")
 
         if (!canonicalFile.exists() || canonicalFile.length() == 0L) {
             val errorMsg = "Upload aborted: File does not exist at location (${canonicalFile.absolutePath})"
@@ -457,40 +469,71 @@ class MediaCompressorAndUploader(private val context: Context) {
             throw java.io.FileNotFoundException(errorMsg)
         }
 
-        val storage = getFirebaseStorageInstance()
-        val storageRef = storage.reference.child(remotePath)
-        val fileUri = Uri.fromFile(canonicalFile)
         val totalBytes = canonicalFile.length()
-
         var lastException: Exception? = null
 
-        // Perform native resumable upload using standard putFile (do NOT use putStream)
+        val client = OkHttpClient.Builder()
+            .connectTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(180, TimeUnit.SECONDS)
+            .readTimeout(180, TimeUnit.SECONDS)
+            .build()
+
+        val mimeType = when {
+            canonicalFile.name.endsWith(".mp4", ignoreCase = true) -> "video/mp4"
+            canonicalFile.name.endsWith(".m4a", ignoreCase = true) || canonicalFile.name.endsWith(".aac", ignoreCase = true) || canonicalFile.name.endsWith(".mp3", ignoreCase = true) -> "audio/mp4"
+            canonicalFile.name.endsWith(".png", ignoreCase = true) -> "image/png"
+            else -> "image/jpeg"
+        }
+        val mediaType = mimeType.toMediaTypeOrNull()
+
         for (attempt in 1..3) {
             try {
-                onProgress(0, "Initiating upload session...")
+                onProgress(0, "Initiating Cloudinary upload session...")
 
-                val uploadTask = storageRef.putFile(fileUri)
-
-                uploadTask.addOnProgressListener { snapshot ->
-                    val bytesSent = snapshot.bytesTransferred
-                    val total = if (snapshot.totalByteCount > 0) snapshot.totalByteCount else totalBytes
+                val fileBody = ProgressRequestBody(canonicalFile, mediaType) { bytesWritten, total ->
                     if (total > 0) {
-                        val progressPercent = ((100.0 * bytesSent) / total).toInt().coerceIn(0, 100)
+                        val progressPercent = ((100.0 * bytesWritten) / total).toInt().coerceIn(0, 99)
                         onProgress(
                             progressPercent,
-                            "Uploading (${formatFileSize(bytesSent)} / ${formatFileSize(total)})$progressPercent%"
+                            "Uploading (${formatFileSize(bytesWritten)} / ${formatFileSize(total)}) $progressPercent%"
                         )
                     }
-                }.addOnFailureListener { exception ->
-                    Log.e("FirebaseStorage", "Upload failed: ${exception.localizedMessage}")
                 }
 
-                // Await upload completion safely
-                uploadTask.await()
+                val requestBody = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("file", canonicalFile.name, fileBody)
+                    .addFormDataPart("upload_preset", "talkly_media")
+                    .build()
 
-                // Fetch final download URL
-                val downloadUri = storageRef.downloadUrl.await()
+                val uploadUrl = "https://api.cloudinary.com/v1_1/tsnijtq5/auto/upload"
+
+                val request = Request.Builder()
+                    .url(uploadUrl)
+                    .post(requestBody)
+                    .build()
+
+                val response = client.newCall(request).execute()
+                val responseBody = response.body?.string() ?: ""
+
+                if (!response.isSuccessful) {
+                    val errorDetail = try {
+                        JSONObject(responseBody).optJSONObject("error")?.optString("message") ?: responseBody
+                    } catch (e: Exception) {
+                        responseBody
+                    }
+                    throw IOException("Cloudinary upload failed (HTTP ${response.code}): $errorDetail")
+                }
+
+                val json = JSONObject(responseBody)
+                val secureUrl = json.optString("secure_url").ifBlank { json.optString("url") }
+
+                if (secureUrl.isBlank()) {
+                    throw IOException("Cloudinary response did not contain secure_url: $responseBody")
+                }
+
                 onProgress(100, "Media upload complete!")
+                Log.d(TAG, "Cloudinary upload successful: $secureUrl")
 
                 // Clean up temporary compressed file ONLY after successful download URL generation
                 try {
@@ -502,26 +545,26 @@ class MediaCompressorAndUploader(private val context: Context) {
                     Log.w(TAG, "Temp file cleanup warning: ${e.localizedMessage}")
                 }
 
-                return@withContext downloadUri.toString()
+                return@withContext secureUrl
 
             } catch (e: Exception) {
                 lastException = e
+                Log.w(TAG, "Upload attempt $attempt failed: ${e.localizedMessage}")
 
-                // Check if it's a recoverable storage exception
-                if (e is StorageException || e is IOException) {
+                if (e is IOException) {
                     if (attempt < 3) {
                         val backoffMs = 2000L * attempt
-                        onProgress(10, "Connection dropped. Re-establishing session ($attempt/3)...")
-                        kotlinx.coroutines.delay(backoffMs)
+                        onProgress(10, "Connection dropped. Retrying upload ($attempt/3)...")
+                        delay(backoffMs)
                         continue
                     }
                 } else {
-                    throw e // Non-network failure, break immediately
+                    throw e
                 }
             }
         }
 
-        throw IOException("Video upload failed after retries: ${lastException?.localizedMessage}")
+        throw IOException("Media upload failed after retries: ${lastException?.localizedMessage}")
     }
 
     fun encodeFileToBase64(file: File): String {

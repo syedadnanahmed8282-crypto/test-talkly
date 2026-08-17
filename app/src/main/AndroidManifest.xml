@@ -29,6 +29,17 @@
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
 
+    <queries>
+        <package android:name="com.google.android.gms" />
+        <package android:name="com.android.vending" />
+        <intent>
+            <action android:name="com.google.android.c2dm.intent.RECEIVE" />
+        </intent>
+        <intent>
+            <action android:name="com.google.android.gms.auth.api.signin.service.START" />
+        </intent>
+    </queries>
+
     <application
         android:name=".TalklyApp"
         android:allowBackup="false"
@@ -39,6 +50,13 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.MyApplication">
+
+        <meta-data
+            android:name="firebase_messaging_auto_init_enabled"
+            android:value="false" />
+        <meta-data
+            android:name="firebase_analytics_collection_deactivated"
+            android:value="true" />
 
         <property
             android:name="android.content.attribution_tag"
