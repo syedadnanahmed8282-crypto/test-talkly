@@ -144,6 +144,19 @@ class ZegoCallEngineManager(private val context: Context) {
                 }
             }
         }
+
+        com.family.talkly.util.FirestoreConnectionManager.addReconnectListener {
+            try {
+                val profile = currentUserProfile ?: getLocalUserProfile()
+                val repo = chatRepository
+                if (repo != null && profile.uid.isNotBlank() && profile.uid != "self") {
+                    currentSyncedUserId = null // Allow re-binding fresh listener
+                    startRealtimeCallSync(profile, repo)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error refreshing call sync on Firestore reconnect: ${e.localizedMessage}")
+            }
+        }
     }
 
     @Synchronized

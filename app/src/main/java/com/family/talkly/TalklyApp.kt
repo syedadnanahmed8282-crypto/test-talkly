@@ -10,6 +10,7 @@ class TalklyApp : Application() {
         super.onCreate()
         ensureFirebaseInitialized()
         com.family.talkly.util.TalklyNotificationHelper.initNotificationChannels(this)
+        com.family.talkly.util.FirestoreConnectionManager.init(this)
     }
 
     private fun ensureFirebaseInitialized() {

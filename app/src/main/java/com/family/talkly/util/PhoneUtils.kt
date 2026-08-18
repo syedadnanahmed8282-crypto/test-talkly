@@ -101,6 +101,19 @@ object PhoneUtils {
      */
     fun getVideoThumbnail(context: Context, videoUrl: String?): Bitmap? {
         if (videoUrl.isNullOrBlank()) return null
+        val cachedFile = VideoCacheManager.getCachedVideoFile(context, videoUrl)
+        if (cachedFile != null && cachedFile.exists()) {
+            val retriever = MediaMetadataRetriever()
+            return try {
+                retriever.setDataSource(cachedFile.absolutePath)
+                retriever.frameAtTime
+            } catch (e: Throwable) {
+                null
+            } finally {
+                try { retriever.release() } catch (_: Exception) {}
+            }
+        }
+
         val retriever = MediaMetadataRetriever()
         var tempCreatedFile: File? = null
         return try {
@@ -138,6 +151,10 @@ object PhoneUtils {
      */
     fun getMediaUri(context: Context, mediaUrl: String?): Uri? {
         if (mediaUrl.isNullOrBlank()) return null
+        val cached = VideoCacheManager.getCachedVideoFile(context, mediaUrl)
+        if (cached != null && cached.exists()) {
+            return Uri.fromFile(cached)
+        }
         return try {
             if (mediaUrl.startsWith("data:") || mediaUrl.startsWith("base64:")) {
                 val commaIndex = mediaUrl.indexOf(",")
