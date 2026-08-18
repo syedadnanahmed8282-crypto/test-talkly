@@ -1885,6 +1885,36 @@ class FirebaseChatRepository(private val context: Context) {
     private var thirdMessagesListener: ListenerRegistration? = null
     private var isInitialMessageSyncDone = false
 
+    fun forceReconnectListeners(reason: String = "manual") {
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val uid = currentSyncedUserId
+            ?: com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+            ?: sessionPrefs.getString("user_uid", null)
+            ?: fallbackPrefs.getString("user_uid", null)
+
+        Log.d(TAG, "forceReconnectListeners called (reason: $reason, targetUid: $uid)")
+        if (uid.isNullOrBlank()) {
+            Log.d(TAG, "forceReconnectListeners: No active user session, skipping reconnect.")
+            return
+        }
+
+        try {
+            messagesListener?.remove()
+            messagesListener = null
+            secondaryMessagesListener?.remove()
+            secondaryMessagesListener = null
+            thirdMessagesListener?.remove()
+            thirdMessagesListener = null
+            currentSyncedUserId = null // Reset so startRealtimeMessageSync bypasses the guard
+
+            startRealtimeMessageSync(uid)
+            Log.d(TAG, "forceReconnectListeners: Successfully reattached message listeners for uid=$uid (trigger: $reason)")
+        } catch (e: Exception) {
+            Log.e(TAG, "forceReconnectListeners encountered error: ${e.localizedMessage}")
+        }
+    }
+
     fun startRealtimeMessageSync(currentUserId: String?) {
         if (currentUserId.isNullOrBlank()) return
         if (currentSyncedUserId == currentUserId && messagesListener != null) return

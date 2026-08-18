@@ -3,15 +3,23 @@ package com.family.talkly
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,6 +61,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var chatRepository: FirebaseChatRepository
     private lateinit var zegoManager: ZegoCallEngineManager
     private lateinit var themePreferences: ThemePreferences
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,6 +99,9 @@ class MainActivity : ComponentActivity() {
 
         com.family.talkly.util.TalklyNotificationHelper.initNotificationChannels(applicationContext)
         com.family.talkly.util.FcmTokenManager.syncFcmToken(applicationContext)
+
+        // Setup lifecycle & network-aware realtime reconnection for messages
+        setupLifecycleAndNetworkSync()
 
         // Request battery optimization exemption for uninterrupted push delivery
         requestBatteryOptimizationExemption()
@@ -302,6 +314,66 @@ class MainActivity : ComponentActivity() {
             }
         } catch (e: Exception) {
             android.util.Log.w("MainActivity", "Battery optimization request failed/ignored: ${e.localizedMessage}")
+        }
+    }
+
+    private fun setupLifecycleAndNetworkSync() {
+        // 1. ProcessLifecycleOwner observer to detect app background -> foreground transitions
+        try {
+            ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
+                override fun onStart(owner: LifecycleOwner) {
+                    super.onStart(owner)
+                    Log.d("MainActivity", "App entered FOREGROUND (ProcessLifecycleOwner.onStart) -> triggering chatRepository.forceReconnectListeners")
+                    chatRepository.forceReconnectListeners("app_foreground")
+                }
+
+                override fun onStop(owner: LifecycleOwner) {
+                    super.onStop(owner)
+                    Log.d("MainActivity", "App entered BACKGROUND (ProcessLifecycleOwner.onStop)")
+                }
+            })
+            Log.d("MainActivity", "ProcessLifecycleOwner observer registered successfully")
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Failed to register ProcessLifecycleOwner observer: ${e.localizedMessage}")
+        }
+
+        // 2. ConnectivityManager.NetworkCallback to detect network change / reconnect
+        try {
+            val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            if (connectivityManager != null) {
+                val request = NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build()
+
+                networkCallback = object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: Network) {
+                        super.onAvailable(network)
+                        Log.d("MainActivity", "Network available/reconnected (NetworkCallback.onAvailable) -> triggering chatRepository.forceReconnectListeners")
+                        chatRepository.forceReconnectListeners("network_available")
+                    }
+
+                    override fun onLost(network: Network) {
+                        super.onLost(network)
+                        Log.d("MainActivity", "Network connection lost (NetworkCallback.onLost)")
+                    }
+                }
+                connectivityManager.registerNetworkCallback(request, networkCallback!!)
+                Log.d("MainActivity", "NetworkCallback registered successfully")
+            }
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Failed to register NetworkCallback: ${e.localizedMessage}")
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            networkCallback?.let {
+                val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                cm?.unregisterNetworkCallback(it)
+            }
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Error unregistering NetworkCallback: ${e.localizedMessage}")
         }
     }
 }

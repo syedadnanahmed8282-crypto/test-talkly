@@ -127,8 +127,25 @@ class ZegoCallEngineManager(private val context: Context) {
 
     private var timerJob: Job? = null
     private var ringingTimeoutJob: Job? = null
+    private var lastMissedCallSessionId: String? = null
     private val scope = CoroutineScope(Dispatchers.Main)
     var onCallLogAdded: ((CallLog) -> Unit)? = null
+
+    private fun sendMissedCallMessageOnce(targetMember: FamilyMember?, callType: CallType, roomId: String) {
+        if (targetMember == null || roomId.isBlank()) return
+        if (lastMissedCallSessionId == roomId) {
+            Log.d(TAG, "Missed call message already sent for session $roomId, ignoring duplicate attempt.")
+            return
+        }
+        lastMissedCallSessionId = roomId
+        val msgText = if (callType == CallType.VIDEO) "Missed video call 📹" else "Missed audio call 📞"
+        Log.d(TAG, "Sending single missed call message for session $roomId to ${targetMember.name}")
+        chatRepository?.sendMessage(
+            memberId = targetMember.id,
+            textContent = msgText,
+            type = com.family.talkly.data.models.MessageType.TEXT
+        )
+    }
 
     init {
         Log.i(TAG, "ZEGOCloud Express Engine initialized with AppID: $ZEGO_APP_ID")
@@ -597,6 +614,7 @@ class ZegoCallEngineManager(private val context: Context) {
                 if (isMeCaller) {
                     val currentState = _callState.value.state
                     if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) {
+                        lastMissedCallSessionId = roomID
                         ringingTimeoutJob?.cancel()
                         try {
                             com.family.talkly.service.CallForegroundService.stopCallService(context)
@@ -744,12 +762,7 @@ class ZegoCallEngineManager(private val context: Context) {
                 timedOutData["status"] = "UNAVAILABLE"
                 publishCallSignalToTargets(callerProfile, targetUid, targetSuffix, timedOutData)
 
-                val msgText = if (callType == CallType.VIDEO) "Missed video call 📹" else "Missed audio call 📞"
-                chatRepository?.sendMessage(
-                    memberId = member.id,
-                    textContent = msgText,
-                    type = com.family.talkly.data.models.MessageType.TEXT
-                )
+                sendMissedCallMessageOnce(member, callType, roomID)
 
                 addCallLog(
                     CallLog(
@@ -913,6 +926,7 @@ class ZegoCallEngineManager(private val context: Context) {
 
         publishCallUpdateToTargets(myProfile, targetUid, targetSuffix, "ACCEPTED")
 
+        lastMissedCallSessionId = current.roomID
         _callState.value = current.copy(state = CallState.ACTIVE, isSpeakerOn = isVideo, isOutgoing = false)
         com.family.talkly.service.CallForegroundService.startActiveCallService(
             context = context,
@@ -942,6 +956,7 @@ class ZegoCallEngineManager(private val context: Context) {
         publishCallUpdateToTargets(myProfile, targetUid, targetSuffix, "DECLINED")
 
         if (member != null) {
+            sendMissedCallMessageOnce(member, current.callType, current.roomID)
             addCallLog(
                 CallLog(
                     id = "call_${System.currentTimeMillis()}",
@@ -973,6 +988,7 @@ class ZegoCallEngineManager(private val context: Context) {
         val targetSuffix = PhoneUtils.extractPhoneSuffix(member?.phone ?: "")
 
         publishCallUpdateToTargets(myProfile, targetUid, targetSuffix, "ENDED")
+        lastMissedCallSessionId = current.roomID
 
         if (member != null) {
             val isOutgoing = current.isOutgoing || current.state == CallState.OUTGOING_RINGING || current.state == CallState.OUTGOING_CALLING
