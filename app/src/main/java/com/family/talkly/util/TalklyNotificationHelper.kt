@@ -17,6 +17,7 @@ object TalklyNotificationHelper {
 
     const val CHANNEL_MESSAGES_ID = "talkly_messages_channel"
     const val CHANNEL_CALLS_ID = "talkly_calls_channel"
+    const val CHANNEL_ONGOING_CALLS_ID = "talkly_ongoing_calls_channel"
     const val SUMMARY_NOTIFICATION_ID = 99999
     private const val TAG = "Talkly_NotificationHelper"
 
@@ -93,6 +94,18 @@ object TalklyNotificationHelper {
                 enableVibration(true)
             }
             notificationManager.createNotificationChannel(callsChannel)
+
+            // 3. Ongoing Call Notification Channel strictly silent
+            val ongoingCallsChannel = NotificationChannel(
+                CHANNEL_ONGOING_CALLS_ID,
+                "Ongoing Calls",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Ongoing active call status notifications"
+                setSound(null, null)
+                enableVibration(false)
+            }
+            notificationManager.createNotificationChannel(ongoingCallsChannel)
 
             Log.d(TAG, "Notification channels initialized with system default sounds.")
         }

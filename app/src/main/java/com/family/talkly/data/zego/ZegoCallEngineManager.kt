@@ -80,7 +80,8 @@ data class CurrentCallInfo(
     val remoteStreamId: String = "",
     val isRemoteStreamPlaying: Boolean = false,
     val isCameraEnabled: Boolean = true,
-    val isSpeakerMuted: Boolean = false
+    val isSpeakerMuted: Boolean = false,
+    val isOutgoing: Boolean = false
 )
 
 class ZegoCallEngineManager(private val context: Context) {
@@ -517,6 +518,7 @@ class ZegoCallEngineManager(private val context: Context) {
         val isMeCaller = (myUid.isNotBlank() && myUid != "self" && callerUid == myUid) ||
                 (mySuffix.isNotBlank() && callerSuffix.isNotBlank() && callerSuffix == mySuffix) ||
                 (myPhone.isNotBlank() && callerPhone.isNotBlank() && callerPhone == myPhone) ||
+                _callState.value.isOutgoing ||
                 ((_callState.value.state == CallState.OUTGOING_CALLING || _callState.value.state == CallState.OUTGOING_RINGING) && _callState.value.roomID == roomID)
 
         val isMeReceiver = !isMeCaller && (
@@ -528,6 +530,12 @@ class ZegoCallEngineManager(private val context: Context) {
         when (status) {
             "CALLING", "RINGING" -> {
                 if (isMeReceiver && !isMeCaller) {
+                    val currentState = _callState.value.state
+                    if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING || currentState == CallState.ACTIVE) {
+                        Log.d(TAG, "Ignoring incoming call doc: already in active/outgoing call ($currentState)")
+                        return
+                    }
+
                     val callTimestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
                     val callAgeMs = System.currentTimeMillis() - callTimestamp
                     if (callAgeMs > 45_000L) {
@@ -553,7 +561,6 @@ class ZegoCallEngineManager(private val context: Context) {
                         Log.w(TAG, "Error sending PEER_RINGING ACK: ${e.localizedMessage}")
                     }
 
-                    val currentState = _callState.value.state
                     if (currentState == CallState.IDLE || currentState == CallState.ENDED) {
                         callSoundManager.startIncomingRingtone()
                         val incomingCaller = FamilyMember(
@@ -665,7 +672,8 @@ class ZegoCallEngineManager(private val context: Context) {
             isMuted = false,
             isCameraOff = false,
             isFrontCamera = true,
-            isSpeakerOn = isVideo
+            isSpeakerOn = isVideo,
+            isOutgoing = true
         )
         callSoundManager.startOutgoingRingbackTone()
         com.family.talkly.service.CallForegroundService.startActiveCallService(
@@ -743,6 +751,18 @@ class ZegoCallEngineManager(private val context: Context) {
                     type = com.family.talkly.data.models.MessageType.TEXT
                 )
 
+                addCallLog(
+                    CallLog(
+                        id = "call_${System.currentTimeMillis()}",
+                        memberId = member.id,
+                        memberName = member.name,
+                        direction = CallDirection.OUTGOING,
+                        callType = callType,
+                        timestamp = System.currentTimeMillis(),
+                        durationSeconds = 0
+                    )
+                )
+
                 endCallInternal("No Answer")
             }
         }
@@ -758,7 +778,11 @@ class ZegoCallEngineManager(private val context: Context) {
             val db = firestore ?: return
             val receiverPhone = data["receiverPhone"] as? String ?: ""
             val cleanReceiverPhone = PhoneUtils.cleanPhoneNumber(receiverPhone)
+            val roomID = data["roomID"] as? String ?: (data["id"] as? String ?: "")
 
+            if (roomID.isNotBlank()) {
+                db.collection("active_calls").document(roomID).set(data)
+            }
             if (targetUid.isNotBlank() && targetUid != "self") {
                 db.collection("active_calls").document("user_$targetUid").set(data)
             }
@@ -767,12 +791,6 @@ class ZegoCallEngineManager(private val context: Context) {
             }
             if (cleanReceiverPhone.isNotBlank() && cleanReceiverPhone != targetUid && cleanReceiverPhone != targetSuffix) {
                 db.collection("active_calls").document("user_$cleanReceiverPhone").set(data)
-            }
-            if (callerProfile.uid.isNotBlank() && callerProfile.uid != "self") {
-                db.collection("active_calls").document("user_${callerProfile.uid}").set(data)
-            }
-            if (callerProfile.phoneSuffix.isNotBlank() && callerProfile.phoneSuffix != callerProfile.uid) {
-                db.collection("active_calls").document("user_${callerProfile.phoneSuffix}").set(data)
             }
 
             // Send high priority FCM push for incoming calls
@@ -878,9 +896,9 @@ class ZegoCallEngineManager(private val context: Context) {
     fun acceptCall() {
         ringingTimeoutJob?.cancel()
         try {
-            com.family.talkly.service.CallForegroundService.stopCallService(context)
+            com.family.talkly.service.CallForegroundService.stopRingtoneImmediately()
         } catch (e: Exception) {
-            Log.w(TAG, "Error stopping foreground service in acceptCall: ${e.localizedMessage}")
+            Log.w(TAG, "Error stopping ringtone in acceptCall: ${e.localizedMessage}")
         }
         callSoundManager.stopAllSounds()
         val current = _callState.value
@@ -895,7 +913,7 @@ class ZegoCallEngineManager(private val context: Context) {
 
         publishCallUpdateToTargets(myProfile, targetUid, targetSuffix, "ACCEPTED")
 
-        _callState.value = current.copy(state = CallState.ACTIVE, isSpeakerOn = isVideo)
+        _callState.value = current.copy(state = CallState.ACTIVE, isSpeakerOn = isVideo, isOutgoing = false)
         com.family.talkly.service.CallForegroundService.startActiveCallService(
             context = context,
             callerName = member?.name ?: "Talkly User",
@@ -935,13 +953,6 @@ class ZegoCallEngineManager(private val context: Context) {
                     durationSeconds = 0
                 )
             )
-
-            val msgText = if (current.callType == CallType.VIDEO) "Missed video call 📹" else "Missed audio call 📞"
-            chatRepository?.sendMessage(
-                memberId = member.id,
-                textContent = msgText,
-                type = com.family.talkly.data.models.MessageType.TEXT
-            )
         }
         endCallInternal("Call Declined")
     }
@@ -964,7 +975,8 @@ class ZegoCallEngineManager(private val context: Context) {
         publishCallUpdateToTargets(myProfile, targetUid, targetSuffix, "ENDED")
 
         if (member != null) {
-            val direction = if (current.state == CallState.OUTGOING_RINGING || current.state == CallState.OUTGOING_CALLING) CallDirection.OUTGOING else CallDirection.INCOMING
+            val isOutgoing = current.isOutgoing || current.state == CallState.OUTGOING_RINGING || current.state == CallState.OUTGOING_CALLING
+            val direction = if (isOutgoing) CallDirection.OUTGOING else CallDirection.INCOMING
             addCallLog(
                 CallLog(
                     id = "call_${System.currentTimeMillis()}",

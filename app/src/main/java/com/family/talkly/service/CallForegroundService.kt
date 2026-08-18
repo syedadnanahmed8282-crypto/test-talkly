@@ -200,9 +200,9 @@ class CallForegroundService : Service() {
             }
             ACTION_DECLINE_CALL -> {
                 val roomId = intent.getStringExtra(EXTRA_ROOM_ID) ?: ""
-                if (roomId.isNotBlank()) {
-                    declineCallInFirestore(roomId)
-                }
+                val callerUid = intent.getStringExtra(EXTRA_CALLER_UID) ?: ""
+                val callerPhone = intent.getStringExtra(EXTRA_CALLER_PHONE) ?: ""
+                declineCallInFirestore(roomId, callerUid, callerPhone)
                 stopSelfAndRingtone()
             }
             ACTION_STOP_INCOMING_CALL -> {
@@ -315,6 +315,8 @@ class CallForegroundService : Service() {
         val declineIntent = Intent(this, CallForegroundService::class.java).apply {
             action = ACTION_DECLINE_CALL
             putExtra(EXTRA_ROOM_ID, roomId)
+            putExtra(EXTRA_CALLER_UID, callerUid)
+            putExtra(EXTRA_CALLER_PHONE, callerPhone)
         }
 
         val declinePendingIntent = PendingIntent.getService(
@@ -340,9 +342,7 @@ class CallForegroundService : Service() {
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePendingIntent)
             .addAction(android.R.drawable.ic_menu_call, "Answer", fullScreenPendingIntent)
 
-        val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
         } else {
             0
@@ -358,23 +358,12 @@ class CallForegroundService : Service() {
             } else {
                 startForeground(notificationId, notification)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "startForeground failed with type $primaryType: ${e.localizedMessage}, attempting fallback types")
+        } catch (e: Throwable) {
+            Log.e(TAG, "startForeground failed with type $primaryType: ${e.localizedMessage}, attempting fallback untyped")
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    startForeground(notificationId, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(notificationId, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-                } else {
-                    startForeground(notificationId, notification)
-                }
-            } catch (e2: Exception) {
-                Log.e(TAG, "Fallback startForeground with MICROPHONE/DATA_SYNC failed: ${e2.localizedMessage}")
-                try {
-                    startForeground(notificationId, notification)
-                } catch (e3: Exception) {
-                    Log.e(TAG, "Untyped startForeground failed: ${e3.localizedMessage}")
-                }
+                startForeground(notificationId, notification)
+            } catch (e3: Throwable) {
+                Log.e(TAG, "Untyped startForeground failed: ${e3.localizedMessage}")
             }
         }
     }
@@ -399,20 +388,18 @@ class CallForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val notificationBuilder = NotificationCompat.Builder(this, TalklyNotificationHelper.CHANNEL_CALLS_ID)
+        val notificationBuilder = NotificationCompat.Builder(this, TalklyNotificationHelper.CHANNEL_ONGOING_CALLS_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("Ongoing $callType Call")
             .setContentText("In call with $callerName")
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setOngoing(true)
             .setSound(null)
             .setContentIntent(contentPendingIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
-        val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
         } else {
             0
@@ -421,11 +408,26 @@ class CallForegroundService : Service() {
         safeStartForeground(NOTIFICATION_ID, notificationBuilder.build(), foregroundType)
     }
 
-    private fun declineCallInFirestore(roomId: String) {
+    private fun declineCallInFirestore(roomId: String, callerUid: String, callerPhone: String) {
         try {
             val firestore = FirebaseFirestore.getInstance()
-            firestore.collection("active_calls").document(roomId)
-                .update("status", "DECLINED")
+            val declinePayload = mapOf(
+                "status" to "DECLINED",
+                "updatedAt" to System.currentTimeMillis()
+            )
+            if (roomId.isNotBlank()) {
+                firestore.collection("active_calls").document(roomId)
+                    .set(declinePayload, com.google.firebase.firestore.SetOptions.merge())
+            }
+            if (callerUid.isNotBlank() && callerUid != "self") {
+                firestore.collection("active_calls").document("user_$callerUid")
+                    .set(declinePayload, com.google.firebase.firestore.SetOptions.merge())
+            }
+            val callerSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(callerPhone)
+            if (callerSuffix.isNotBlank()) {
+                firestore.collection("active_calls").document("user_$callerSuffix")
+                    .set(declinePayload, com.google.firebase.firestore.SetOptions.merge())
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error updating decline call status in Firestore: ${e.localizedMessage}")
         }
