@@ -118,19 +118,6 @@ class FirebaseChatRepository(private val context: Context) {
         seedInitialFamilyChats()
         loadStatuses()
         loadBlockedUsers()
-
-        com.family.talkly.util.FirestoreConnectionManager.addReconnectListener {
-            try {
-                val uid = currentSyncedUserId
-                if (!uid.isNullOrBlank()) {
-                    setupFirestorePresenceListener()
-                    setupFirestoreUsersVerificationListener()
-                    setupFirestoreStatusesListener()
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Error refreshing listeners on Firestore reconnect: ${e.localizedMessage}")
-            }
-        }
     }
 
     private fun loadDeletedContactIds() {
@@ -3508,13 +3495,5 @@ class FirebaseChatRepository(private val context: Context) {
         }
 
         return groups
-    }
-
-    fun forceReconnectFirestore(reason: String = "MANUAL_FORCE") {
-        com.family.talkly.util.FirestoreConnectionManager.forceReconnectFirestore(reason)
-    }
-
-    fun onAppResume() {
-        com.family.talkly.util.FirestoreConnectionManager.onAppForegrounded()
     }
 }

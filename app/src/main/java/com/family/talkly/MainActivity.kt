@@ -230,16 +230,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        com.family.talkly.util.FirestoreConnectionManager.onAppForegrounded()
-    }
-
-    override fun onPause() {
-        super.onPause()
-        com.family.talkly.util.FirestoreConnectionManager.onAppBackgrounded()
-    }
-
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
