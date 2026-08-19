@@ -1,6 +1,7 @@
 package com.family.talkly.util
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -20,21 +21,57 @@ object FcmTokenManager {
 
     private val httpClient by lazy { OkHttpClient() }
 
+    private fun isEmulator(): Boolean {
+        return (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
+                || Build.FINGERPRINT.startsWith("generic")
+                || Build.FINGERPRINT.startsWith("unknown")
+                || Build.HARDWARE.contains("goldfish")
+                || Build.HARDWARE.contains("ranchu")
+                || Build.MODEL.contains("google_sdk")
+                || Build.MODEL.contains("Emulator")
+                || Build.MODEL.contains("Android SDK built for")
+                || Build.MANUFACTURER.contains("Genymotion")
+                || Build.PRODUCT.contains("sdk_google")
+                || Build.PRODUCT.contains("google_sdk")
+                || Build.PRODUCT.contains("sdk")
+                || Build.PRODUCT.contains("sdk_x86")
+                || Build.PRODUCT.contains("sdk_gphone")
+                || Build.PRODUCT.contains("vbox86p")
+                || Build.PRODUCT.contains("emulator")
+                || Build.PRODUCT.contains("simulator")
+    }
+
+    private fun isGooglePlayServicesAvailableSafely(context: Context): Boolean {
+        if (isEmulator()) {
+            Log.d(TAG, "Running in emulator environment. Skipping GMS broker calls.")
+            return false
+        }
+        return try {
+            val pm = context.packageManager
+            val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageInfo("com.google.android.gms", android.content.pm.PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo("com.google.android.gms", 0)
+            }
+            if (packageInfo.applicationInfo?.enabled != true) {
+                return false
+            }
+            val availability = com.google.android.gms.common.GoogleApiAvailability.getInstance()
+            availability.isGooglePlayServicesAvailable(context) == com.google.android.gms.common.ConnectionResult.SUCCESS
+        } catch (e: Throwable) {
+            Log.d(TAG, "Google Play Services availability check: ${e.localizedMessage}")
+            false
+        }
+    }
+
     /**
      * Fetches current FCM token and registers it in Firestore for the authenticated user.
      */
     fun syncFcmToken(context: Context) {
         try {
-            val resultCode = try {
-                val googleApiAvailability = com.google.android.gms.common.GoogleApiAvailability.getInstance()
-                googleApiAvailability.isGooglePlayServicesAvailable(context)
-            } catch (e: Throwable) {
-                Log.w(TAG, "Google Play Services availability check skipped: ${e.localizedMessage}")
-                com.google.android.gms.common.ConnectionResult.SERVICE_INVALID
-            }
-
-            if (resultCode != com.google.android.gms.common.ConnectionResult.SUCCESS) {
-                Log.i(TAG, "Google Play Services unavailable on device/emulator (code $resultCode). Real-time sockets active.")
+            if (!isGooglePlayServicesAvailableSafely(context)) {
+                Log.i(TAG, "Google Play Services unavailable or non-standard on this device/emulator. Real-time Firestore sync active.")
                 syncExistingCachedToken(context)
                 return
             }
@@ -49,30 +86,38 @@ object FcmTokenManager {
                 return
             }
 
-            fcmInstance.token.addOnCompleteListener { task ->
-                try {
-                    if (!task.isSuccessful) {
-                        Log.i(TAG, "FCM token registration skipped (Google Play Services restricted or offline): ${task.exception?.localizedMessage}")
+            try {
+                fcmInstance.token.addOnCompleteListener { task ->
+                    try {
+                        if (!task.isSuccessful) {
+                            Log.i(TAG, "FCM token registration skipped (Google Play Services restricted or offline): ${task.exception?.localizedMessage}")
+                            syncExistingCachedToken(context)
+                            return@addOnCompleteListener
+                        }
+
+                        val token = task.result
+                        if (token.isNullOrBlank()) {
+                            syncExistingCachedToken(context)
+                            return@addOnCompleteListener
+                        }
+                        Log.d(TAG, "FCM registration token obtained: $token")
+
+                        // Save locally
+                        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        prefs.edit().putString(KEY_FCM_TOKEN, token).apply()
+
+                        updateTokenInFirestore(context, token)
+                    } catch (e: Throwable) {
+                        Log.i(TAG, "FCM token processing error handled: ${e.localizedMessage}")
                         syncExistingCachedToken(context)
-                        return@addOnCompleteListener
                     }
-
-                    val token = task.result
-                    if (token.isNullOrBlank()) {
-                        syncExistingCachedToken(context)
-                        return@addOnCompleteListener
-                    }
-                    Log.d(TAG, "FCM registration token obtained: $token")
-
-                    // Save locally
-                    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                    prefs.edit().putString(KEY_FCM_TOKEN, token).apply()
-
-                    updateTokenInFirestore(context, token)
-                } catch (e: Throwable) {
-                    Log.i(TAG, "FCM token processing error handled: ${e.localizedMessage}")
-                    syncExistingCachedToken(context)
                 }
+            } catch (e: SecurityException) {
+                Log.i(TAG, "SecurityException connecting to GMS broker: ${e.localizedMessage}")
+                syncExistingCachedToken(context)
+            } catch (e: Throwable) {
+                Log.i(TAG, "Error requesting FCM token: ${e.localizedMessage}")
+                syncExistingCachedToken(context)
             }
         } catch (e: Throwable) {
             Log.i(TAG, "FCM service initialization skipped on this device/emulator: ${e.localizedMessage}")

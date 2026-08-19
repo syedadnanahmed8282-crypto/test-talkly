@@ -16,14 +16,21 @@ import com.family.talkly.data.models.MessageType
 import com.family.talkly.util.MediaCompressorAndUploader
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Source
 import java.io.File
 import java.io.FileOutputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
+import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.lifecycle.Lifecycle
 
 import com.family.talkly.data.local.TalklyDatabase
 import com.family.talkly.data.local.entity.ChatMessageEntity
@@ -118,6 +125,7 @@ class FirebaseChatRepository(private val context: Context) {
         seedInitialFamilyChats()
         loadStatuses()
         loadBlockedUsers()
+        startHeartbeatLoop()
     }
 
     private fun loadDeletedContactIds() {
@@ -1884,6 +1892,70 @@ class FirebaseChatRepository(private val context: Context) {
     private var secondaryMessagesListener: ListenerRegistration? = null
     private var thirdMessagesListener: ListenerRegistration? = null
     private var isInitialMessageSyncDone = false
+    private var heartbeatJob: Job? = null
+
+    private fun startHeartbeatLoop() {
+        if (heartbeatJob != null && heartbeatJob?.isActive == true) return
+
+        heartbeatJob = repositoryScope.launch {
+            Log.d(TAG, "Starting Firestore message sync heartbeat loop (25s interval, 5s server timeout)")
+            while (true) {
+                try {
+                    delay(25000L)
+
+                    // 1. Check if app is in foreground
+                    val isForeground = try {
+                        ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+                    } catch (e: Throwable) {
+                        true // fallback if ProcessLifecycleOwner unavailable
+                    }
+
+                    if (!isForeground) {
+                        Log.d(TAG, "Heartbeat skipped: App is in background")
+                        continue
+                    }
+
+                    val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+                    val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+                    val uid = currentSyncedUserId
+                        ?: com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+                        ?: sessionPrefs.getString("user_uid", null)
+                        ?: fallbackPrefs.getString("user_uid", null)
+
+                    if (uid.isNullOrBlank()) {
+                        Log.d(TAG, "Heartbeat skipped: No active user session")
+                        continue
+                    }
+
+                    Log.d(TAG, "Executing heartbeat server read for uid=$uid...")
+                    val startTime = System.currentTimeMillis()
+                    val result = try {
+                        withTimeoutOrNull(5000L) {
+                            firestore?.collection("users")?.document(uid)?.get(Source.SERVER)?.await()
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Heartbeat server read exception: ${e.localizedMessage}")
+                        null
+                    }
+
+                    val elapsed = System.currentTimeMillis() - startTime
+
+                    if (result == null) {
+                        Log.w(TAG, "Heartbeat FAILED/TIMEOUT after ${elapsed}ms -> triggering forceReconnectListeners('heartbeat_failed')")
+                        forceReconnectListeners("heartbeat_failed")
+                    } else {
+                        Log.d(TAG, "Heartbeat SUCCESS in ${elapsed}ms (server responded)")
+                    }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) {
+                        Log.d(TAG, "Heartbeat loop cancelled")
+                        break
+                    }
+                    Log.w(TAG, "Heartbeat loop caught exception: ${e.localizedMessage}")
+                }
+            }
+        }
+    }
 
     fun forceReconnectListeners(reason: String = "manual") {
         val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
@@ -2120,6 +2192,7 @@ class FirebaseChatRepository(private val context: Context) {
 
             // Realtime listener for message requests & mutual contact sync
             setupFirestoreMessageRequestsListener(currentUserId)
+            startHeartbeatLoop()
         } catch (e: Exception) {
             Log.w(TAG, "Error starting realtime message sync: ${e.localizedMessage}")
         }

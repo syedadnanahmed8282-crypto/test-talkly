@@ -1,8 +1,19 @@
 package com.family.talkly.ui.screens.auth
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,18 +23,26 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
@@ -37,8 +56,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,11 +69,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -66,15 +90,21 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// Color constants matching the exact design provided by the user
-private val PurplePrimary = Color(0xFF7A55B7)
-private val PurpleSecondary = Color(0xFF8764C1)
-private val PurpleLight = Color(0xFFC7B7E0)
-private val PurpleDarkText = Color(0xFF382559)
-private val PurpleSubtext = Color(0xFF8C7CA6)
-private val PurpleInputBg = Color(0xFFF9F8FC)
-private val PurpleInputBorder = Color(0xFFE9E4F3)
-private val PurpleBackground = Color(0xFFFAFAFE)
+// ==========================================
+// TALKLY PREMIUM COLOR PALETTE
+// ==========================================
+private val BackgroundDark = Color(0xFF080B10)
+private val SurfaceMain = Color(0xFF11161D)
+private val SurfaceCard = Color(0xFF18212B)
+private val SurfaceElevated = Color(0xFF202B36)
+private val ElectricCyan = Color(0xFF22D3EE)
+private val DeepAqua = Color(0xFF0EA5A4)
+private val MintAccent = Color(0xFF5EEAD4)
+private val TextPrimary = Color(0xFFF8FAFC)
+private val TextSecondary = Color(0xFFA7B0BA)
+private val TextMuted = Color(0xFF64748B)
+private val ErrorColor = Color(0xFFF43F5E)
+private val SuccessColor = Color(0xFF22C55E)
 
 data class CountryCode(val country: String, val code: String, val flag: String)
 
@@ -120,410 +150,489 @@ fun PhonePasswordAuthScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(PurpleBackground)
+            .background(BackgroundDark)
     ) {
-        // --- Top Right Decorative Circles ---
+        // Decorative ambient glow spots in background
         Box(
             modifier = Modifier
-                .size(240.dp)
-                .offset(x = 100.dp, y = (-40).dp)
+                .size(320.dp)
+                .offset(x = (-80).dp, y = (-60).dp)
                 .clip(CircleShape)
                 .background(
                     Brush.radialGradient(
-                        colors = listOf(PurpleSecondary, PurplePrimary)
+                        colors = listOf(
+                            ElectricCyan.copy(alpha = 0.12f),
+                            DeepAqua.copy(alpha = 0.04f),
+                            Color.Transparent
+                        )
                     )
                 )
         )
         Box(
             modifier = Modifier
-                .size(150.dp)
-                .offset(x = 20.dp, y = (-20).dp)
+                .align(Alignment.BottomEnd)
+                .size(280.dp)
+                .offset(x = 80.dp, y = 60.dp)
                 .clip(CircleShape)
-                .background(PurpleSecondary.copy(alpha = 0.85f))
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            DeepAqua.copy(alpha = 0.10f),
+                            MintAccent.copy(alpha = 0.03f),
+                            Color.Transparent
+                        )
+                    )
+                )
         )
 
-        // --- Bottom Left Decorative Circles ---
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .size(130.dp)
-                .offset(x = (-40).dp, y = 40.dp)
-                .clip(CircleShape)
-                .background(PurplePrimary)
-        )
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .size(70.dp)
-                .offset(x = 55.dp, y = 5.dp)
-                .clip(CircleShape)
-                .background(PurpleSecondary)
-        )
-
-        // --- Content Area ---
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
                 .verticalScroll(scrollState)
-                .padding(horizontal = 28.dp, vertical = 24.dp),
-            horizontalAlignment = Alignment.Start
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(130.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-            // --- Tab Switcher ("Login" | "Register") ---
+            // ==========================================
+            // 1. BRAND HEADER
+            // ==========================================
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(68.dp)
+                    .shadow(
+                        elevation = 16.dp,
+                        shape = RoundedCornerShape(20.dp),
+                        ambientColor = ElectricCyan,
+                        spotColor = ElectricCyan
+                    )
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(ElectricCyan, DeepAqua)
+                        )
+                    )
+                    .border(
+                        width = 1.dp,
+                        brush = Brush.linearGradient(
+                            colors = listOf(MintAccent, ElectricCyan.copy(alpha = 0.6f))
+                        ),
+                        shape = RoundedCornerShape(20.dp)
+                    )
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ChatBubble,
+                    contentDescription = "Talkly Logo",
+                    tint = BackgroundDark,
+                    modifier = Modifier.size(34.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "Talkly",
+                fontSize = 30.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 0.5.sp,
+                color = TextPrimary
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = "Connect. Talk. Stay close.",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Normal,
+                color = TextSecondary,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // ==========================================
+            // 2. LOGIN / REGISTER SEGMENTED CONTROL
+            // ==========================================
             Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Start,
-                modifier = Modifier.padding(start = 8.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(SurfaceMain)
+                    .border(1.dp, SurfaceElevated, RoundedCornerShape(16.dp))
+                    .padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 // Login Tab
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable {
-                        selectedTab = 0
-                        localValidationMessage = null
-                        onClearError()
-                    }
+                val isLoginSelected = selectedTab == 0
+                val loginBgColor by animateColorAsState(
+                    targetValue = if (isLoginSelected) SurfaceCard else Color.Transparent,
+                    animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                    label = "loginTabBg"
+                )
+                val loginTextColor by animateColorAsState(
+                    targetValue = if (isLoginSelected) ElectricCyan else TextSecondary,
+                    animationSpec = tween(durationMillis = 200),
+                    label = "loginTabText"
+                )
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(loginBgColor)
+                        .then(
+                            if (isLoginSelected) Modifier.border(
+                                1.dp,
+                                ElectricCyan.copy(alpha = 0.4f),
+                                RoundedCornerShape(12.dp)
+                            ) else Modifier
+                        )
+                        .clickable {
+                            if (selectedTab != 0) {
+                                selectedTab = 0
+                                localValidationMessage = null
+                                onClearError()
+                            }
+                        }
+                        .testTag("auth_tab_login"),
+                    contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = "Login",
-                        fontSize = 17.sp,
-                        fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Medium,
-                        color = if (selectedTab == 0) PurpleDarkText else PurpleSubtext
+                        fontSize = 14.sp,
+                        fontWeight = if (isLoginSelected) FontWeight.Bold else FontWeight.Medium,
+                        color = loginTextColor
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    if (selectedTab == 0) {
-                        Box(
-                            modifier = Modifier
-                                .width(28.dp)
-                                .height(3.dp)
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(PurplePrimary)
-                        )
-                    } else {
-                        Spacer(modifier = Modifier.height(3.dp))
-                    }
                 }
 
-                Spacer(modifier = Modifier.width(28.dp))
+                Spacer(modifier = Modifier.width(4.dp))
 
                 // Register Tab
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable {
-                        selectedTab = 1
-                        localValidationMessage = null
-                        onClearError()
-                    }
+                val isRegisterSelected = selectedTab == 1
+                val registerBgColor by animateColorAsState(
+                    targetValue = if (isRegisterSelected) SurfaceCard else Color.Transparent,
+                    animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                    label = "registerTabBg"
+                )
+                val registerTextColor by animateColorAsState(
+                    targetValue = if (isRegisterSelected) ElectricCyan else TextSecondary,
+                    animationSpec = tween(durationMillis = 200),
+                    label = "registerTabText"
+                )
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(registerBgColor)
+                        .then(
+                            if (isRegisterSelected) Modifier.border(
+                                1.dp,
+                                ElectricCyan.copy(alpha = 0.4f),
+                                RoundedCornerShape(12.dp)
+                            ) else Modifier
+                        )
+                        .clickable {
+                            if (selectedTab != 1) {
+                                selectedTab = 1
+                                localValidationMessage = null
+                                onClearError()
+                            }
+                        }
+                        .testTag("auth_tab_register"),
+                    contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "Register",
-                        fontSize = 17.sp,
-                        fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Medium,
-                        color = if (selectedTab == 1) PurpleDarkText else PurpleSubtext
+                        text = "Create account",
+                        fontSize = 14.sp,
+                        fontWeight = if (isRegisterSelected) FontWeight.Bold else FontWeight.Medium,
+                        color = registerTextColor
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    if (selectedTab == 1) {
-                        Box(
-                            modifier = Modifier
-                                .width(34.dp)
-                                .height(3.dp)
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(PurplePrimary)
-                        )
-                    } else {
-                        Spacer(modifier = Modifier.height(3.dp))
-                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-            // --- Form Container ---
+            // ==========================================
+            // 3 & 4. AUTH FORM FIELDS
+            // ==========================================
             Surface(
-                color = Color.White,
-                shape = RoundedCornerShape(20.dp),
-                shadowElevation = 4.dp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, PurpleInputBorder, RoundedCornerShape(20.dp))
+                color = SurfaceMain,
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(1.dp, SurfaceElevated),
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
-                    modifier = Modifier.padding(20.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp)
                 ) {
-
                     // Full Name Field (Register Mode Only)
-                    if (selectedTab == 1) {
-                        Text(
-                            text = "User Name",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = PurpleSubtext
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        OutlinedTextField(
-                            value = nameInput,
-                            onValueChange = {
-                                nameInput = it
-                                localValidationMessage = null
-                            },
-                            textStyle = TextStyle(color = PurpleDarkText, fontSize = 14.sp),
-                            placeholder = { Text("username/name", fontSize = 13.sp, color = PurpleSubtext.copy(alpha = 0.6f)) },
-                            singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Person,
-                                    contentDescription = null,
-                                    tint = PurpleLight,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            },
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = PurplePrimary,
-                                unfocusedBorderColor = PurpleInputBorder,
-                                focusedContainerColor = PurpleInputBg,
-                                unfocusedContainerColor = PurpleInputBg
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(modifier = Modifier.height(14.dp))
+                    AnimatedVisibility(
+                        visible = selectedTab == 1,
+                        enter = fadeIn(tween(250)) + expandVertically(tween(250)),
+                        exit = fadeOut(tween(200)) + shrinkVertically(tween(200))
+                    ) {
+                        Column {
+                            AuthInputField(
+                                label = "Full name",
+                                value = nameInput,
+                                onValueChange = {
+                                    nameInput = it
+                                    localValidationMessage = null
+                                },
+                                placeholder = "e.g. John Doe",
+                                leadingIcon = Icons.Default.Person,
+                                imeAction = ImeAction.Next,
+                                testTag = "input_fullname"
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
                     }
 
-                    // Mobile Phone Field (with Country Code selector)
+                    // Email Field (Register Mode Only)
+                    AnimatedVisibility(
+                        visible = selectedTab == 1,
+                        enter = fadeIn(tween(250)) + expandVertically(tween(250)),
+                        exit = fadeOut(tween(200)) + shrinkVertically(tween(200))
+                    ) {
+                        Column {
+                            AuthInputField(
+                                label = "Email address",
+                                value = emailInput,
+                                onValueChange = {
+                                    emailInput = it
+                                    localValidationMessage = null
+                                },
+                                placeholder = "name@example.com",
+                                leadingIcon = Icons.Default.Email,
+                                keyboardType = KeyboardType.Email,
+                                imeAction = ImeAction.Next,
+                                testTag = "input_email"
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
+                    }
+
+                    // Mobile Phone Field with Country Code Selector
                     Text(
-                        text = "Mobile Phone Number",
+                        text = "Mobile number",
                         fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = PurpleSubtext
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextSecondary,
+                        modifier = Modifier.padding(start = 2.dp, bottom = 6.dp)
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+
+                    var isPhoneFocused by remember { mutableStateOf(false) }
+                    val phoneBorderColor by animateColorAsState(
+                        targetValue = if (isPhoneFocused) ElectricCyan else SurfaceElevated,
+                        label = "phoneBorder"
+                    )
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Country Code Selector Pill
                         Box {
                             Surface(
-                                color = PurpleInputBg,
-                                shape = RoundedCornerShape(12.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, PurpleInputBorder),
-                                modifier = Modifier.clickable { dropdownExpanded = true }
+                                color = SurfaceCard,
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, SurfaceElevated),
+                                modifier = Modifier
+                                    .height(52.dp)
+                                    .clickable { dropdownExpanded = true }
+                                    .testTag("country_code_selector")
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 13.dp),
+                                    modifier = Modifier.padding(horizontal = 12.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
                                         text = "${selectedCountry.flag} ${selectedCountry.code}",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = PurpleDarkText
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
                                     )
-                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
                                     Icon(
                                         imageVector = Icons.Default.ArrowDropDown,
-                                        contentDescription = "Select country",
-                                        tint = PurpleSubtext,
-                                        modifier = Modifier.size(18.dp)
+                                        contentDescription = "Select country code",
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
                             }
 
                             DropdownMenu(
                                 expanded = dropdownExpanded,
-                                onDismissRequest = { dropdownExpanded = false }
+                                onDismissRequest = { dropdownExpanded = false },
+                                modifier = Modifier
+                                    .background(SurfaceCard)
+                                    .border(1.dp, SurfaceElevated, RoundedCornerShape(12.dp))
                             ) {
                                 COUNTRY_CODES.forEach { item ->
                                     DropdownMenuItem(
-                                        text = { Text("${item.flag} ${item.country} (${item.code})", fontSize = 13.sp) },
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(text = item.flag, fontSize = 16.sp)
+                                                Spacer(modifier = Modifier.width(10.dp))
+                                                Text(
+                                                    text = item.country,
+                                                    fontSize = 13.sp,
+                                                    color = TextPrimary,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = item.code,
+                                                    fontSize = 13.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = ElectricCyan
+                                                )
+                                            }
+                                        },
                                         onClick = {
                                             selectedCountry = item
                                             dropdownExpanded = false
-                                        }
+                                        },
+                                        colors = MenuDefaults.itemColors(
+                                            textColor = TextPrimary
+                                        )
                                     )
                                 }
                             }
                         }
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
 
-                        OutlinedTextField(
-                            value = phoneNumberInput,
-                            onValueChange = { input ->
-                                if (input.length <= 12 && input.all { it.isDigit() }) {
-                                    phoneNumberInput = input
-                                    localValidationMessage = null
-                                }
-                            },
-                            textStyle = TextStyle(color = PurpleDarkText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
-                            placeholder = { Text("1712345678", fontSize = 13.sp, color = PurpleSubtext.copy(alpha = 0.6f)) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            shape = RoundedCornerShape(12.dp),
-                            leadingIcon = {
+                        // Phone Input Box
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(52.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(SurfaceCard)
+                                .border(1.dp, phoneBorderColor, RoundedCornerShape(14.dp))
+                                .padding(horizontal = 14.dp),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
                                 Icon(
                                     imageVector = Icons.Default.Phone,
                                     contentDescription = null,
-                                    tint = PurpleLight,
+                                    tint = if (isPhoneFocused) ElectricCyan else TextMuted,
                                     modifier = Modifier.size(18.dp)
                                 )
-                            },
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = PurplePrimary,
-                                unfocusedBorderColor = PurpleInputBorder,
-                                focusedContainerColor = PurpleInputBg,
-                                unfocusedContainerColor = PurpleInputBg
-                            ),
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // Email Field (Register Mode)
-                    if (selectedTab == 1) {
-                        Text(
-                            text = "Email",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = PurpleSubtext
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        OutlinedTextField(
-                            value = emailInput,
-                            onValueChange = {
-                                emailInput = it
-                                localValidationMessage = null
-                            },
-                            textStyle = TextStyle(color = PurpleDarkText, fontSize = 14.sp),
-                            placeholder = { Text("nam@gmail.com", fontSize = 13.sp, color = PurpleSubtext.copy(alpha = 0.6f)) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                            shape = RoundedCornerShape(12.dp),
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Email,
-                                    contentDescription = null,
-                                    tint = PurpleLight,
-                                    modifier = Modifier.size(18.dp)
+                                Spacer(modifier = Modifier.width(10.dp))
+                                BasicTextField(
+                                    value = phoneNumberInput,
+                                    onValueChange = { input ->
+                                        if (input.length <= 12 && input.all { it.isDigit() }) {
+                                            phoneNumberInput = input
+                                            localValidationMessage = null
+                                        }
+                                    },
+                                    textStyle = TextStyle(
+                                        color = TextPrimary,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    ),
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Number,
+                                        imeAction = ImeAction.Next
+                                    ),
+                                    cursorBrush = SolidColor(ElectricCyan),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .onFocusChanged { isPhoneFocused = it.isFocused }
+                                        .testTag("input_phone_number"),
+                                    decorationBox = { innerTextField ->
+                                        if (phoneNumberInput.isEmpty()) {
+                                            Text(
+                                                text = "1712345678",
+                                                color = TextMuted,
+                                                fontSize = 14.sp
+                                            )
+                                        }
+                                        innerTextField()
+                                    }
                                 )
-                            },
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = PurplePrimary,
-                                unfocusedBorderColor = PurpleInputBorder,
-                                focusedContainerColor = PurpleInputBg,
-                                unfocusedContainerColor = PurpleInputBg
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(modifier = Modifier.height(14.dp))
+                            }
+                        }
                     }
+
+                    Spacer(modifier = Modifier.height(16.dp))
 
                     // Password Field
-                    Text(
-                        text = "Password",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = PurpleSubtext
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    OutlinedTextField(
+                    AuthInputField(
+                        label = "Password",
                         value = passwordInput,
                         onValueChange = {
                             passwordInput = it
                             localValidationMessage = null
                         },
-                        textStyle = TextStyle(color = PurpleDarkText, fontSize = 14.sp),
-                        placeholder = { Text("••••••••••••", fontSize = 13.sp, color = PurpleSubtext.copy(alpha = 0.6f)) },
-                        singleLine = true,
-                        visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Password,
-                            imeAction = if (selectedTab == 0) ImeAction.Done else ImeAction.Next
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.Lock,
-                                contentDescription = null,
-                                tint = PurpleLight,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        },
-                        trailingIcon = {
-                            IconButton(onClick = { isPasswordVisible = !isPasswordVisible }) {
-                                Icon(
-                                    imageVector = if (isPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                    contentDescription = "Toggle Password Visibility",
-                                    tint = PurpleSubtext,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                        placeholder = "••••••••••••",
+                        leadingIcon = Icons.Default.Lock,
+                        isPassword = true,
+                        isPasswordVisible = isPasswordVisible,
+                        onTogglePasswordVisibility = { isPasswordVisible = !isPasswordVisible },
+                        keyboardType = KeyboardType.Password,
+                        imeAction = if (selectedTab == 0) ImeAction.Done else ImeAction.Next,
+                        onImeAction = {
+                            if (selectedTab == 0) {
+                                keyboardController?.hide()
+                                focusManager.clearFocus()
                             }
                         },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = PurplePrimary,
-                            unfocusedBorderColor = PurpleInputBorder,
-                            focusedContainerColor = PurpleInputBg,
-                            unfocusedContainerColor = PurpleInputBg
-                        ),
-                        modifier = Modifier.fillMaxWidth()
+                        testTag = "input_password"
                     )
 
                     // Confirm Password (Register Mode Only)
-                    if (selectedTab == 1) {
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Text(
-                            text = "Confirm Password",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = PurpleSubtext
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        OutlinedTextField(
-                            value = confirmPasswordInput,
-                            onValueChange = {
-                                confirmPasswordInput = it
-                                localValidationMessage = null
-                            },
-                            textStyle = TextStyle(color = PurpleDarkText, fontSize = 14.sp),
-                            placeholder = { Text("••••••••••••", fontSize = 13.sp, color = PurpleSubtext.copy(alpha = 0.6f)) },
-                            singleLine = true,
-                            visualTransformation = if (isConfirmPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(
+                    AnimatedVisibility(
+                        visible = selectedTab == 1,
+                        enter = fadeIn(tween(250)) + expandVertically(tween(250)),
+                        exit = fadeOut(tween(200)) + shrinkVertically(tween(200))
+                    ) {
+                        Column {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            AuthInputField(
+                                label = "Confirm password",
+                                value = confirmPasswordInput,
+                                onValueChange = {
+                                    confirmPasswordInput = it
+                                    localValidationMessage = null
+                                },
+                                placeholder = "••••••••••••",
+                                leadingIcon = Icons.Default.Lock,
+                                isPassword = true,
+                                isPasswordVisible = isConfirmPasswordVisible,
+                                onTogglePasswordVisibility = { isConfirmPasswordVisible = !isConfirmPasswordVisible },
                                 keyboardType = KeyboardType.Password,
-                                imeAction = ImeAction.Done
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Lock,
-                                    contentDescription = null,
-                                    tint = PurpleLight,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            },
-                            trailingIcon = {
-                                IconButton(onClick = { isConfirmPasswordVisible = !isConfirmPasswordVisible }) {
-                                    Icon(
-                                        imageVector = if (isConfirmPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                        contentDescription = "Toggle Confirm Password Visibility",
-                                        tint = PurpleSubtext,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            },
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = PurplePrimary,
-                                unfocusedBorderColor = PurpleInputBorder,
-                                focusedContainerColor = PurpleInputBg,
-                                unfocusedContainerColor = PurpleInputBg
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                                imeAction = ImeAction.Done,
+                                onImeAction = {
+                                    keyboardController?.hide()
+                                    focusManager.clearFocus()
+                                },
+                                testTag = "input_confirm_password"
+                            )
+                        }
                     }
 
                     // Forgot Password Link (Login Mode Only)
                     if (selectedTab == 0) {
+                        Spacer(modifier = Modifier.height(6.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End
@@ -533,98 +642,159 @@ fun PhonePasswordAuthScreen(
                                     localValidationMessage = null
                                     showForgotPasswordDialog = true
                                 },
-                                contentPadding = PaddingValues(0.dp)
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                                modifier = Modifier.testTag("btn_forgot_password")
                             ) {
                                 Text(
-                                    text = "Forgot Password?",
-                                    fontSize = 12.sp,
+                                    text = "Forgot password?",
+                                    fontSize = 13.sp,
                                     fontWeight = FontWeight.Medium,
-                                    color = PurplePrimary
+                                    color = ElectricCyan
                                 )
                             }
                         }
                     }
 
-                    // Error Message
+                    // Validation & Error Banner
                     val displayError = localValidationMessage ?: errorMessage
-                    if (!displayError.isNullOrEmpty()) {
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Text(
-                            text = displayError,
-                            color = Color(0xFFE53935),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
+                    AnimatedVisibility(
+                        visible = !displayError.isNullOrEmpty(),
+                        enter = fadeIn(tween(200)) + expandVertically(tween(200)),
+                        exit = fadeOut(tween(150)) + shrinkVertically(tween(150))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 14.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(ErrorColor.copy(alpha = 0.12f))
+                                .border(1.dp, ErrorColor.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ErrorOutline,
+                                contentDescription = "Error",
+                                tint = ErrorColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = displayError.orEmpty(),
+                                color = ErrorColor,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(28.dp))
 
-            // --- Action Button (Login / Register) ---
-            Box(
+            // ==========================================
+            // 5. PRIMARY SUBMISSION BUTTON
+            // ==========================================
+            val isButtonEnabled = !isLoading
+            val buttonScale by animateFloatAsState(
+                targetValue = if (isLoading) 0.98f else 1f,
+                label = "buttonScale"
+            )
+
+            Button(
+                onClick = {
+                    keyboardController?.hide()
+                    focusManager.clearFocus()
+
+                    val fullPhone = "${selectedCountry.code}${phoneNumberInput.trim()}"
+
+                    if (phoneNumberInput.length < 6) {
+                        localValidationMessage = "Please enter a valid mobile phone number."
+                        return@Button
+                    }
+
+                    if (passwordInput.length < 6) {
+                        localValidationMessage = "Password must be at least 6 characters long."
+                        return@Button
+                    }
+
+                    if (selectedTab == 1) { // Register Mode
+                        if (nameInput.isBlank()) {
+                            localValidationMessage = "Please enter your full name."
+                            return@Button
+                        }
+                        if (passwordInput != confirmPasswordInput) {
+                            localValidationMessage = "Passwords do not match. Please re-check."
+                            return@Button
+                        }
+                        onSignUp(fullPhone, passwordInput, nameInput.trim())
+                    } else { // Login Mode
+                        onSignIn(fullPhone, passwordInput)
+                    }
+                },
+                enabled = isButtonEnabled,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent
+                ),
+                contentPadding = PaddingValues(0.dp),
                 modifier = Modifier
-                    .align(Alignment.CenterHorizontally)
-                    .shadow(8.dp, RoundedCornerShape(25.dp), ambientColor = PurplePrimary, spotColor = PurplePrimary)
+                    .fillMaxWidth()
+                    .height(54.dp)
+                    .scale(buttonScale)
+                    .shadow(
+                        elevation = if (isButtonEnabled) 12.dp else 0.dp,
+                        shape = RoundedCornerShape(16.dp),
+                        ambientColor = ElectricCyan,
+                        spotColor = ElectricCyan
+                    )
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(
+                        if (isButtonEnabled) {
+                            Brush.horizontalGradient(
+                                colors = listOf(ElectricCyan, DeepAqua)
+                            )
+                        } else {
+                            Brush.horizontalGradient(
+                                colors = listOf(
+                                    ElectricCyan.copy(alpha = 0.4f),
+                                    DeepAqua.copy(alpha = 0.4f)
+                                )
+                            )
+                        }
+                    )
+                    .testTag("btn_auth_submit")
             ) {
-                Button(
-                    onClick = {
-                        keyboardController?.hide()
-                        focusManager.clearFocus()
-
-                        val fullPhone = "${selectedCountry.code}${phoneNumberInput.trim()}"
-
-                        if (phoneNumberInput.length < 6) {
-                            localValidationMessage = "Please enter a valid mobile phone number."
-                            return@Button
-                        }
-
-                        if (passwordInput.length < 6) {
-                            localValidationMessage = "Password must be at least 6 characters long."
-                            return@Button
-                        }
-
-                        if (selectedTab == 1) { // Register Mode
-                            if (nameInput.isBlank()) {
-                                localValidationMessage = "Please enter your user name."
-                                return@Button
-                            }
-                            if (passwordInput != confirmPasswordInput) {
-                                localValidationMessage = "Passwords do not match. Please re-check."
-                                return@Button
-                            }
-                            onSignUp(fullPhone, passwordInput, nameInput.trim())
-                        } else { // Login Mode
-                            onSignIn(fullPhone, passwordInput)
-                        }
-                    },
-                    enabled = !isLoading,
-                    colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
-                    shape = RoundedCornerShape(25.dp),
-                    modifier = Modifier
-                        .width(180.dp)
-                        .height(46.dp)
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
                 ) {
                     if (isLoading) {
                         CircularProgressIndicator(
-                            color = Color.White,
-                            modifier = Modifier.size(20.dp)
+                            color = BackgroundDark,
+                            strokeWidth = 2.5.dp,
+                            modifier = Modifier.size(24.dp)
                         )
                     } else {
                         Text(
-                            text = if (selectedTab == 0) "Login" else "Register",
-                            fontSize = 15.sp,
+                            text = if (selectedTab == 0) "Continue" else "Create account",
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = BackgroundDark,
+                            letterSpacing = 0.3.sp
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(30.dp))
+            Spacer(modifier = Modifier.height(24.dp))
         }
 
-        // --- Forgot Password Dialog ---
+        // ==========================================
+        // 6. FORGOT PASSWORD DIALOG
+        // ==========================================
         if (showForgotPasswordDialog) {
             var forgotPhoneInput by remember { mutableStateOf(phoneNumberInput) }
             var forgotCountry by remember { mutableStateOf(selectedCountry) }
@@ -639,23 +809,26 @@ fun PhonePasswordAuthScreen(
                         showForgotPasswordDialog = false
                     }
                 },
+                containerColor = SurfaceMain,
+                shape = RoundedCornerShape(24.dp),
                 title = {
                     Text(
                         text = "Reset Password",
-                        fontSize = 17.sp,
+                        fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
-                        color = PurpleDarkText
+                        color = TextPrimary
                     )
                 },
                 text = {
                     Column {
                         Text(
-                            text = "Enter your mobile phone number to receive password reset instructions.",
+                            text = "Enter your mobile number to receive password reset instructions.",
                             fontSize = 13.sp,
-                            color = PurpleSubtext
+                            color = TextSecondary,
+                            lineHeight = 18.sp
                         )
 
-                        Spacer(modifier = Modifier.height(14.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -663,36 +836,48 @@ fun PhonePasswordAuthScreen(
                         ) {
                             Box {
                                 Surface(
-                                    color = PurpleInputBg,
-                                    shape = RoundedCornerShape(8.dp),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, PurpleInputBorder),
-                                    modifier = Modifier.clickable { forgotDropdownExpanded = true }
+                                    color = SurfaceCard,
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, SurfaceElevated),
+                                    modifier = Modifier
+                                        .height(48.dp)
+                                        .clickable { forgotDropdownExpanded = true }
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                                        modifier = Modifier.padding(horizontal = 10.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
                                             text = "${forgotCountry.flag} ${forgotCountry.code}",
                                             fontSize = 13.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = PurpleDarkText
+                                            color = TextPrimary
                                         )
                                         Icon(
                                             imageVector = Icons.Default.ArrowDropDown,
                                             contentDescription = null,
-                                            tint = PurpleSubtext
+                                            tint = TextSecondary,
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
                                 }
 
                                 DropdownMenu(
                                     expanded = forgotDropdownExpanded,
-                                    onDismissRequest = { forgotDropdownExpanded = false }
+                                    onDismissRequest = { forgotDropdownExpanded = false },
+                                    modifier = Modifier
+                                        .background(SurfaceCard)
+                                        .border(1.dp, SurfaceElevated, RoundedCornerShape(12.dp))
                                 ) {
                                     COUNTRY_CODES.forEach { item ->
                                         DropdownMenuItem(
-                                            text = { Text("${item.flag} ${item.country} (${item.code})", fontSize = 13.sp) },
+                                            text = {
+                                                Text(
+                                                    text = "${item.flag} ${item.country} (${item.code})",
+                                                    fontSize = 13.sp,
+                                                    color = TextPrimary
+                                                )
+                                            },
                                             onClick = {
                                                 forgotCountry = item
                                                 forgotDropdownExpanded = false
@@ -704,41 +889,106 @@ fun PhonePasswordAuthScreen(
 
                             Spacer(modifier = Modifier.width(8.dp))
 
-                            OutlinedTextField(
-                                value = forgotPhoneInput,
-                                onValueChange = { input ->
-                                    if (input.length <= 12 && input.all { it.isDigit() }) {
-                                        forgotPhoneInput = input
-                                        resetErrorMessage = null
-                                        resetSuccessMessage = null
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(SurfaceCard)
+                                    .border(1.dp, SurfaceElevated, RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 12.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                BasicTextField(
+                                    value = forgotPhoneInput,
+                                    onValueChange = { input ->
+                                        if (input.length <= 12 && input.all { it.isDigit() }) {
+                                            forgotPhoneInput = input
+                                            resetErrorMessage = null
+                                            resetSuccessMessage = null
+                                        }
+                                    },
+                                    textStyle = TextStyle(
+                                        color = TextPrimary,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    ),
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    cursorBrush = SolidColor(ElectricCyan),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    decorationBox = { innerTextField ->
+                                        if (forgotPhoneInput.isEmpty()) {
+                                            Text(
+                                                text = "1712345678",
+                                                color = TextMuted,
+                                                fontSize = 13.sp
+                                            )
+                                        }
+                                        innerTextField()
                                     }
-                                },
-                                placeholder = { Text("1712345678", fontSize = 13.sp, color = PurpleSubtext.copy(alpha = 0.6f)) },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.weight(1f)
-                            )
+                                )
+                            }
                         }
 
-                        if (!resetSuccessMessage.isNullOrEmpty()) {
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Text(
-                                text = resetSuccessMessage!!,
-                                color = PurplePrimary,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium
-                            )
+                        // Success Message
+                        AnimatedVisibility(
+                            visible = !resetSuccessMessage.isNullOrEmpty(),
+                            enter = fadeIn() + expandVertically()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 12.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(SuccessColor.copy(alpha = 0.12f))
+                                    .padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = SuccessColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = resetSuccessMessage.orEmpty(),
+                                    color = SuccessColor,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
                         }
 
-                        if (!resetErrorMessage.isNullOrEmpty()) {
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Text(
-                                text = resetErrorMessage!!,
-                                color = Color.Red,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium
-                            )
+                        // Error Message
+                        AnimatedVisibility(
+                            visible = !resetErrorMessage.isNullOrEmpty(),
+                            enter = fadeIn() + expandVertically()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 12.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(ErrorColor.copy(alpha = 0.12f))
+                                    .padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ErrorOutline,
+                                    contentDescription = null,
+                                    tint = ErrorColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = resetErrorMessage.orEmpty(),
+                                    color = ErrorColor,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
                         }
                     }
                 },
@@ -766,12 +1016,13 @@ fun PhonePasswordAuthScreen(
                             )
                         },
                         enabled = !isSendingReset,
-                        colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary)
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan)
                     ) {
                         if (isSendingReset) {
-                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp))
+                            CircularProgressIndicator(color = BackgroundDark, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         } else {
-                            Text("Send Reset Link", color = Color.White)
+                            Text("Send Reset Link", color = BackgroundDark, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
                     }
                 },
@@ -780,10 +1031,121 @@ fun PhonePasswordAuthScreen(
                         onClick = { showForgotPasswordDialog = false },
                         enabled = !isSendingReset
                     ) {
-                        Text("Cancel", color = PurpleSubtext)
+                        Text("Cancel", color = TextSecondary, fontSize = 13.sp)
                     }
                 }
             )
+        }
+    }
+}
+
+// ==========================================
+// REUSABLE AUTH INPUT FIELD COMPOSABLE
+// ==========================================
+@Composable
+private fun AuthInputField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    leadingIcon: ImageVector,
+    modifier: Modifier = Modifier,
+    isPassword: Boolean = false,
+    isPasswordVisible: Boolean = false,
+    onTogglePasswordVisibility: (() -> Unit)? = null,
+    keyboardType: KeyboardType = KeyboardType.Text,
+    imeAction: ImeAction = ImeAction.Default,
+    onImeAction: (() -> Unit)? = null,
+    testTag: String = ""
+) {
+    var isFocused by remember { mutableStateOf(false) }
+    val borderColor by animateColorAsState(
+        targetValue = if (isFocused) ElectricCyan else SurfaceElevated,
+        animationSpec = tween(durationMillis = 200),
+        label = "fieldBorder"
+    )
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = TextSecondary,
+            modifier = Modifier.padding(start = 2.dp, bottom = 6.dp)
+        )
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(SurfaceCard)
+                .border(1.dp, borderColor, RoundedCornerShape(14.dp))
+                .padding(horizontal = 14.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = leadingIcon,
+                    contentDescription = null,
+                    tint = if (isFocused) ElectricCyan else TextMuted,
+                    modifier = Modifier.size(18.dp)
+                )
+
+                Spacer(modifier = Modifier.width(10.dp))
+
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    textStyle = TextStyle(
+                        color = TextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Normal
+                    ),
+                    singleLine = true,
+                    visualTransformation = if (isPassword && !isPasswordVisible) PasswordVisualTransformation() else VisualTransformation.None,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = keyboardType,
+                        imeAction = imeAction
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onDone = { onImeAction?.invoke() },
+                        onNext = { onImeAction?.invoke() }
+                    ),
+                    cursorBrush = SolidColor(ElectricCyan),
+                    modifier = Modifier
+                        .weight(1f)
+                        .onFocusChanged { isFocused = it.isFocused }
+                        .testTag(testTag),
+                    decorationBox = { innerTextField ->
+                        if (value.isEmpty()) {
+                            Text(
+                                text = placeholder,
+                                color = TextMuted,
+                                fontSize = 14.sp
+                            )
+                        }
+                        innerTextField()
+                    }
+                )
+
+                if (isPassword && onTogglePasswordVisibility != null) {
+                    IconButton(
+                        onClick = onTogglePasswordVisibility,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                            contentDescription = if (isPasswordVisible) "Hide password" else "Show password",
+                            tint = if (isPasswordVisible) ElectricCyan else TextMuted,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
         }
     }
 }
