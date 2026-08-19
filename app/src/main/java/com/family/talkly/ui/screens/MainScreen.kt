@@ -76,6 +76,7 @@ fun MainScreen(
     val messagesMap by chatRepository.messagesMap.collectAsState()
     val messageRequests by chatRepository.messageRequests.collectAsState()
     val contactsWhoSavedMe by chatRepository.contactsWhoSavedMe.collectAsState()
+    val isNetworkConnected by chatRepository.isNetworkConnected.collectAsState()
 
     val currentUid = currentUserProfile?.uid?.ifBlank { "self" } ?: "self"
     val statusGroups = remember(statuses, familyMembers, messageRequests, contactsWhoSavedMe, simulatedTimeOffsetMs, currentUserProfile) {
@@ -192,6 +193,11 @@ fun MainScreen(
     }
 
     fun startCallWithPermissions(target: FamilyMember, callType: CallType) {
+        if (!isNetworkConnected) {
+            Toast.makeText(context, "Cannot place call: No internet connection", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         val isBlocked = blockedUserIds.contains(target.id) || chatRepository.isUserBlocked(target.id)
         if (isBlocked) {
             Toast.makeText(context, "Cannot call: User is blocked", Toast.LENGTH_SHORT).show()
@@ -349,7 +355,8 @@ fun MainScreen(
             onClearChatHistory = {
                 chatRepository.deleteChatHistory(currentMember.id)
             },
-            currentUserProfile = currentUserProfile
+            currentUserProfile = currentUserProfile,
+            isNetworkConnected = isNetworkConnected
         )
         return
     }
@@ -389,6 +396,7 @@ fun MainScreen(
         onClearDemoContacts = {
             chatRepository.clearDemoContacts()
         },
+        isNetworkConnected = isNetworkConnected,
         statusGroups = statusGroups,
         onPostStatus = { textContent, photoUrl, bgHex ->
             val currentUid = currentUserProfile?.uid?.ifBlank { "self" } ?: "self"

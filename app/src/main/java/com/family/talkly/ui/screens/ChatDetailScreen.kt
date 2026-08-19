@@ -66,6 +66,8 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
@@ -217,7 +219,8 @@ fun ChatDetailScreen(
     onAcceptMessageRequest: (request: MessageRequest) -> Unit = {},
     onDeclineMessageRequest: (requestId: String) -> Unit = {},
     onClearChatHistory: () -> Unit = {},
-    currentUserProfile: UserProfile? = null
+    currentUserProfile: UserProfile? = null,
+    isNetworkConnected: Boolean = true
 ) {
     val isDarkTheme = LocalIsDarkTheme.current
     var textInput by remember { mutableStateOf("") }
@@ -1563,6 +1566,36 @@ fun ChatDetailScreen(
             Column(
                 modifier = Modifier.fillMaxSize()
             ) {
+            // Offline Connection Warning Banner
+            if (!isNetworkConnected) {
+                Surface(
+                    color = Color(0xFF7F1D1D),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudOff,
+                            contentDescription = "Offline",
+                            tint = Color(0xFFFCA5A5),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Waiting for network... Messages will send when connected",
+                            color = Color(0xFFFEE2E2),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
             // Pinned Message Top Banner
             pinnedMessage?.let { pinned ->
                 Surface(
@@ -1908,11 +1941,20 @@ fun ChatDetailScreen(
                                                     ) { state ->
                                                         when (state) {
                                                             3 -> {
-                                                                CircularProgressIndicator(
-                                                                    strokeWidth = 1.5.dp,
-                                                                    color = subTextColor,
-                                                                    modifier = Modifier.size(13.dp)
-                                                                )
+                                                                if (!isNetworkConnected) {
+                                                                    Icon(
+                                                                        imageVector = Icons.Default.AccessTime,
+                                                                        contentDescription = "Queued",
+                                                                        tint = Color(0xFFF59E0B),
+                                                                        modifier = Modifier.size(13.dp)
+                                                                    )
+                                                                } else {
+                                                                    CircularProgressIndicator(
+                                                                        strokeWidth = 1.5.dp,
+                                                                        color = subTextColor,
+                                                                        modifier = Modifier.size(13.dp)
+                                                                    )
+                                                                }
                                                             }
                                                             2 -> {
                                                                 Box(

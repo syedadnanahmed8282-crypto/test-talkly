@@ -96,6 +96,7 @@ import com.family.talkly.ui.theme.WhatsappTeal
 
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -143,7 +144,8 @@ fun ChatListScreen(
     blockedUserIds: Set<String> = emptySet(),
     onBlockUser: ((String) -> Unit)? = null,
     onUnblockUser: ((String) -> Unit)? = null,
-    onRefresh: (() -> Unit)? = null
+    onRefresh: (() -> Unit)? = null,
+    isNetworkConnected: Boolean = true
 ) {
     val context = LocalContext.current
     var selectedHeaderTab by remember { mutableIntStateOf(0) } // 0: Chats, 1: Saved Contacts
@@ -596,6 +598,34 @@ fun ChatListScreen(
                 modifier = Modifier.fillMaxSize()
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
+                if (!isNetworkConnected) {
+                    Surface(
+                        color = Color(0xFF7F1D1D),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.WifiOff,
+                                contentDescription = "No Internet",
+                                tint = Color(0xFFFCA5A5),
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "No internet connection. Waiting for network...",
+                                color = Color(0xFFFEE2E2),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
                 if (selectedHeaderTab == 0) {
                     // Family Quick Status / Stories Bar
                     Column(

@@ -9,7 +9,25 @@ class TalklyApp : Application() {
     override fun onCreate() {
         super.onCreate()
         ensureFirebaseInitialized()
+        configureFirestoreSettings()
         com.family.talkly.util.TalklyNotificationHelper.initNotificationChannels(this)
+    }
+
+    private fun configureFirestoreSettings() {
+        try {
+            val firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+            val settings = com.google.firebase.firestore.FirebaseFirestoreSettings.Builder()
+                .setLocalCacheSettings(
+                    com.google.firebase.firestore.PersistentCacheSettings.newBuilder()
+                        .setSizeBytes(com.google.firebase.firestore.FirebaseFirestoreSettings.CACHE_SIZE_UNLIMITED)
+                        .build()
+                )
+                .build()
+            firestore.firestoreSettings = settings
+            Log.d("TalklyApp", "FirebaseFirestoreSettings configured with unlimited local persistent cache")
+        } catch (e: Exception) {
+            Log.w("TalklyApp", "Firestore settings configuration note: ${e.localizedMessage}")
+        }
     }
 
     private fun ensureFirebaseInitialized() {

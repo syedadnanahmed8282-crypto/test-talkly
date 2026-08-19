@@ -3,6 +3,10 @@ package com.family.talkly.data.firebase
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -16,6 +20,7 @@ import com.family.talkly.data.models.MessageType
 import com.family.talkly.util.MediaCompressorAndUploader
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.MetadataChanges
 import com.google.firebase.firestore.Source
 import java.io.File
 import java.io.FileOutputStream
@@ -68,6 +73,49 @@ class FirebaseChatRepository(private val context: Context) {
     private val contactPrefs = context.getSharedPreferences(CONTACTS_PREFS, Context.MODE_PRIVATE)
     private val database: TalklyDatabase by lazy { TalklyDatabase.getInstance(context) }
 
+    // Connectivity state management
+    private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+    private val _isNetworkConnected = MutableStateFlow(isNetworkCurrentlyAvailable())
+    val isNetworkConnected: StateFlow<Boolean> = _isNetworkConnected.asStateFlow()
+
+    private val _lastServerSyncTime = MutableStateFlow(0L)
+    val lastServerSyncTime: StateFlow<Long> = _lastServerSyncTime.asStateFlow()
+
+    private fun isNetworkCurrentlyAvailable(): Boolean {
+        val cm = connectivityManager ?: return false
+        val activeNet = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(activeNet) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    private fun setupNetworkMonitoring() {
+        try {
+            val cm = connectivityManager ?: return
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            cm.registerNetworkCallback(request, object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    Log.d(TAG, "NetworkCallback: onAvailable -> network connected")
+                    _isNetworkConnected.value = true
+                    forceReconnectListeners("network_online")
+                }
+
+                override fun onLost(network: Network) {
+                    Log.d(TAG, "NetworkCallback: onLost -> network disconnected")
+                    _isNetworkConnected.value = false
+                }
+
+                override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                    val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    _isNetworkConnected.value = hasInternet
+                }
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "Error registering network callback: ${e.localizedMessage}")
+        }
+    }
+
     // Real-time family members presence and status
     private val _familyMembers = MutableStateFlow<List<FamilyMember>>(emptyList())
     val familyMembers: StateFlow<List<FamilyMember>> = _familyMembers.asStateFlow()
@@ -114,6 +162,7 @@ class FirebaseChatRepository(private val context: Context) {
             }
             firestore = FirebaseFirestore.getInstance()
             Log.i(TAG, "Initialized Firebase Firestore for project $FIREBASE_PROJECT_ID")
+            setupNetworkMonitoring()
             setupFirestorePresenceListener()
             setupFirestoreUsersVerificationListener()
             setupFirestoreStatusesListener()
@@ -609,13 +658,17 @@ class FirebaseChatRepository(private val context: Context) {
         try {
             membersListener?.remove()
             membersListener = firestore?.collection("family_members")
-                ?.addSnapshotListener { snapshot, error ->
+                ?.addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
                     if (error != null) {
                         Log.w(TAG, "Listen failed for family_members: ${error.localizedMessage}")
                         return@addSnapshotListener
                     }
 
                     if (snapshot != null && !snapshot.isEmpty) {
+                        val isFromCache = snapshot.metadata.isFromCache
+                        if (!isFromCache) {
+                            _lastServerSyncTime.value = System.currentTimeMillis()
+                        }
                         val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
                         val myPhone = sessionPrefs.getString("user_phone", "") ?: ""
                         val myPhoneSuffix = PhoneUtils.extractPhoneSuffix(myPhone)
@@ -668,8 +721,12 @@ class FirebaseChatRepository(private val context: Context) {
 
             usersCollectionListener?.remove()
             usersCollectionListener = firestore?.collection("users")
-                ?.addSnapshotListener { snapshot, error ->
+                ?.addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
                     if (error != null || snapshot == null || snapshot.isEmpty) return@addSnapshotListener
+                    val isFromCache = snapshot.metadata.isFromCache
+                    if (!isFromCache) {
+                        _lastServerSyncTime.value = System.currentTimeMillis()
+                    }
 
                     val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
                     val myPhone = sessionPrefs.getString("user_phone", "") ?: ""
@@ -858,13 +915,17 @@ class FirebaseChatRepository(private val context: Context) {
     private fun setupFirestoreUsersVerificationListener() {
         try {
             usersListener = firestore?.collection("users")
-                ?.addSnapshotListener { snapshot, error ->
+                ?.addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
                     if (error != null) {
                         Log.w(TAG, "Listen failed for users collection: ${error.localizedMessage}")
                         return@addSnapshotListener
                     }
 
                     if (snapshot != null) {
+                        val isFromCache = snapshot.metadata.isFromCache
+                        if (!isFromCache) {
+                            _lastServerSyncTime.value = System.currentTimeMillis()
+                        }
                         val registeredDocsBySuffix = mutableMapOf<String, com.google.firebase.firestore.DocumentSnapshot>()
                         val registeredDocsByFullPhone = mutableMapOf<String, com.google.firebase.firestore.DocumentSnapshot>()
 
@@ -2006,6 +2067,12 @@ class FirebaseChatRepository(private val context: Context) {
             if (error != null) {
                 Log.w(TAG, "Listen failed for messages: ${error.localizedMessage}")
             } else if (snapshot != null && !snapshot.isEmpty) {
+                val isSnapshotFromCache = snapshot.metadata.isFromCache
+                val hasSnapshotPendingWrites = snapshot.metadata.hasPendingWrites()
+                if (!isSnapshotFromCache) {
+                    _lastServerSyncTime.value = System.currentTimeMillis()
+                }
+
                 val currentMap = _messagesMap.value.toMutableMap()
                 val batchUnreadMessages = mutableListOf<Pair<ChatMessage, String>>()
 
@@ -2034,6 +2101,11 @@ class FirebaseChatRepository(private val context: Context) {
                         val isEdited = doc.getBoolean("isEdited") ?: false
                         val isDeletedForEveryone = doc.getBoolean("isDeletedForEveryone") ?: false
                         val deletedForUsers = (doc.get("deletedForUsers") as? List<*>)?.mapNotNull { it?.toString() } ?: emptyList()
+                        
+                        val docHasPendingWrites = doc.metadata.hasPendingWrites()
+                        val docIsFromCache = doc.metadata.isFromCache
+                        val isDocPendingFlag = doc.getBoolean("isPending") ?: false
+                        val isMessagePending = docHasPendingWrites || (docIsFromCache && isDocPendingFlag)
 
                         if (senderId != "self" && senderId != currentUserId && !isDelivered) {
                             try {
@@ -2078,7 +2150,8 @@ class FirebaseChatRepository(private val context: Context) {
                             replyToText = replyToText,
                             isEdited = isEdited,
                             isDeletedForEveryone = isDeletedForEveryone,
-                            deletedForUsers = deletedForUsers
+                            deletedForUsers = deletedForUsers,
+                            isPending = isMessagePending
                         )
 
                         val rawOtherPartyId = if (senderId == "self" || senderId == currentUserId) receiverId else senderId
@@ -2095,11 +2168,13 @@ class FirebaseChatRepository(private val context: Context) {
                             val preservedRead = existing.isRead || message.isRead
                             val preservedReadAt = message.readAtTimestamp ?: existing.readAtTimestamp
                             val preservedDeletedForUsers = (message.deletedForUsers + existing.deletedForUsers).distinct()
+                            val preservedPending = if (!docHasPendingWrites && !docIsFromCache) false else (existing.isPending && isMessagePending)
                             existingMsgs[existingIndex] = message.copy(
                                 isDelivered = preservedDelivered,
                                 isRead = preservedRead,
                                 readAtTimestamp = preservedReadAt,
-                                deletedForUsers = preservedDeletedForUsers
+                                deletedForUsers = preservedDeletedForUsers,
+                                isPending = preservedPending
                             )
                         } else {
                             existingMsgs.add(message)
@@ -2172,14 +2247,14 @@ class FirebaseChatRepository(private val context: Context) {
             messagesListener = firestore?.collection("family_chats")
                 ?.document(currentUserId)
                 ?.collection("messages")
-                ?.addSnapshotListener { snapshot, error -> handleMessageSnapshot(snapshot, error) }
+                ?.addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error -> handleMessageSnapshot(snapshot, error) }
 
             // Secondary listener on user's phone suffix if different
             if (userSuffix.isNotBlank() && userSuffix != currentUserId) {
                 secondaryMessagesListener = firestore?.collection("family_chats")
                     ?.document(userSuffix)
                     ?.collection("messages")
-                    ?.addSnapshotListener { snapshot, error -> handleMessageSnapshot(snapshot, error) }
+                    ?.addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error -> handleMessageSnapshot(snapshot, error) }
             }
 
             val cleanUserPhone = com.family.talkly.util.PhoneUtils.cleanPhoneNumber(userPhone)
@@ -2187,7 +2262,7 @@ class FirebaseChatRepository(private val context: Context) {
                 thirdMessagesListener = firestore?.collection("family_chats")
                     ?.document(cleanUserPhone)
                     ?.collection("messages")
-                    ?.addSnapshotListener { snapshot, error -> handleMessageSnapshot(snapshot, error) }
+                    ?.addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error -> handleMessageSnapshot(snapshot, error) }
             }
 
             // Realtime listener for message requests & mutual contact sync
@@ -2457,6 +2532,24 @@ class FirebaseChatRepository(private val context: Context) {
         }
     }
 
+    private fun updateMessagePendingState(messageId: String, isPending: Boolean) {
+        val currentMap = _messagesMap.value.toMutableMap()
+        var modified = false
+        currentMap.forEach { (key, msgs) ->
+            val idx = msgs.indexOfFirst { it.id == messageId }
+            if (idx >= 0 && msgs[idx].isPending != isPending) {
+                val list = msgs.toMutableList()
+                list[idx] = list[idx].copy(isPending = isPending)
+                currentMap[key] = list
+                modified = true
+            }
+        }
+        if (modified) {
+            _messagesMap.value = currentMap
+            saveMessagesToDisk()
+        }
+    }
+
     private fun writeMessageToCollection(targetDocId: String, message: ChatMessage) {
         if (targetDocId.isBlank()) return
         val safeMessage = if ((message.mediaUrl?.length ?: 0) > 800_000) {
@@ -2474,6 +2567,11 @@ class FirebaseChatRepository(private val context: Context) {
                 ?.collection("messages")
                 ?.document(safeMessage.id)
                 ?.set(safeMessage)
+                ?.addOnSuccessListener {
+                    if (_isNetworkConnected.value) {
+                        updateMessagePendingState(safeMessage.id, false)
+                    }
+                }
         } catch (e: Exception) {
             Log.w(TAG, "Error writing message to $targetDocId: ${e.localizedMessage}")
         }
@@ -2511,6 +2609,8 @@ class FirebaseChatRepository(private val context: Context) {
 
         ensureContactInChatList(canonicalId, fallbackName = targetMember?.name)
 
+        val isOnline = _isNetworkConnected.value
+
         val newMessage = ChatMessage(
             id = "msg_${System.currentTimeMillis()}",
             senderId = senderUid,
@@ -2522,6 +2622,7 @@ class FirebaseChatRepository(private val context: Context) {
             timestamp = forcedTimestamp,
             isDelivered = false,
             isRead = false,
+            isPending = !isOnline,
             replyToMessageId = replyToMessageId,
             replyToSenderName = replyToSenderName,
             replyToText = replyToText
@@ -2662,12 +2763,16 @@ class FirebaseChatRepository(private val context: Context) {
         try {
             statusesListener?.remove()
             statusesListener = firestore?.collection("statuses")
-                ?.addSnapshotListener { snapshot, error ->
+                ?.addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
                     if (error != null) {
                         Log.w(TAG, "Firestore statuses listener error: ${error.localizedMessage}")
                         return@addSnapshotListener
                     }
                     if (snapshot != null) {
+                        val isFromCache = snapshot.metadata.isFromCache
+                        if (!isFromCache) {
+                            _lastServerSyncTime.value = System.currentTimeMillis()
+                        }
                         val firestoreStatuses = mutableListOf<StatusItem>()
                         for (doc in snapshot.documents) {
                             try {
@@ -3080,12 +3185,16 @@ class FirebaseChatRepository(private val context: Context) {
         try {
             messageRequestsListener?.remove()
             messageRequestsListener = firestore?.collection("message_requests")
-                ?.addSnapshotListener { snapshot, error ->
+                ?.addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
                     if (error != null) {
                         Log.w(TAG, "Message requests snapshot listener error: ${error.localizedMessage}")
                         return@addSnapshotListener
                     }
                     if (snapshot != null) {
+                        val isFromCache = snapshot.metadata.isFromCache
+                        if (!isFromCache) {
+                            _lastServerSyncTime.value = System.currentTimeMillis()
+                        }
                         val list = mutableListOf<MessageRequest>()
                         for (doc in snapshot.documents) {
                             try {
@@ -3198,8 +3307,12 @@ class FirebaseChatRepository(private val context: Context) {
         try {
             contactsSavedMeListener?.remove()
             contactsSavedMeListener = firestore?.collectionGroup("contacts")
-                ?.addSnapshotListener { snap, _ ->
+                ?.addSnapshotListener(MetadataChanges.INCLUDE) { snap, _ ->
                     if (snap != null && !snap.isEmpty) {
+                        val isFromCache = snap.metadata.isFromCache
+                        if (!isFromCache) {
+                            _lastServerSyncTime.value = System.currentTimeMillis()
+                        }
                         val savedMeSet = _contactsWhoSavedMe.value.toMutableSet()
                         for (doc in snap.documents) {
                             val cSuffix = doc.getString("phoneSuffix") ?: ""

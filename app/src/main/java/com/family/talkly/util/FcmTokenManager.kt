@@ -22,23 +22,58 @@ object FcmTokenManager {
     private val httpClient by lazy { OkHttpClient() }
 
     private fun isEmulator(): Boolean {
-        return (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
-                || Build.FINGERPRINT.startsWith("generic")
-                || Build.FINGERPRINT.startsWith("unknown")
-                || Build.HARDWARE.contains("goldfish")
-                || Build.HARDWARE.contains("ranchu")
-                || Build.MODEL.contains("google_sdk")
-                || Build.MODEL.contains("Emulator")
-                || Build.MODEL.contains("Android SDK built for")
-                || Build.MANUFACTURER.contains("Genymotion")
-                || Build.PRODUCT.contains("sdk_google")
-                || Build.PRODUCT.contains("google_sdk")
-                || Build.PRODUCT.contains("sdk")
-                || Build.PRODUCT.contains("sdk_x86")
-                || Build.PRODUCT.contains("sdk_gphone")
-                || Build.PRODUCT.contains("vbox86p")
-                || Build.PRODUCT.contains("emulator")
-                || Build.PRODUCT.contains("simulator")
+        val finger = Build.FINGERPRINT.lowercase()
+        val model = Build.MODEL.lowercase()
+        val brand = Build.BRAND.lowercase()
+        val device = Build.DEVICE.lowercase()
+        val product = Build.PRODUCT.lowercase()
+        val hardware = Build.HARDWARE.lowercase()
+        val manufacturer = Build.MANUFACTURER.lowercase()
+        val board = Build.BOARD.lowercase()
+        val bootloader = Build.BOOTLOADER.lowercase()
+
+        return finger.startsWith("generic")
+                || finger.startsWith("unknown")
+                || finger.contains("test-keys")
+                || finger.contains("dev-keys")
+                || finger.contains("vbox")
+                || finger.contains("emulator")
+                || finger.contains("cuttlefish")
+                || finger.contains("cf_")
+                || model.contains("google_sdk")
+                || model.contains("emulator")
+                || model.contains("android sdk")
+                || model.contains("droid4x")
+                || model.contains("cuttlefish")
+                || model.contains("sdk")
+                || brand.startsWith("generic")
+                || (brand.contains("google") && (device.startsWith("generic") || device.contains("cf") || device.contains("vsoc")))
+                || device.startsWith("generic")
+                || device.contains("emulator")
+                || device.contains("cuttlefish")
+                || device.contains("cf_")
+                || device.contains("vsoc")
+                || product.contains("sdk")
+                || product.contains("google_sdk")
+                || product.contains("emulator")
+                || product.contains("simulator")
+                || product.contains("vbox")
+                || product.contains("cuttlefish")
+                || product.contains("cf_")
+                || product.contains("vsoc")
+                || product.contains("aosp")
+                || hardware.contains("goldfish")
+                || hardware.contains("ranchu")
+                || hardware.contains("vbox")
+                || hardware.contains("cutf")
+                || hardware.contains("cheeps")
+                || hardware.contains("virtual")
+                || manufacturer.contains("genymotion")
+                || (manufacturer.contains("google") && (model.contains("sdk") || model.contains("cuttlefish")))
+                || board.contains("goldfish")
+                || board.contains("cutf")
+                || board.contains("vsoc")
+                || bootloader.contains("unknown")
     }
 
     private fun isGooglePlayServicesAvailableSafely(context: Context): Boolean {
@@ -54,7 +89,14 @@ object FcmTokenManager {
                 @Suppress("DEPRECATION")
                 pm.getPackageInfo("com.google.android.gms", 0)
             }
-            if (packageInfo.applicationInfo?.enabled != true) {
+            val appInfo = packageInfo.applicationInfo
+            if (appInfo == null || !appInfo.enabled) {
+                return false
+            }
+            val isSystemApp = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0 ||
+                    (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+            if (!isSystemApp) {
+                Log.d(TAG, "GMS package is not a system app, skipping broker calls.")
                 return false
             }
             val availability = com.google.android.gms.common.GoogleApiAvailability.getInstance()
