@@ -4,37 +4,60 @@ import android.app.Application
 import android.util.Log
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
+import com.google.firebase.firestore.FirebaseFirestore
 
 class TalklyApp : Application() {
+
     override fun onCreate() {
         super.onCreate()
+
         ensureFirebaseInitialized()
+
+        // Enable Firestore internal SDK logging for connection/WatchStream diagnostics.
+        FirebaseFirestore.setLoggingEnabled(true)
+
         configureFirestoreSettings()
+
         com.family.talkly.util.TalklyNotificationHelper.initNotificationChannels(this)
     }
 
     private fun configureFirestoreSettings() {
         try {
-            val firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+            val firestore = FirebaseFirestore.getInstance()
+
             val settings = com.google.firebase.firestore.FirebaseFirestoreSettings.Builder()
                 .setLocalCacheSettings(
                     com.google.firebase.firestore.PersistentCacheSettings.newBuilder()
-                        .setSizeBytes(com.google.firebase.firestore.FirebaseFirestoreSettings.CACHE_SIZE_UNLIMITED)
+                        .setSizeBytes(
+                            com.google.firebase.firestore.FirebaseFirestoreSettings.CACHE_SIZE_UNLIMITED
+                        )
                         .build()
                 )
                 .build()
+
             firestore.firestoreSettings = settings
-            Log.d("TalklyApp", "FirebaseFirestoreSettings configured with unlimited local persistent cache")
+
+            Log.d(
+                "TalklyApp",
+                "FirebaseFirestoreSettings configured with unlimited local persistent cache"
+            )
+
         } catch (e: Exception) {
-            Log.w("TalklyApp", "Firestore settings configuration note: ${e.localizedMessage}")
+            Log.w(
+                "TalklyApp",
+                "Firestore settings configuration note: ${e.localizedMessage}"
+            )
         }
     }
 
     private fun ensureFirebaseInitialized() {
         try {
             if (FirebaseApp.getApps(this).isEmpty()) {
+
                 val app = FirebaseApp.initializeApp(this)
+
                 if (app == null) {
+
                     val options = FirebaseOptions.Builder()
                         .setApplicationId("1:688875089801:android:07f27e3cf40ca2af913b58")
                         .setGcmSenderId("688875089801")
@@ -42,17 +65,39 @@ class TalklyApp : Application() {
                         .setStorageBucket("familycallapp-e6b21.firebasestorage.app")
                         .setApiKey(getFirebaseApiKey())
                         .build()
+
                     FirebaseApp.initializeApp(this, options)
-                    Log.d("TalklyApp", "FirebaseApp initialized with fallback options")
+
+                    Log.d(
+                        "TalklyApp",
+                        "FirebaseApp initialized with fallback options"
+                    )
+
                 } else {
-                    Log.d("TalklyApp", "FirebaseApp initialized successfully: ${app.name}")
+
+                    Log.d(
+                        "TalklyApp",
+                        "FirebaseApp initialized successfully: ${app.name}"
+                    )
                 }
+
             } else {
-                Log.d("TalklyApp", "FirebaseApp auto-initialized by Google Services ContentProvider")
+
+                Log.d(
+                    "TalklyApp",
+                    "FirebaseApp auto-initialized by Google Services ContentProvider"
+                )
             }
+
         } catch (e: Exception) {
-            Log.e("TalklyApp", "Error during default FirebaseApp.initializeApp: ${e.message}, applying explicit fallback options")
+
+            Log.e(
+                "TalklyApp",
+                "Error during default FirebaseApp.initializeApp: ${e.message}, applying explicit fallback options"
+            )
+
             try {
+
                 val options = FirebaseOptions.Builder()
                     .setApplicationId("1:688875089801:android:07f27e3cf40ca2af913b58")
                     .setGcmSenderId("688875089801")
@@ -60,19 +105,38 @@ class TalklyApp : Application() {
                     .setStorageBucket("familycallapp-e6b21.firebasestorage.app")
                     .setApiKey(getFirebaseApiKey())
                     .build()
+
                 FirebaseApp.initializeApp(this, options)
-                Log.d("TalklyApp", "FirebaseApp initialized with explicit fallback options")
+
+                Log.d(
+                    "TalklyApp",
+                    "FirebaseApp initialized with explicit fallback options"
+                )
+
             } catch (ex: Exception) {
-                Log.e("TalklyApp", "Critical: Failed to initialize FirebaseApp with fallback: ${ex.message}", ex)
+
+                Log.e(
+                    "TalklyApp",
+                    "Critical: Failed to initialize FirebaseApp with fallback: ${ex.message}",
+                    ex
+                )
             }
         }
     }
 
     private fun getFirebaseApiKey(): String {
         return try {
+
             val key = BuildConfig.FIREBASE_API_KEY
-            if (key.isNullOrBlank()) "AIzaSyCmmYWBqRREKmhNaBvc1drcTJib0EuMgF0" else key
+
+            if (key.isNullOrBlank()) {
+                "AIzaSyCmmYWBqRREKmhNaBvc1drcTJib0EuMgF0"
+            } else {
+                key
+            }
+
         } catch (e: Exception) {
+
             "AIzaSyCmmYWBqRREKmhNaBvc1drcTJib0EuMgF0"
         }
     }
