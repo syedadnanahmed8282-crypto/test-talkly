@@ -5,14 +5,12 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.net.Uri
 import android.util.Log
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,7 +23,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -37,11 +34,9 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -58,7 +53,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -66,7 +60,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -77,13 +70,26 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
-import com.family.talkly.ui.theme.WhatsappGreen
-import com.family.talkly.ui.theme.WhatsappTeal
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+
+// ==========================================
+// TALKLY DESIGN TOKENS
+// ==========================================
+private val BackgroundDark = Color(0xFF080B10)
+private val SurfaceMain = Color(0xFF11161D)
+private val SurfaceCard = Color(0xFF18212B)
+private val SurfaceElevated = Color(0xFF202B36)
+private val ElectricCyan = Color(0xFF22D3EE)
+private val DeepAqua = Color(0xFF0EA5A4)
+private val MintAccent = Color(0xFF5EEAD4)
+private val TextPrimary = Color(0xFFF8FAFC)
+private val TextSecondary = Color(0xFFA7B0BA)
+private val TextMuted = Color(0xFF64748B)
+private val BorderElevated = Color(0xFF24303E)
 
 @Composable
 fun ImageCropDialog(
@@ -121,12 +127,13 @@ fun ImageCropDialog(
                 .fillMaxWidth(0.96f)
                 .padding(8.dp),
             shape = RoundedCornerShape(24.dp),
-            color = Color(0xFF111B21)
+            color = SurfaceMain,
+            border = BorderStroke(1.dp, BorderElevated)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .padding(18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -140,15 +147,15 @@ fun ImageCropDialog(
                         Icon(
                             imageVector = Icons.Default.Crop,
                             contentDescription = null,
-                            tint = WhatsappGreen,
+                            tint = ElectricCyan,
                             modifier = Modifier.size(22.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (isCoverCrop) "Crop Cover Photo" else "Crop Profile Picture",
+                            text = if (isCoverCrop) "Crop Cover Photo" else "Crop Profile Photo",
                             fontWeight = FontWeight.Bold,
                             fontSize = 18.sp,
-                            color = Color.White
+                            color = TextPrimary
                         )
                     }
 
@@ -159,7 +166,7 @@ fun ImageCropDialog(
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Cancel",
-                            tint = Color.LightGray
+                            tint = TextSecondary
                         )
                     }
                 }
@@ -167,7 +174,7 @@ fun ImageCropDialog(
                 Text(
                     text = if (isCoverCrop) "Pinch to zoom, drag to align inside cover box" else "Pinch to zoom, drag to align photo inside circle",
                     fontSize = 12.sp,
-                    color = Color.Gray
+                    color = TextMuted
                 )
 
                 // Crop Viewport Box
@@ -175,7 +182,7 @@ fun ImageCropDialog(
                     modifier = Modifier
                         .size(width = cropBoxWidthDp, height = cropBoxHeightDp)
                         .clipToBounds()
-                        .background(Color.Black)
+                        .background(BackgroundDark)
                         .pointerInput(Unit) {
                             detectTransformGestures { _, pan, zoom, _ ->
                                 scale = (scale * zoom).coerceIn(1f, 5f)
@@ -224,7 +231,7 @@ fun ImageCropDialog(
                             drawPath(path = path, color = Color.Black.copy(alpha = 0.65f))
 
                             drawRoundRect(
-                                color = WhatsappGreen,
+                                color = ElectricCyan,
                                 topLeft = Offset(halfStroke, halfStroke),
                                 size = Size(canvasWidth - strokeWidthPx, canvasHeight - strokeWidthPx),
                                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(cornerRadius, cornerRadius),
@@ -232,7 +239,7 @@ fun ImageCropDialog(
                             )
 
                             // Grid lines inside crop box
-                            val gridColor = Color.White.copy(alpha = 0.25f)
+                            val gridColor = Color.White.copy(alpha = 0.2f)
                             val strokeW = 1.dp.toPx()
                             val hThird = canvasHeight / 3f
                             val wThird = canvasWidth / 3f
@@ -252,14 +259,14 @@ fun ImageCropDialog(
                             drawPath(path = path, color = Color.Black.copy(alpha = 0.65f))
 
                             drawCircle(
-                                color = WhatsappGreen,
+                                color = ElectricCyan,
                                 radius = radius,
                                 center = center,
                                 style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx())
                             )
 
                             val thirdR = radius * 0.33f
-                            val gridColor = Color.White.copy(alpha = 0.25f)
+                            val gridColor = Color.White.copy(alpha = 0.2f)
                             val strokeW = 1.dp.toPx()
 
                             drawLine(gridColor, Offset(center.x - radius * 0.9f, center.y - thirdR), Offset(center.x + radius * 0.9f, center.y - thirdR), strokeWidth = strokeW)
@@ -285,7 +292,7 @@ fun ImageCropDialog(
                         IconButton(
                             onClick = { scale = (scale - 0.2f).coerceAtLeast(1f) }
                         ) {
-                            Icon(imageVector = Icons.Default.Remove, contentDescription = "Zoom Out", tint = Color.White)
+                            Icon(imageVector = Icons.Default.Remove, contentDescription = "Zoom Out", tint = TextPrimary)
                         }
 
                         Slider(
@@ -294,16 +301,16 @@ fun ImageCropDialog(
                             valueRange = 1f..5f,
                             modifier = Modifier.weight(1f),
                             colors = SliderDefaults.colors(
-                                thumbColor = WhatsappGreen,
-                                activeTrackColor = WhatsappGreen,
-                                inactiveTrackColor = Color.DarkGray
+                                thumbColor = ElectricCyan,
+                                activeTrackColor = ElectricCyan,
+                                inactiveTrackColor = SurfaceElevated
                             )
                         )
 
                         IconButton(
                             onClick = { scale = (scale + 0.2f).coerceAtMost(5f) }
                         ) {
-                            Icon(imageVector = Icons.Default.Add, contentDescription = "Zoom In", tint = Color.White)
+                            Icon(imageVector = Icons.Default.Add, contentDescription = "Zoom In", tint = TextPrimary)
                         }
                     }
 
@@ -316,7 +323,8 @@ fun ImageCropDialog(
                             onClick = {
                                 rotationDegrees = (rotationDegrees + 90) % 360
                             },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
+                            border = BorderStroke(1.dp, BorderElevated)
                         ) {
                             Icon(imageVector = Icons.Default.RotateRight, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
@@ -330,7 +338,8 @@ fun ImageCropDialog(
                                 offsetY = 0f
                                 rotationDegrees = 0
                             },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.LightGray)
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary),
+                            border = BorderStroke(1.dp, BorderElevated)
                         ) {
                             Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
@@ -349,7 +358,7 @@ fun ImageCropDialog(
                         onClick = onDismiss,
                         enabled = !isProcessing
                     ) {
-                        Text("Cancel", color = Color.Gray, fontSize = 15.sp)
+                        Text("Cancel", color = TextMuted, fontSize = 15.sp)
                     }
 
                     Button(
@@ -378,16 +387,23 @@ fun ImageCropDialog(
                             }
                         },
                         enabled = !isProcessing,
-                        colors = ButtonDefaults.buttonColors(containerColor = WhatsappGreen),
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(imageVector = Icons.Default.Check, contentDescription = null)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (isProcessing) "Cropping..." else "Crop & Save Photo",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
-                        )
+                        if (isProcessing) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color(0xFF040E14), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Cropping...", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFF040E14))
+                        } else {
+                            Icon(imageVector = Icons.Default.Check, contentDescription = null, tint = Color(0xFF040E14))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Crop & Save Photo",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = Color(0xFF040E14)
+                            )
+                        }
                     }
                 }
             }

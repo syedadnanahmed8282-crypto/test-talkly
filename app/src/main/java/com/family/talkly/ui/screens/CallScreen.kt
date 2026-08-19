@@ -1,27 +1,39 @@
 package com.family.talkly.ui.screens
 
+import android.app.Activity
+import android.graphics.SurfaceTexture
+import android.view.TextureView
+import android.view.WindowManager
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,20 +45,17 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Splitscreen
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,7 +63,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.toRect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -63,33 +75,35 @@ import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
-import android.Manifest
-import android.content.Context
-import android.content.pm.PackageManager
-import android.graphics.SurfaceTexture
-import android.hardware.camera2.CameraCaptureSession
-import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CameraDevice
-import android.hardware.camera2.CameraManager
-import android.hardware.camera2.CaptureRequest
-import android.os.Handler
-import android.os.HandlerThread
-import android.util.Log
-import android.view.Surface
-import android.view.TextureView
+import coil.compose.AsyncImage
 import com.family.talkly.data.models.CallType
 import com.family.talkly.data.models.FamilyMember
+import com.family.talkly.data.zego.CallState
 import com.family.talkly.data.zego.CurrentCallInfo
-import com.family.talkly.ui.theme.WhatsappGreen
 import java.util.Locale
 import kotlin.math.roundToInt
+
+// ==========================================
+// TALKLY CALL SIGNATURE COLORS
+// ==========================================
+private val BackgroundDark = Color(0xFF080B10)
+private val SurfaceMain = Color(0xFF11161D)
+private val SurfaceCard = Color(0xFF18212B)
+private val SurfaceElevated = Color(0xFF202B36)
+private val ElectricCyan = Color(0xFF22D3EE)
+private val DeepAqua = Color(0xFF0EA5A4)
+private val MintAccent = Color(0xFF5EEAD4)
+private val TextPrimary = Color(0xFFF8FAFC)
+private val TextSecondary = Color(0xFFA7B0BA)
+private val DestructiveRed = Color(0xFFF43F5E)
+private val BorderElevated = Color(0xFF24303E)
 
 enum class BeautyFilterMode(val label: String) {
     FAIR_AND_BRIGHT("✨ Fair & Bright"),
@@ -101,10 +115,10 @@ fun getBeautyColorMatrix(mode: BeautyFilterMode): ColorMatrix {
     return when (mode) {
         BeautyFilterMode.FAIR_AND_BRIGHT -> {
             ColorMatrix(floatArrayOf(
-                1.16f, 0.00f, 0.00f, 0f, 24f, // Red channel boost for soft rosy skin
-                0.00f, 1.14f, 0.00f, 0f, 22f, // Green channel boost for fair skin tone
-                0.00f, 0.00f, 1.12f, 0f, 20f, // Blue channel boost for bright illumination
-                0.00f, 0.00f, 0.00f, 1f, 0f   // Alpha channel
+                1.16f, 0.00f, 0.00f, 0f, 24f,
+                0.00f, 1.14f, 0.00f, 0f, 22f,
+                0.00f, 0.00f, 1.12f, 0f, 20f,
+                0.00f, 0.00f, 0.00f, 1f, 0f
             ))
         }
         BeautyFilterMode.SOFT_GLOW -> {
@@ -175,7 +189,7 @@ fun RemoteVideoView(
 ) {
     val matrix = remember(beautyFilterMode) { getBeautyColorMatrix(beautyFilterMode) }
     Box(
-        modifier = modifier.background(Color(0xFF101D25)),
+        modifier = modifier.background(BackgroundDark),
         contentAlignment = Alignment.Center
     ) {
         AndroidView(
@@ -203,7 +217,7 @@ fun RemoteVideoView(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xFF101D25).copy(alpha = 0.95f)),
+                    .background(BackgroundDark.copy(alpha = 0.95f)),
                 contentAlignment = Alignment.Center
             ) {
                 Column(
@@ -212,35 +226,66 @@ fun RemoteVideoView(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(90.dp)
-                            .background(WhatsappGreen, CircleShape),
+                            .size(100.dp)
+                            .clip(CircleShape)
+                            .background(
+                                Brush.sweepGradient(
+                                    listOf(ElectricCyan, MintAccent, DeepAqua, ElectricCyan)
+                                )
+                            )
+                            .padding(3.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = member?.name?.take(2)?.uppercase() ?: "FA",
-                            color = Color.White,
-                            fontSize = 32.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(CircleShape)
+                                .background(SurfaceElevated),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (member?.avatarUrl?.isNotBlank() == true) {
+                                val mediaModel = remember(member.avatarUrl) {
+                                    com.family.talkly.util.PhoneUtils.getCoilMediaModel(member.avatarUrl)
+                                }
+                                AsyncImage(
+                                    model = mediaModel,
+                                    contentDescription = member.name,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Text(
+                                    text = member?.name?.take(2)?.uppercase() ?: "TK",
+                                    color = ElectricCyan,
+                                    fontSize = 32.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
-                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
                     Text(
-                        text = member?.name ?: "Partner",
-                        color = Color.White,
-                        fontSize = 18.sp,
+                        text = member?.name ?: "Contact",
+                        color = TextPrimary,
+                        fontSize = 20.sp,
                         fontWeight = FontWeight.Bold
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
                     Surface(
-                        color = WhatsappGreen.copy(alpha = 0.2f),
-                        shape = RoundedCornerShape(12.dp)
+                        color = SurfaceCard,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, BorderElevated)
                     ) {
                         Text(
-                            text = "Connecting video stream...",
-                            color = WhatsappGreen,
-                            fontSize = 11.sp,
+                            text = "Connecting secure video stream...",
+                            color = ElectricCyan,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
                         )
                     }
                 }
@@ -261,37 +306,38 @@ fun CallScreen(
     onBindRemoteView: (android.view.View?) -> Unit = {}
 ) {
     val context = LocalContext.current
-    androidx.compose.runtime.DisposableEffect(Unit) {
-        val activity = context as? android.app.Activity
+    DisposableEffect(Unit) {
+        val activity = context as? Activity
         activity?.window?.addFlags(
-            android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-            android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-            android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-            android.view.WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
         )
         onDispose {
             activity?.window?.clearFlags(
-                android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-                android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                android.view.WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
             )
         }
     }
 
     val member = callInfo.targetMember
     val isVideo = callInfo.callType == CallType.VIDEO
+    val isOutgoing = callInfo.state == CallState.OUTGOING_CALLING || callInfo.state == CallState.OUTGOING_RINGING
 
     val minutes = callInfo.durationSeconds / 60
     val seconds = callInfo.durationSeconds % 60
     val formattedTimer = String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
 
     val callStatusText = when (callInfo.state) {
-        com.family.talkly.data.zego.CallState.OUTGOING_CALLING -> "Calling..."
-        com.family.talkly.data.zego.CallState.OUTGOING_RINGING -> "Ringing..."
-        com.family.talkly.data.zego.CallState.INCOMING_RINGING -> "Incoming call..."
-        com.family.talkly.data.zego.CallState.ACTIVE -> formattedTimer
-        com.family.talkly.data.zego.CallState.ENDED -> "Call ended"
+        CallState.OUTGOING_CALLING -> "Connecting..."
+        CallState.OUTGOING_RINGING -> "Ringing..."
+        CallState.INCOMING_RINGING -> "Incoming call..."
+        CallState.ACTIVE -> formattedTimer
+        CallState.ENDED -> "Call ended"
         else -> ""
     }
 
@@ -302,433 +348,629 @@ fun CallScreen(
     var pipOffsetY by remember { mutableFloatStateOf(0f) }
     var areControlsVisible by remember { mutableStateOf(true) }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF0B141A))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) {
-                areControlsVisible = !areControlsVisible
-            }
+    val infiniteTransition = rememberInfiniteTransition(label = "callTransition")
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.25f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "pulseScale"
+    )
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "pulseAlpha"
+    )
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = BackgroundDark
     ) {
-        if (isVideo && !callInfo.isCameraOff) {
-            if (isSplitScreen) {
-                // Split Screen Mode: Top and Bottom halves stacked
-                Column(modifier = Modifier.fillMaxSize()) {
-                    // Top Half: Remote View
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .border(1.dp, Color.White.copy(alpha = 0.2f))
-                    ) {
-                        RemoteVideoView(
-                            member = member,
-                            isRemotePlaying = callInfo.isRemoteStreamPlaying,
-                            onBindRemoteView = onBindRemoteView,
-                            beautyFilterMode = beautyFilterMode,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                        Surface(
-                            color = Color.Black.copy(alpha = 0.6f),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier
-                                .align(Alignment.TopStart)
-                                .padding(12.dp)
-                        ) {
-                            Text(
-                                text = member?.name ?: "Partner",
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-
-                    // Bottom Half: Local View
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .border(1.dp, Color.White.copy(alpha = 0.2f))
-                    ) {
-                        CameraPreviewView(
-                            onBindLocalView = onBindLocalView,
-                            beautyFilterMode = beautyFilterMode,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                        Surface(
-                            color = Color.Black.copy(alpha = 0.6f),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .padding(12.dp)
-                        ) {
-                            Text(
-                                text = if (callInfo.isFrontCamera) "You (Front)" else "You (Back)",
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    if (isVideo) {
+                        areControlsVisible = !areControlsVisible
                     }
                 }
-
-                // Exit Split Screen Floating Button
-                IconButton(
-                    onClick = { isSplitScreen = false },
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 48.dp, end = 16.dp)
-                        .background(Color.Black.copy(alpha = 0.6f), CircleShape)
-                        .size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Exit Split Screen",
-                        tint = Color.White
-                    )
-                }
-
-            } else {
-                // Standard Overlay Mode with Draggable PIP Popup
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    // Main Background Feed
-                    if (!isSwapped) {
-                        RemoteVideoView(
-                            member = member,
-                            isRemotePlaying = callInfo.isRemoteStreamPlaying,
-                            onBindRemoteView = onBindRemoteView,
-                            beautyFilterMode = beautyFilterMode,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        CameraPreviewView(
-                            onBindLocalView = onBindLocalView,
-                            beautyFilterMode = beautyFilterMode,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-
-                    // Overlay Gradient
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color.Black.copy(alpha = 0.4f),
-                                        Color.Transparent,
-                                        Color.Black.copy(alpha = 0.6f)
-                                    )
-                                )
+        ) {
+            if (isVideo && !callInfo.isCameraOff && callInfo.state == CallState.ACTIVE) {
+                // ==========================================
+                // ACTIVE VIDEO CALL VIEW
+                // ==========================================
+                if (isSplitScreen) {
+                    // Split Screen: Top (Remote) and Bottom (Local)
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .border(1.dp, BorderElevated)
+                        ) {
+                            RemoteVideoView(
+                                member = member,
+                                isRemotePlaying = callInfo.isRemoteStreamPlaying,
+                                onBindRemoteView = onBindRemoteView,
+                                beautyFilterMode = beautyFilterMode,
+                                modifier = Modifier.fillMaxSize()
                             )
-                    )
-
-                    // Draggable Local/Remote Picture-in-Picture Popup
-                    Surface(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = 90.dp, end = 16.dp)
-                            .offset { IntOffset(pipOffsetX.roundToInt(), pipOffsetY.roundToInt()) }
-                            .size(width = 120.dp, height = 170.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .border(2.dp, WhatsappGreen, RoundedCornerShape(16.dp))
-                            .pointerInput(Unit) {
-                                detectDragGestures { change, dragAmount ->
-                                    change.consume()
-                                    pipOffsetX += dragAmount.x
-                                    pipOffsetY += dragAmount.y
-                                }
-                            }
-                            .clickable { isSwapped = !isSwapped },
-                        color = Color.Black
-                    ) {
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            if (!isSwapped) {
-                                CameraPreviewView(
-                                    onBindLocalView = onBindLocalView,
-                                    beautyFilterMode = beautyFilterMode,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            } else {
-                                RemoteVideoView(
-                                    member = member,
-                                    isRemotePlaying = callInfo.isRemoteStreamPlaying,
-                                    onBindRemoteView = onBindRemoteView,
-                                    beautyFilterMode = beautyFilterMode,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-
-                            // Bottom Label Tag
-                            Box(
+                            Surface(
+                                color = SurfaceCard.copy(alpha = 0.85f),
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, BorderElevated),
                                 modifier = Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .fillMaxWidth()
-                                    .background(Color.Black.copy(alpha = 0.65f))
-                                    .padding(4.dp),
-                                contentAlignment = Alignment.Center
+                                    .align(Alignment.TopStart)
+                                    .statusBarsPadding()
+                                    .padding(16.dp)
                             ) {
                                 Text(
-                                    text = if (!isSwapped) {
-                                        if (callInfo.isFrontCamera) "You (Front)" else "You (Rear)"
-                                    } else {
-                                        member?.name?.take(8) ?: "Partner"
-                                    },
-                                    color = Color.White,
-                                    fontSize = 10.sp,
+                                    text = member?.name ?: "Contact",
+                                    color = TextPrimary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .border(1.dp, BorderElevated)
+                        ) {
+                            CameraPreviewView(
+                                onBindLocalView = onBindLocalView,
+                                beautyFilterMode = beautyFilterMode,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            Surface(
+                                color = SurfaceCard.copy(alpha = 0.85f),
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, BorderElevated),
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .navigationBarsPadding()
+                                    .padding(16.dp)
+                            ) {
+                                Text(
+                                    text = if (callInfo.isFrontCamera) "You (Front)" else "You (Back)",
+                                    color = TextPrimary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Exit Split Screen Button
+                    IconButton(
+                        onClick = { isSplitScreen = false },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .statusBarsPadding()
+                            .padding(top = 16.dp, end = 16.dp)
+                            .background(SurfaceCard, CircleShape)
+                            .border(1.dp, BorderElevated, CircleShape)
+                            .size(38.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Exit Split Screen",
+                            tint = TextPrimary
+                        )
+                    }
+                } else {
+                    // Full Screen Feed with Picture-in-Picture Floating Window
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        if (!isSwapped) {
+                            RemoteVideoView(
+                                member = member,
+                                isRemotePlaying = callInfo.isRemoteStreamPlaying,
+                                onBindRemoteView = onBindRemoteView,
+                                beautyFilterMode = beautyFilterMode,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            CameraPreviewView(
+                                onBindLocalView = onBindLocalView,
+                                beautyFilterMode = beautyFilterMode,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        // Top Gradient Scrim
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(140.dp)
+                                .align(Alignment.TopCenter)
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)
+                                    )
+                                )
+                        )
+
+                        // Bottom Gradient Scrim
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(180.dp)
+                                .align(Alignment.BottomCenter)
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))
+                                    )
+                                )
+                        )
+
+                        // Draggable Local/Remote Picture-in-Picture Popup
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .statusBarsPadding()
+                                .padding(top = 70.dp, end = 16.dp)
+                                .offset { IntOffset(pipOffsetX.roundToInt(), pipOffsetY.roundToInt()) }
+                                .size(width = 125.dp, height = 180.dp)
+                                .clip(RoundedCornerShape(18.dp))
+                                .border(1.5.dp, ElectricCyan, RoundedCornerShape(18.dp))
+                                .shadow(14.dp, RoundedCornerShape(18.dp))
+                                .pointerInput(Unit) {
+                                    detectDragGestures { change, dragAmount ->
+                                        change.consume()
+                                        pipOffsetX += dragAmount.x
+                                        pipOffsetY += dragAmount.y
+                                    }
+                                }
+                                .clickable { isSwapped = !isSwapped },
+                            color = BackgroundDark
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                if (!isSwapped) {
+                                    CameraPreviewView(
+                                        onBindLocalView = onBindLocalView,
+                                        beautyFilterMode = beautyFilterMode,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                } else {
+                                    RemoteVideoView(
+                                        member = member,
+                                        isRemotePlaying = callInfo.isRemoteStreamPlaying,
+                                        onBindRemoteView = onBindRemoteView,
+                                        beautyFilterMode = beautyFilterMode,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+
+                                // Bottom PIP Tag
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .fillMaxWidth()
+                                        .background(Color.Black.copy(alpha = 0.7f))
+                                        .padding(4.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = if (!isSwapped) {
+                                            if (callInfo.isFrontCamera) "You (Front)" else "You (Rear)"
+                                        } else {
+                                            member?.name?.take(8) ?: "Partner"
+                                        },
+                                        color = TextPrimary,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+
+                                // Top Right Split Screen Icon
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(4.dp)
+                                        .background(SurfaceCard.copy(alpha = 0.8f), CircleShape)
+                                        .clickable { isSplitScreen = true }
+                                        .padding(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Splitscreen,
+                                        contentDescription = "Split Screen Mode",
+                                        tint = ElectricCyan,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                // ==========================================
+                // AUDIO / OUTGOING RINGING CALL VIEW
+                // ==========================================
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .drawBehind {
+                            drawCircle(
+                                brush = Brush.radialGradient(
+                                    colors = listOf(
+                                        ElectricCyan.copy(alpha = 0.14f),
+                                        DeepAqua.copy(alpha = 0.06f),
+                                        Color.Transparent
+                                    ),
+                                    center = center.copy(y = size.height * 0.40f),
+                                    radius = size.width * 0.85f
+                                )
+                            )
+                        }
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .statusBarsPadding()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 24.dp, vertical = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        // Top Security Status
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Surface(
+                                color = SurfaceCard,
+                                shape = RoundedCornerShape(20.dp),
+                                border = BorderStroke(1.dp, BorderElevated)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Lock,
+                                        contentDescription = null,
+                                        tint = ElectricCyan,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "End-to-End Encrypted",
+                                        color = ElectricCyan,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        letterSpacing = 0.3.sp
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            Text(
+                                text = if (isVideo) "TALKLY VIDEO CALL" else "TALKLY VOICE CALL",
+                                color = MintAccent,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.8.sp
+                            )
+                        }
+
+                        // Center Avatar & Identity
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(vertical = 16.dp)
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.size(200.dp)
+                            ) {
+                                if (isOutgoing) {
+                                    // Animated Outgoing Waves
+                                    Box(
+                                        modifier = Modifier
+                                            .size(175.dp)
+                                            .scale(pulseScale)
+                                            .background(ElectricCyan.copy(alpha = pulseAlpha), CircleShape)
+                                    )
+                                }
+
+                                // Outer Gradient Ring
+                                Box(
+                                    modifier = Modifier
+                                        .size(140.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            Brush.sweepGradient(
+                                                listOf(ElectricCyan, MintAccent, DeepAqua, ElectricCyan)
+                                            )
+                                        )
+                                        .padding(3.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .clip(CircleShape)
+                                            .background(SurfaceElevated),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (member?.avatarUrl?.isNotBlank() == true) {
+                                            val mediaModel = remember(member.avatarUrl) {
+                                                com.family.talkly.util.PhoneUtils.getCoilMediaModel(member.avatarUrl)
+                                            }
+                                            AsyncImage(
+                                                model = mediaModel,
+                                                contentDescription = member.name,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        } else {
+                                            Text(
+                                                text = member?.name?.take(2)?.uppercase() ?: "TK",
+                                                color = ElectricCyan,
+                                                fontSize = 44.sp,
+                                                fontWeight = FontWeight.Black
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(20.dp))
+
+                            Text(
+                                text = member?.name ?: "Contact",
+                                color = TextPrimary,
+                                fontSize = 26.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = (-0.5).sp
+                            )
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            Text(
+                                text = callStatusText,
+                                color = if (callInfo.state == CallState.ACTIVE) ElectricCyan else TextSecondary,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        // Bottom Spacer to balance layout
+                        Spacer(modifier = Modifier.height(60.dp))
+                    }
+                }
+            }
+
+            // ==========================================
+            // TOP STATUS HEADER OVERLAY (For Video Calls)
+            // ==========================================
+            if (isVideo && callInfo.state == CallState.ACTIVE) {
+                AnimatedVisibility(
+                    visible = areControlsVisible,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 16.dp, start = 20.dp, end = 20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Surface(
+                            color = SurfaceCard.copy(alpha = 0.85f),
+                            shape = RoundedCornerShape(20.dp),
+                            border = BorderStroke(1.dp, BorderElevated)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = null,
+                                    tint = ElectricCyan,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = formattedTimer,
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                             }
+                        }
 
-                            // Top-Right Split Screen Icon Button on PIP Popup
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .padding(4.dp)
-                                    .background(Color.Black.copy(alpha = 0.6f), CircleShape)
-                                    .clickable { isSplitScreen = true }
-                                    .padding(4.dp)
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Beauty Filter Pill
+                        Surface(
+                            onClick = {
+                                beautyFilterMode = when (beautyFilterMode) {
+                                    BeautyFilterMode.FAIR_AND_BRIGHT -> BeautyFilterMode.SOFT_GLOW
+                                    BeautyFilterMode.SOFT_GLOW -> BeautyFilterMode.OFF
+                                    BeautyFilterMode.OFF -> BeautyFilterMode.FAIR_AND_BRIGHT
+                                }
+                            },
+                            color = if (beautyFilterMode != BeautyFilterMode.OFF) ElectricCyan.copy(alpha = 0.85f) else SurfaceCard.copy(alpha = 0.8f),
+                            shape = RoundedCornerShape(20.dp),
+                            border = BorderStroke(1.dp, BorderElevated)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Splitscreen,
-                                    contentDescription = "Split Screen Mode",
-                                    tint = WhatsappGreen,
-                                    modifier = Modifier.size(18.dp)
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = "Beauty Filter",
+                                    tint = if (beautyFilterMode != BeautyFilterMode.OFF) Color(0xFF040E14) else TextPrimary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = beautyFilterMode.label,
+                                    color = if (beautyFilterMode != BeautyFilterMode.OFF) Color(0xFF040E14) else TextPrimary,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
                                 )
                             }
                         }
                     }
                 }
             }
-        } else {
-            // Audio Call Mode View
-            Column(
+
+            // ==========================================
+            // FLOATING CALL CONTROLS DOCK (Both Audio & Video)
+            // ==========================================
+            AnimatedVisibility(
+                visible = areControlsVisible || !isVideo,
+                enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
+                exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(140.dp)
-                        .background(WhatsappGreen, CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = member?.name?.take(2)?.uppercase() ?: "FA",
-                        color = Color.White,
-                        fontSize = 48.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Spacer(modifier = Modifier.height(24.dp))
-                Text(
-                    text = member?.name ?: "Family Member",
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold
-                    )
-                )
-                Text(
-                    text = callStatusText,
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        color = if (callInfo.state == com.family.talkly.data.zego.CallState.ACTIVE) WhatsappGreen else Color.White.copy(alpha = 0.8f),
-                        fontWeight = FontWeight.Medium
-                    )
-                )
-            }
-        }
-
-        // Top Status Header Overlay
-        AnimatedVisibility(
-            visible = areControlsVisible,
-            enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
-            exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
-            modifier = Modifier.align(Alignment.TopCenter)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 40.dp, start = 20.dp, end = 20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Lock,
-                        contentDescription = "Encrypted",
-                        tint = WhatsappGreen,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "End-to-End Encrypted Family Call",
-                        color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Text(
-                    text = callStatusText,
-                    color = Color.White,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
-                )
-
-                if (isVideo) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Surface(
-                        onClick = {
-                            beautyFilterMode = when (beautyFilterMode) {
-                                BeautyFilterMode.FAIR_AND_BRIGHT -> BeautyFilterMode.SOFT_GLOW
-                                BeautyFilterMode.SOFT_GLOW -> BeautyFilterMode.OFF
-                                BeautyFilterMode.OFF -> BeautyFilterMode.FAIR_AND_BRIGHT
-                            }
-                        },
-                        color = if (beautyFilterMode != BeautyFilterMode.OFF) WhatsappGreen.copy(alpha = 0.9f) else Color.Black.copy(alpha = 0.6f),
-                        shape = RoundedCornerShape(20.dp),
-                        shadowElevation = 4.dp
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.AutoAwesome,
-                                contentDescription = "Beauty Filter",
-                                tint = Color.White,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = beautyFilterMode.label,
-                                color = Color.White,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // Bottom Floating Call Controls
-        AnimatedVisibility(
-            visible = areControlsVisible,
-            enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
-            exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter)
-        ) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
-                shape = RoundedCornerShape(32.dp),
-                color = Color(0xFF1F2C34).copy(alpha = 0.95f),
-                tonalElevation = 8.dp
-            ) {
-                Row(
+                Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 16.dp, horizontal = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(horizontal = 20.dp, vertical = 20.dp),
+                    shape = RoundedCornerShape(32.dp),
+                    color = SurfaceCard.copy(alpha = 0.95f),
+                    border = BorderStroke(1.2.dp, BorderElevated),
+                    shadowElevation = 18.dp
                 ) {
-                    // Mute Mic
-                    IconButton(
-                        onClick = onToggleMute,
+                    Row(
                         modifier = Modifier
-                            .size(50.dp)
-                            .background(
-                                if (callInfo.isMuted) Color.White else Color.White.copy(alpha = 0.15f),
-                                CircleShape
+                            .fillMaxWidth()
+                            .padding(vertical = 14.dp, horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 1. Mute Mic
+                        IconButton(
+                            onClick = onToggleMute,
+                            modifier = Modifier
+                                .size(50.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (callInfo.isMuted) DestructiveRed.copy(alpha = 0.18f) else SurfaceElevated
+                                )
+                                .border(
+                                    1.dp,
+                                    if (callInfo.isMuted) DestructiveRed else BorderElevated,
+                                    CircleShape
+                                )
+                        ) {
+                            Icon(
+                                imageVector = if (callInfo.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                                contentDescription = "Mute",
+                                tint = if (callInfo.isMuted) DestructiveRed else TextPrimary,
+                                modifier = Modifier.size(22.dp)
                             )
-                    ) {
-                        Icon(
-                            imageVector = if (callInfo.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                            contentDescription = "Mute",
-                            tint = if (callInfo.isMuted) Color.Red else Color.White
-                        )
-                    }
+                        }
 
-                    // Camera Flip
-                    IconButton(
-                        onClick = onFlipCamera,
-                        modifier = Modifier
-                            .size(50.dp)
-                            .background(Color.White.copy(alpha = 0.15f), CircleShape)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Cameraswitch,
-                            contentDescription = "Flip Camera",
-                            tint = Color.White
-                        )
-                    }
-
-                    // Video Toggle
-                    IconButton(
-                        onClick = onToggleCamera,
-                        modifier = Modifier
-                            .size(50.dp)
-                            .background(
-                                if (callInfo.isCameraOff) Color.White else Color.White.copy(alpha = 0.15f),
-                                CircleShape
+                        // 2. Camera Flip (If Video) or Switch to Video (If Audio)
+                        IconButton(
+                            onClick = {
+                                if (isVideo) onFlipCamera() else onToggleCamera()
+                            },
+                            modifier = Modifier
+                                .size(50.dp)
+                                .clip(CircleShape)
+                                .background(SurfaceElevated)
+                                .border(1.dp, BorderElevated, CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = if (isVideo) Icons.Default.Cameraswitch else Icons.Default.Videocam,
+                                contentDescription = if (isVideo) "Flip Camera" else "Switch to Video",
+                                tint = ElectricCyan,
+                                modifier = Modifier.size(22.dp)
                             )
-                    ) {
-                        Icon(
-                            imageVector = if (callInfo.isCameraOff) Icons.Default.VideocamOff else Icons.Default.Videocam,
-                            contentDescription = "Camera Toggle",
-                            tint = if (callInfo.isCameraOff) Color.Red else Color.White
-                        )
-                    }
+                        }
 
-                    // Speaker Toggle
-                    IconButton(
-                        onClick = onToggleSpeaker,
-                        modifier = Modifier
-                            .size(50.dp)
-                            .background(
-                                if (callInfo.isSpeakerOn) WhatsappGreen else Color.White.copy(alpha = 0.15f),
-                                CircleShape
+                        // 3. Camera Toggle On/Off (If Video)
+                        if (isVideo) {
+                            IconButton(
+                                onClick = onToggleCamera,
+                                modifier = Modifier
+                                    .size(50.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (callInfo.isCameraOff) DestructiveRed.copy(alpha = 0.18f) else SurfaceElevated
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (callInfo.isCameraOff) DestructiveRed else BorderElevated,
+                                        CircleShape
+                                    )
+                            ) {
+                                Icon(
+                                    imageVector = if (callInfo.isCameraOff) Icons.Default.VideocamOff else Icons.Default.Videocam,
+                                    contentDescription = "Camera Toggle",
+                                    tint = if (callInfo.isCameraOff) DestructiveRed else TextPrimary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+
+                        // 4. Speaker Toggle
+                        IconButton(
+                            onClick = onToggleSpeaker,
+                            modifier = Modifier
+                                .size(50.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (callInfo.isSpeakerOn) ElectricCyan.copy(alpha = 0.18f) else SurfaceElevated
+                                )
+                                .border(
+                                    1.dp,
+                                    if (callInfo.isSpeakerOn) ElectricCyan else BorderElevated,
+                                    CircleShape
+                                )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.VolumeUp,
+                                contentDescription = "Speaker",
+                                tint = if (callInfo.isSpeakerOn) ElectricCyan else TextPrimary,
+                                modifier = Modifier.size(22.dp)
                             )
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.VolumeUp,
-                            contentDescription = "Speaker",
-                            tint = Color.White
-                        )
-                    }
+                        }
 
-                    // End Call FAB
-                    FloatingActionButton(
-                        onClick = onEndCall,
-                        containerColor = Color(0xFFE53935),
-                        contentColor = Color.White,
-                        shape = CircleShape,
-                        modifier = Modifier.size(56.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CallEnd,
-                            contentDescription = "End Call",
-                            modifier = Modifier.size(28.dp)
-                        )
+                        // 5. End Call Action (Prominent Destructive Button)
+                        Surface(
+                            onClick = onEndCall,
+                            shape = CircleShape,
+                            color = DestructiveRed,
+                            shadowElevation = 8.dp,
+                            modifier = Modifier.size(54.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CallEnd,
+                                    contentDescription = "End Call",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(26.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
     }
 }
-

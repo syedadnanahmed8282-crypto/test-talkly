@@ -1,8 +1,18 @@
 package com.family.talkly.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -28,10 +39,9 @@ import androidx.compose.material.icons.filled.FamilyRestroom
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -50,12 +60,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -64,15 +77,22 @@ import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import com.family.talkly.data.models.UserProfile
 
-// Classic Dark Purple & Sage Green / Laurel Green Palette
-private val ClassicDarkPurpleBg = Color(0xFF201030)        // Deep Classic Dark Purple
-private val ClassicDarkPurpleCard = Color(0xFF2C1740)      // Classic Dark Purple Card surface
-private val ClassicInputBg = Color(0xFF140921)           // High contrast dark container for inputs
-private val SageGreenAccent = Color(0xFF8FA87B)           // Warm Sage Green / Laurel Green
-private val SageGreenMint = Color(0xFFAEC89B)             // Light Pastel Sage for headings/highlights
-private val SoftSageText = Color(0xFFCBE0BD)              // Soft Pastel Sage for subtext
-private val SoftPurpleSubtext = Color(0xFFC7B7E0)         // Soft Light Purple for labels/placeholders
-private val ClassicInputBorder = Color(0xFF4A2A6B)        // Dark Purple input border
+// ==========================================
+// TALKLY SIGNATURE DESIGN TOKENS
+// ==========================================
+private val BackgroundDark = Color(0xFF080B10)
+private val SurfaceMain = Color(0xFF11161D)
+private val SurfaceCard = Color(0xFF18212B)
+private val SurfaceElevated = Color(0xFF202B36)
+private val ElectricCyan = Color(0xFF22D3EE)
+private val DeepAqua = Color(0xFF0EA5A4)
+private val MintAccent = Color(0xFF5EEAD4)
+private val TextPrimary = Color(0xFFF8FAFC)
+private val TextSecondary = Color(0xFFA7B0BA)
+private val TextMuted = Color(0xFF64748B)
+private val ErrorColor = Color(0xFFF43F5E)
+private val BorderSubtle = Color(0xFF1E293B)
+private val BorderElevated = Color(0xFF24303E)
 
 @Composable
 fun AddContactDialog(
@@ -90,7 +110,11 @@ fun AddContactDialog(
     var foundUser by remember { mutableStateOf<UserProfile?>(null) }
     var showRelationDropdown by remember { mutableStateOf(false) }
 
-    val relationOptions = listOf("Family Member", "Mother", "Father", "Brother", "Sister", "Grandma", "Grandpa", "Friend", "Spouse", "Other")
+    val focusManager = LocalFocusManager.current
+    val relationOptions = listOf(
+        "Family Member", "Mother", "Father", "Brother", "Sister",
+        "Grandma", "Grandpa", "Friend", "Spouse", "Colleague", "Other"
+    )
 
     fun triggerUserSearch() {
         val cleanPhone = phoneInput.trim()
@@ -100,7 +124,7 @@ fun AddContactDialog(
         }
 
         isSearching = true
-        searchStatusMessage = "Searching Talkly database..."
+        searchStatusMessage = "Searching Talkly network..."
         foundUser = null
 
         onSearchUserByPhone(cleanPhone) { profile ->
@@ -111,13 +135,21 @@ fun AddContactDialog(
                     nameInput = profile.name
                 }
                 avatarUrlInput = profile.profilePicUrl.ifBlank { null }
-                searchStatusMessage = "✅ Talkly user found: ${profile.name}"
+                searchStatusMessage = "Talkly user verified: ${profile.name}"
             } else {
                 foundUser = null
-                searchStatusMessage = "ℹ️ User not registered on Talkly yet. Saved as offline contact."
+                searchStatusMessage = "User not on Talkly yet. Will be saved to contacts."
             }
         }
     }
+
+    val submitInteractionSource = remember { MutableInteractionSource() }
+    val isSubmitPressed by submitInteractionSource.collectIsPressedAsState()
+    val submitScale by animateFloatAsState(
+        targetValue = if (isSubmitPressed) 0.97f else 1f,
+        animationSpec = tween(100, easing = FastOutSlowInEasing),
+        label = "submitScale"
+    )
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -126,16 +158,16 @@ fun AddContactDialog(
         Surface(
             modifier = Modifier
                 .fillMaxWidth(0.92f)
-                .padding(vertical = 16.dp)
-                .shadow(16.dp, RoundedCornerShape(24.dp), ambientColor = SageGreenAccent, spotColor = SageGreenAccent),
-            shape = RoundedCornerShape(24.dp),
-            color = ClassicDarkPurpleBg,
-            border = androidx.compose.foundation.BorderStroke(1.5.dp, SageGreenAccent.copy(alpha = 0.6f))
+                .padding(vertical = 20.dp)
+                .shadow(24.dp, RoundedCornerShape(28.dp)),
+            shape = RoundedCornerShape(28.dp),
+            color = SurfaceCard,
+            border = BorderStroke(1.2.dp, BorderElevated)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(22.dp)
+                    .padding(24.dp)
                     .verticalScroll(rememberScrollState())
             ) {
                 // Top Header Row
@@ -144,158 +176,186 @@ fun AddContactDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(42.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    Brush.radialGradient(
-                                        colors = listOf(SageGreenMint, SageGreenAccent)
-                                    )
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.PersonAdd,
-                                contentDescription = null,
-                                tint = ClassicDarkPurpleBg,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
+                    Column {
                         Text(
-                            text = "Add New Member",
+                            text = "Add someone",
                             fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp,
-                            color = SageGreenMint
+                            fontSize = 22.sp,
+                            color = TextPrimary,
+                            letterSpacing = (-0.5).sp
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Connect with a new person on Talkly.",
+                            fontSize = 13.sp,
+                            color = TextSecondary
                         )
                     }
-                    IconButton(onClick = onDismiss) {
+
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(SurfaceElevated)
+                    ) {
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Close",
-                            tint = SoftPurpleSubtext
+                            tint = TextSecondary,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
-                // Found User Banner Card
-                if (foundUser != null) {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 14.dp),
-                        colors = CardDefaults.cardColors(containerColor = ClassicDarkPurpleCard),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, SageGreenAccent),
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                // Found User Verified Banner Card
+                AnimatedVisibility(
+                    visible = foundUser != null,
+                    enter = fadeIn() + slideInVertically(),
+                    exit = fadeOut()
+                ) {
+                    if (foundUser != null) {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 16.dp),
+                            color = SurfaceElevated,
+                            border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.5f)),
+                            shape = RoundedCornerShape(18.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(CircleShape)
-                                    .background(SageGreenAccent),
-                                contentAlignment = Alignment.Center
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                if (!foundUser!!.profilePicUrl.isNullOrBlank()) {
-                                    AsyncImage(
-                                        model = foundUser!!.profilePicUrl,
-                                        contentDescription = foundUser!!.name,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                } else {
+                                Box(
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(CircleShape)
+                                        .background(Brush.sweepGradient(listOf(ElectricCyan, MintAccent, DeepAqua, ElectricCyan)))
+                                        .padding(2.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .clip(CircleShape)
+                                            .background(SurfaceCard),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (!foundUser!!.profilePicUrl.isNullOrBlank()) {
+                                            AsyncImage(
+                                                model = foundUser!!.profilePicUrl,
+                                                contentDescription = foundUser!!.name,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        } else {
+                                            Text(
+                                                text = foundUser!!.name.take(1).uppercase(),
+                                                color = ElectricCyan,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 18.sp
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(12.dp))
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = foundUser!!.name,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp,
+                                            color = TextPrimary
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.Verified,
+                                            contentDescription = "Verified User",
+                                            tint = ElectricCyan,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                     Text(
-                                        text = foundUser!!.name.take(1).uppercase(),
-                                        color = ClassicDarkPurpleBg,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 20.sp
+                                        text = foundUser!!.phoneNumber,
+                                        fontSize = 12.sp,
+                                        color = TextSecondary
                                     )
                                 }
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = foundUser!!.name,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp,
-                                        color = Color.White
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Icon(
-                                        imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = null,
-                                        tint = SageGreenMint,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                                Text(
-                                    text = foundUser!!.phoneNumber,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = SoftSageText
-                                )
                             }
                         }
                     }
                 }
 
-                // Phone Input Field (Required)
+                // Phone Input Field
+                Text(
+                    text = "Phone Number",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = ElectricCyan,
+                    modifier = Modifier.padding(start = 2.dp, bottom = 6.dp)
+                )
+
                 OutlinedTextField(
                     value = phoneInput,
                     onValueChange = {
                         phoneInput = it
                         searchStatusMessage = null
                     },
-                    label = { Text("Mobile Phone Number *", fontWeight = FontWeight.SemiBold) },
-                    placeholder = { Text("+8801700000000", color = SoftPurpleSubtext.copy(alpha = 0.5f)) },
+                    placeholder = { Text("+1 (555) 000-0000", color = TextMuted) },
                     leadingIcon = {
-                        Icon(imageVector = Icons.Default.Phone, contentDescription = null, tint = SageGreenAccent)
+                        Icon(imageVector = Icons.Default.Phone, contentDescription = null, tint = ElectricCyan)
                     },
                     trailingIcon = {
                         if (isSearching) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                color = SageGreenAccent,
+                                modifier = Modifier.size(18.dp),
+                                color = ElectricCyan,
                                 strokeWidth = 2.dp
                             )
                         } else {
-                            IconButton(onClick = { triggerUserSearch() }) {
+                            IconButton(onClick = {
+                                focusManager.clearFocus()
+                                triggerUserSearch()
+                            }) {
                                 Icon(
                                     imageVector = Icons.Default.Search,
-                                    contentDescription = "Search Talkly User",
-                                    tint = SageGreenAccent
+                                    contentDescription = "Search Talkly",
+                                    tint = ElectricCyan
                                 )
                             }
                         }
                     },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Phone,
+                        imeAction = ImeAction.Search
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onSearch = {
+                            focusManager.clearFocus()
+                            triggerUserSearch()
+                        }
+                    ),
                     singleLine = true,
                     textStyle = TextStyle(
-                        color = Color.White,
+                        color = TextPrimary,
                         fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.SemiBold
                     ),
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(16.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = SageGreenAccent,
-                        unfocusedBorderColor = ClassicInputBorder,
-                        focusedLabelColor = SageGreenMint,
-                        unfocusedLabelColor = SoftPurpleSubtext,
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedLeadingIconColor = SageGreenAccent,
-                        unfocusedLeadingIconColor = SoftPurpleSubtext,
-                        focusedContainerColor = ClassicInputBg,
-                        unfocusedContainerColor = ClassicInputBg
+                        focusedBorderColor = ElectricCyan,
+                        unfocusedBorderColor = BorderElevated,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedLeadingIconColor = ElectricCyan,
+                        unfocusedLeadingIconColor = TextSecondary,
+                        focusedContainerColor = SurfaceElevated,
+                        unfocusedContainerColor = SurfaceElevated
                     )
                 )
 
@@ -305,76 +365,87 @@ fun AddContactDialog(
                         text = searchStatusMessage!!,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
-                        color = if (foundUser != null) SageGreenMint else SoftPurpleSubtext,
+                        color = if (foundUser != null) MintAccent else TextSecondary,
                         modifier = Modifier.padding(start = 4.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // Contact Name Field (Optional - Defaults to Phone or Found Name)
+                // Contact Name Field
+                Text(
+                    text = "Contact Name",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = ElectricCyan,
+                    modifier = Modifier.padding(start = 2.dp, bottom = 6.dp)
+                )
+
                 OutlinedTextField(
                     value = nameInput,
                     onValueChange = { nameInput = it },
-                    label = { Text("Contact Name (Optional)", fontWeight = FontWeight.SemiBold) },
-                    placeholder = { Text("e.g. Brother Rahat", color = SoftPurpleSubtext.copy(alpha = 0.5f)) },
+                    placeholder = { Text("e.g. Sarah Jenkins", color = TextMuted) },
                     leadingIcon = {
-                        Icon(imageVector = Icons.Default.AccountCircle, contentDescription = null, tint = SageGreenAccent)
+                        Icon(imageVector = Icons.Default.AccountCircle, contentDescription = null, tint = ElectricCyan)
                     },
                     singleLine = true,
                     textStyle = TextStyle(
-                        color = Color.White,
+                        color = TextPrimary,
                         fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.SemiBold
                     ),
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(16.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = SageGreenAccent,
-                        unfocusedBorderColor = ClassicInputBorder,
-                        focusedLabelColor = SageGreenMint,
-                        unfocusedLabelColor = SoftPurpleSubtext,
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedLeadingIconColor = SageGreenAccent,
-                        unfocusedLeadingIconColor = SoftPurpleSubtext,
-                        focusedContainerColor = ClassicInputBg,
-                        unfocusedContainerColor = ClassicInputBg
+                        focusedBorderColor = ElectricCyan,
+                        unfocusedBorderColor = BorderElevated,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedLeadingIconColor = ElectricCyan,
+                        unfocusedLeadingIconColor = TextSecondary,
+                        focusedContainerColor = SurfaceElevated,
+                        unfocusedContainerColor = SurfaceElevated
                     )
                 )
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // Relation Selection Field
+                // Relationship Selection
+                Text(
+                    text = "Relation / Tag",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = ElectricCyan,
+                    modifier = Modifier.padding(start = 2.dp, bottom = 6.dp)
+                )
+
                 Box(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = relationInput,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Relation / Tag", fontWeight = FontWeight.SemiBold) },
                         leadingIcon = {
-                            Icon(imageVector = Icons.Default.FamilyRestroom, contentDescription = null, tint = SageGreenAccent)
+                            Icon(imageVector = Icons.Default.FamilyRestroom, contentDescription = null, tint = ElectricCyan)
                         },
                         trailingIcon = {
-                            Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, tint = SageGreenAccent)
+                            Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, tint = ElectricCyan)
                         },
                         textStyle = TextStyle(
-                            color = Color.White,
+                            color = TextPrimary,
                             fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.SemiBold
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { showRelationDropdown = true },
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(16.dp),
                         enabled = false,
                         colors = OutlinedTextFieldDefaults.colors(
-                            disabledBorderColor = ClassicInputBorder,
-                            disabledLabelColor = SoftPurpleSubtext,
-                            disabledTextColor = Color.White,
-                            disabledLeadingIconColor = SageGreenAccent,
-                            disabledTrailingIconColor = SageGreenAccent,
-                            disabledContainerColor = ClassicInputBg
+                            disabledBorderColor = BorderElevated,
+                            disabledTextColor = TextPrimary,
+                            disabledLeadingIconColor = ElectricCyan,
+                            disabledTrailingIconColor = ElectricCyan,
+                            disabledContainerColor = SurfaceElevated
                         )
                     )
 
@@ -388,15 +459,15 @@ fun AddContactDialog(
                         expanded = showRelationDropdown,
                         onDismissRequest = { showRelationDropdown = false },
                         modifier = Modifier
-                            .background(ClassicDarkPurpleCard)
-                            .border(1.dp, SageGreenAccent, RoundedCornerShape(8.dp))
+                            .background(SurfaceElevated)
+                            .border(1.dp, BorderElevated, RoundedCornerShape(12.dp))
                     ) {
                         relationOptions.forEach { option ->
                             DropdownMenuItem(
                                 text = {
                                     Text(
                                         text = option,
-                                        color = if (option == relationInput) SageGreenMint else Color.White,
+                                        color = if (option == relationInput) ElectricCyan else TextPrimary,
                                         fontWeight = if (option == relationInput) FontWeight.Bold else FontWeight.Normal
                                     )
                                 },
@@ -409,24 +480,39 @@ fun AddContactDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(28.dp))
 
-                // Action Buttons Row
+                // Action Buttons: Cancel and Save Contact
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = onDismiss) {
-                        Text(
-                            text = "Cancel",
-                            color = SoftPurpleSubtext,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium
-                        )
+                    Surface(
+                        onClick = onDismiss,
+                        shape = RoundedCornerShape(16.dp),
+                        color = SurfaceElevated,
+                        border = BorderStroke(1.dp, BorderElevated),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(50.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Cancel",
+                                color = TextSecondary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Button(
+
+                    val isFormValid = phoneInput.trim().isNotBlank()
+
+                    Surface(
                         onClick = {
                             val cleanPhone = phoneInput.trim()
                             if (cleanPhone.isNotBlank()) {
@@ -443,24 +529,33 @@ fun AddContactDialog(
                                 onDismiss()
                             }
                         },
-                        enabled = phoneInput.trim().isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = SageGreenAccent,
-                            contentColor = ClassicDarkPurpleBg,
-                            disabledContainerColor = SageGreenAccent.copy(alpha = 0.3f),
-                            disabledContentColor = Color.White.copy(alpha = 0.4f)
-                        ),
-                        shape = RoundedCornerShape(14.dp),
+                        enabled = isFormValid,
+                        shape = RoundedCornerShape(16.dp),
+                        color = Color.Transparent,
                         modifier = Modifier
-                            .height(46.dp)
-                            .padding(horizontal = 4.dp)
+                            .weight(1.4f)
+                            .height(50.dp)
+                            .scale(submitScale)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(
+                                if (isFormValid) {
+                                    Brush.horizontalGradient(listOf(ElectricCyan, DeepAqua))
+                                } else {
+                                    Brush.horizontalGradient(listOf(SurfaceElevated, SurfaceElevated))
+                                }
+                            )
                     ) {
-                        Text(
-                            text = "Save Contact",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp,
-                            color = ClassicDarkPurpleBg
-                        )
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Save Contact",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = if (isFormValid) Color(0xFF040E14) else TextMuted
+                            )
+                        }
                     }
                 }
             }

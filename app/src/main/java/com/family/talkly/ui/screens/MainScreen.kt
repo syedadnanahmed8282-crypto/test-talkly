@@ -444,6 +444,7 @@ fun MainScreen(
             } else {
                 chatRepository.startRealtimeMessageSync(null)
             }
-        }
+        },
+        callLogs = callLogs
     )
 }
