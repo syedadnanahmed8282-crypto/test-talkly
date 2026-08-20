@@ -60,6 +60,15 @@ class FirebaseChatRepository(private val context: Context) {
         private const val KEY_STATUSES_JSON = "talkly_statuses_json"
         private const val KEY_BLOCKED_USERS = "talkly_blocked_user_ids"
         private const val KEY_DELETED_CONTACT_IDS = "talkly_deleted_contact_ids"
+
+        @Volatile
+        private var INSTANCE: FirebaseChatRepository? = null
+
+        fun getInstance(context: Context): FirebaseChatRepository {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: FirebaseChatRepository(context.applicationContext).also { INSTANCE = it }
+            }
+        }
     }
 
     private var firestore: FirebaseFirestore? = null
@@ -774,11 +783,18 @@ class FirebaseChatRepository(private val context: Context) {
                                 (myPhoneSuffix.isNotBlank() && PhoneUtils.extractPhoneSuffix(typingTo) == myPhoneSuffix)
                             )
 
+                            val online = doc.getBoolean("isOnline") ?: member.isOnline
+                            val seen = doc.getString("lastSeen") ?: member.lastSeen
+                            val activeTs = doc.getLong("lastActiveTimestamp") ?: member.lastActiveTimestamp
+
                             member.copy(
                                 name = if (!nameStr.isNullOrBlank() && nameStr != "Talkly User") nameStr else member.name,
                                 avatarUrl = if (!avatarBusted.isNullOrBlank()) avatarBusted else member.avatarUrl,
                                 coverPhotoUrl = if (!coverBusted.isNullOrBlank()) coverBusted else member.coverPhotoUrl,
                                 status = if (!bioStr.isNullOrBlank()) bioStr else member.status,
+                                isOnline = online,
+                                lastSeen = seen,
+                                lastActiveTimestamp = activeTs,
                                 isTyping = isTypingTargetedToMe || member.isTyping
                             )
                         } else {
@@ -1964,22 +1980,10 @@ class FirebaseChatRepository(private val context: Context) {
         if (heartbeatJob != null && heartbeatJob?.isActive == true) return
 
         heartbeatJob = repositoryScope.launch {
-            Log.d(TAG, "Starting Firestore message sync heartbeat loop (25s interval, 5s server timeout)")
+            Log.d(TAG, "Starting Firestore message sync presence heartbeat loop (25s interval)")
             while (true) {
                 try {
                     delay(25000L)
-
-                    // 1. Check if app is in foreground
-                    val isForeground = try {
-                        ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
-                    } catch (e: Throwable) {
-                        true // fallback if ProcessLifecycleOwner unavailable
-                    }
-
-                    if (!isForeground) {
-                        Log.d(TAG, "Heartbeat skipped: App is in background")
-                        continue
-                    }
 
                     val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
                     val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
@@ -1989,28 +1993,29 @@ class FirebaseChatRepository(private val context: Context) {
                         ?: fallbackPrefs.getString("user_uid", null)
 
                     if (uid.isNullOrBlank()) {
-                        Log.d(TAG, "Heartbeat skipped: No active user session")
                         continue
                     }
 
-                    Log.d(TAG, "Executing heartbeat server read for uid=$uid...")
-                    val startTime = System.currentTimeMillis()
-                    val result = try {
-                        withTimeoutOrNull(5000L) {
-                            firestore?.collection("users")?.document(uid)?.get(Source.SERVER)?.await()
+                    val now = System.currentTimeMillis()
+                    val myPhone = sessionPrefs.getString("user_phone", "") ?: ""
+                    val myPhoneSuffix = PhoneUtils.extractPhoneSuffix(myPhone)
+
+                    val presenceMap = mapOf(
+                        "isOnline" to true,
+                        "lastSeen" to "Online",
+                        "lastActiveTimestamp" to now,
+                        "updatedAt" to now
+                    )
+
+                    try {
+                        firestore?.collection("users")?.document(uid)?.set(presenceMap, com.google.firebase.firestore.SetOptions.merge())
+                        firestore?.collection("family_members")?.document(uid)?.set(presenceMap, com.google.firebase.firestore.SetOptions.merge())
+                        if (myPhoneSuffix.isNotBlank() && myPhoneSuffix != uid) {
+                            firestore?.collection("users")?.document(myPhoneSuffix)?.set(presenceMap, com.google.firebase.firestore.SetOptions.merge())
+                            firestore?.collection("family_members")?.document(myPhoneSuffix)?.set(presenceMap, com.google.firebase.firestore.SetOptions.merge())
                         }
                     } catch (e: Exception) {
-                        Log.w(TAG, "Heartbeat server read exception: ${e.localizedMessage}")
-                        null
-                    }
-
-                    val elapsed = System.currentTimeMillis() - startTime
-
-                    if (result == null) {
-                        Log.w(TAG, "Heartbeat FAILED/TIMEOUT after ${elapsed}ms -> triggering forceReconnectListeners('heartbeat_failed')")
-                        forceReconnectListeners("heartbeat_failed")
-                    } else {
-                        Log.d(TAG, "Heartbeat SUCCESS in ${elapsed}ms (server responded)")
+                        Log.w(TAG, "Heartbeat presence update error: ${e.localizedMessage}")
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) {
@@ -2037,6 +2042,12 @@ class FirebaseChatRepository(private val context: Context) {
             return
         }
 
+        // If listeners are already active and reason is foregrounding, keep current live stream to avoid latency
+        if (messagesListener != null && currentSyncedUserId == uid && reason == "app_foreground") {
+            Log.d(TAG, "forceReconnectListeners: Listeners already active for uid=$uid, maintaining connection.")
+            return
+        }
+
         try {
             messagesListener?.remove()
             messagesListener = null
@@ -2047,7 +2058,7 @@ class FirebaseChatRepository(private val context: Context) {
             currentSyncedUserId = null // Reset so startRealtimeMessageSync bypasses the guard
 
             startRealtimeMessageSync(uid)
-            Log.d(TAG, "forceReconnectListeners: Successfully reattached message listeners for uid=$uid (trigger: $reason)")
+            Log.d(TAG, "forceReconnectListeners: Successfully attached message listeners for uid=$uid (trigger: $reason)")
         } catch (e: Exception) {
             Log.e(TAG, "forceReconnectListeners encountered error: ${e.localizedMessage}")
         }

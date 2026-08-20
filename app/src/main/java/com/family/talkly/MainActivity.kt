@@ -107,8 +107,8 @@ class MainActivity : ComponentActivity() {
         }
 
         authManager = AuthManager(applicationContext)
-        chatRepository = FirebaseChatRepository(applicationContext)
-        zegoManager = ZegoCallEngineManager(applicationContext)
+        chatRepository = FirebaseChatRepository.getInstance(applicationContext)
+        zegoManager = ZegoCallEngineManager.getInstance(applicationContext)
         themePreferences = ThemePreferences(applicationContext)
 
         com.family.talkly.util.TalklyNotificationHelper.initNotificationChannels(applicationContext)

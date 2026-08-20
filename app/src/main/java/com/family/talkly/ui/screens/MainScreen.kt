@@ -107,30 +107,12 @@ fun MainScreen(
                         lastActiveTimestamp = System.currentTimeMillis()
                     )
                 }
-                Lifecycle.Event.ON_STOP, Lifecycle.Event.ON_PAUSE -> {
-                    val now = System.currentTimeMillis()
-                    chatRepository.setMemberPresence(
-                        memberId = uid,
-                        isOnline = false,
-                        lastSeen = com.family.talkly.util.PhoneUtils.formatLastSeenTime(now),
-                        lastActiveTimestamp = now
-                    )
-                }
                 else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            if (!uid.isNullOrBlank()) {
-                val now = System.currentTimeMillis()
-                chatRepository.setMemberPresence(
-                    memberId = uid,
-                    isOnline = false,
-                    lastSeen = com.family.talkly.util.PhoneUtils.formatLastSeenTime(now),
-                    lastActiveTimestamp = now
-                )
-            }
         }
     }
 
@@ -138,13 +120,13 @@ fun MainScreen(
         val uid = currentUserProfile?.uid
         if (!uid.isNullOrBlank()) {
             while (true) {
-                kotlinx.coroutines.delay(45_000L)
                 chatRepository.setMemberPresence(
                     memberId = uid,
                     isOnline = true,
                     lastSeen = "Online",
                     lastActiveTimestamp = System.currentTimeMillis()
                 )
+                kotlinx.coroutines.delay(30_000L)
             }
         }
     }

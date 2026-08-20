@@ -49,11 +49,34 @@ class MessageSyncForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         startForegroundWithNotification()
+        ensureBackgroundSyncActive()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundWithNotification()
+        ensureBackgroundSyncActive()
         return START_STICKY
+    }
+
+    private fun ensureBackgroundSyncActive() {
+        try {
+            val sessionPrefs = getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+            val fallbackPrefs = getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+            val uid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+                ?: sessionPrefs.getString("user_uid", null)
+                ?: fallbackPrefs.getString("user_uid", null)
+
+            if (!uid.isNullOrBlank()) {
+                val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository.getInstance(applicationContext)
+                chatRepo.startRealtimeMessageSync(uid)
+
+                val zegoManager = com.family.talkly.data.zego.ZegoCallEngineManager.getInstance(applicationContext)
+                val userProfile = zegoManager.getLocalUserProfile()
+                zegoManager.startRealtimeCallSync(userProfile, chatRepo)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error ensuring background sync active: ${e.localizedMessage}")
+        }
     }
 
     private fun startForegroundWithNotification() {

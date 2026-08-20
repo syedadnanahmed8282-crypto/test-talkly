@@ -98,6 +98,15 @@ class ZegoCallEngineManager(private val context: Context) {
         val ZEGO_APP_ID: Long = 196267710L
         val ZEGO_APP_SIGN: String = "620de7961f58b3a6f8390c8a484233ff60aafd59a6f4bc8a538b25c502fd4403"
         const val FIREBASE_PROJECT_ID: String = "familycallapp-e6b21"
+
+        @Volatile
+        private var INSTANCE: ZegoCallEngineManager? = null
+
+        fun getInstance(context: Context): ZegoCallEngineManager {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: ZegoCallEngineManager(context.applicationContext).also { INSTANCE = it }
+            }
+        }
     }
 
     private val callSoundManager = CallSoundManager(context)
@@ -808,7 +817,7 @@ class ZegoCallEngineManager(private val context: Context) {
 
             // Send high priority FCM push for incoming calls
             val status = data["status"] as? String ?: ""
-            if (status.equals("RINGING", ignoreCase = true)) {
+            if (status.equals("RINGING", ignoreCase = true) || status.equals("CALLING", ignoreCase = true)) {
                 val fcmPayload = mapOf(
                     "type" to "INCOMING_CALL",
                     "callerName" to callerProfile.name,
