@@ -77,6 +77,7 @@ class MainActivity : ComponentActivity() {
 
         // ===== DEBUG: install crash handler FIRST so it catches everything after this point =====
         CrashHandler.install(applicationContext)
+        com.family.talkly.service.MessageSyncForegroundService.start(applicationContext)
 
         enableEdgeToEdge()
 

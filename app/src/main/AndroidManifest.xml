@@ -78,6 +78,11 @@
         </service>
 
         <service
+            android:name=".service.MessageSyncForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
+        <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
