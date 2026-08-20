@@ -170,6 +170,8 @@ class CallForegroundService : Service() {
 
                 if (isSelfCall) {
                     Log.d(TAG, "Ignoring ACTION_START_INCOMING_CALL for self-call (callerUid=$callerUid)")
+                    safeStartForeground(NOTIFICATION_ID, buildSilentPlaceholderNotification(), 0)
+                    stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -349,6 +351,17 @@ class CallForegroundService : Service() {
         }
 
         safeStartForeground(NOTIFICATION_ID, notificationBuilder.build(), foregroundType)
+    }
+
+    private fun buildSilentPlaceholderNotification(): android.app.Notification {
+        TalklyNotificationHelper.initNotificationChannels(this)
+        return NotificationCompat.Builder(this, TalklyNotificationHelper.CHANNEL_CALLS_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Talkly")
+            .setContentText("Checking call...")
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setSilent(true)
+            .build()
     }
 
     private fun safeStartForeground(notificationId: Int, notification: android.app.Notification, primaryType: Int) {
