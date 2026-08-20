@@ -26,7 +26,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -34,16 +36,23 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.clickable
 import com.family.talkly.data.auth.AuthManager
 import com.family.talkly.data.auth.AuthState
 import com.family.talkly.data.firebase.FirebaseChatRepository
 import com.family.talkly.data.zego.ZegoCallEngineManager
+import com.family.talkly.debug.CrashHandler
+import com.family.talkly.debug.DebugLogDialog
 import com.family.talkly.ui.components.AuthLoadingState
 import com.family.talkly.ui.screens.MainScreen
 import com.family.talkly.ui.screens.auth.PhonePasswordAuthScreen
@@ -65,6 +74,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // ===== DEBUG: install crash handler FIRST so it catches everything after this point =====
+        CrashHandler.install(applicationContext)
+
         enableEdgeToEdge()
 
         // Turn screen on and show over lockscreen for incoming call wake-up
@@ -119,122 +132,145 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    val authState by authManager.authState.collectAsState()
+                    // ===== DEBUG: floating log button + dialog, visible on every screen =====
+                    var showDebugLog by remember { mutableStateOf(false) }
 
-                    when (val state = authState) {
-                        is AuthState.InitialCheck -> {
-                            AuthLoadingState(
-                                message = "Talkly Family Messenger",
-                                subMessage = "Checking authentication session..."
-                            )
-                        }
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        val authState by authManager.authState.collectAsState()
 
-                        is AuthState.Unauthenticated -> {
-                            PhonePasswordAuthScreen(
-                                isLoading = false,
-                                errorMessage = null,
-                                onSignIn = { phone, password ->
-                                    authManager.signInWithPhoneAndPassword(phone, password)
-                                },
-                                onSignUp = { phone, password, name ->
-                                    authManager.signUpWithPhoneAndPassword(
-                                        phoneNumber = phone,
-                                        password = password,
-                                        name = name
-                                    )
-                                },
-                                onForgotPassword = { phone, onSuccess, onError ->
-                                    authManager.sendPasswordResetForPhone(
-                                        phoneNumber = phone,
-                                        onSuccess = onSuccess,
-                                        onError = onError
-                                    )
-                                },
-                                onClearError = {
-                                    authManager.clearError()
-                                }
-                            )
-                        }
+                        when (val state = authState) {
+                            is AuthState.InitialCheck -> {
+                                AuthLoadingState(
+                                    message = "Talkly Family Messenger",
+                                    subMessage = "Checking authentication session..."
+                                )
+                            }
 
-                        is AuthState.VerificationInProgress -> {
-                            AuthLoadingState(
-                                message = state.message,
-                                subMessage = "Please wait a moment while we process your request"
-                            )
-                        }
-
-                        is AuthState.ProfileSetupRequired -> {
-                            ProfileSetupScreen(
-                                phoneNumber = state.phoneNumber,
-                                isLoading = false,
-                                errorMessage = null,
-                                onSaveProfile = { name, picUrl ->
-                                    authManager.saveUserProfile(
-                                        name = name,
-                                        profilePicUrl = picUrl,
-                                        onSuccess = {},
-                                        onError = {}
-                                    )
-                                }
-                            )
-                        }
-
-                        is AuthState.Authenticated -> {
-                            MainScreen(
-                                chatRepository = chatRepository,
-                                zegoManager = zegoManager,
-                                currentUserProfile = state.profile,
-                                currentThemeMode = currentThemeMode,
-                                onThemeModeChange = { mode ->
-                                    themePreferences.setThemeMode(mode)
-                                },
-                                onLogout = {
-                                    chatRepository.resetSessionOnLogout()
-                                    zegoManager.clearSession()
-                                    authManager.logout()
-
-                                    val intent = android.content.Intent(this@MainActivity, MainActivity::class.java).apply {
-                                        flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
+                            is AuthState.Unauthenticated -> {
+                                PhonePasswordAuthScreen(
+                                    isLoading = false,
+                                    errorMessage = null,
+                                    onSignIn = { phone, password ->
+                                        authManager.signInWithPhoneAndPassword(phone, password)
+                                    },
+                                    onSignUp = { phone, password, name ->
+                                        authManager.signUpWithPhoneAndPassword(
+                                            phoneNumber = phone,
+                                            password = password,
+                                            name = name
+                                        )
+                                    },
+                                    onForgotPassword = { phone, onSuccess, onError ->
+                                        authManager.sendPasswordResetForPhone(
+                                            phoneNumber = phone,
+                                            onSuccess = onSuccess,
+                                            onError = onError
+                                        )
+                                    },
+                                    onClearError = {
+                                        authManager.clearError()
                                     }
-                                    startActivity(intent)
-                                    finish()
-                                },
-                                onSaveProfile = { name, bio, picUrl, coverUrl ->
-                                    authManager.saveUserProfile(
-                                        name = name,
-                                        profilePicUrl = picUrl,
-                                        bio = bio,
-                                        coverPhotoUrl = coverUrl
-                                    )
-                                }
-                            )
+                                )
+                            }
+
+                            is AuthState.VerificationInProgress -> {
+                                AuthLoadingState(
+                                    message = state.message,
+                                    subMessage = "Please wait a moment while we process your request"
+                                )
+                            }
+
+                            is AuthState.ProfileSetupRequired -> {
+                                ProfileSetupScreen(
+                                    phoneNumber = state.phoneNumber,
+                                    isLoading = false,
+                                    errorMessage = null,
+                                    onSaveProfile = { name, picUrl ->
+                                        authManager.saveUserProfile(
+                                            name = name,
+                                            profilePicUrl = picUrl,
+                                            onSuccess = {},
+                                            onError = {}
+                                        )
+                                    }
+                                )
+                            }
+
+                            is AuthState.Authenticated -> {
+                                MainScreen(
+                                    chatRepository = chatRepository,
+                                    zegoManager = zegoManager,
+                                    currentUserProfile = state.profile,
+                                    currentThemeMode = currentThemeMode,
+                                    onThemeModeChange = { mode ->
+                                        themePreferences.setThemeMode(mode)
+                                    },
+                                    onLogout = {
+                                        chatRepository.resetSessionOnLogout()
+                                        zegoManager.clearSession()
+                                        authManager.logout()
+
+                                        val intent = android.content.Intent(this@MainActivity, MainActivity::class.java).apply {
+                                            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
+                                        }
+                                        startActivity(intent)
+                                        finish()
+                                    },
+                                    onSaveProfile = { name, bio, picUrl, coverUrl ->
+                                        authManager.saveUserProfile(
+                                            name = name,
+                                            profilePicUrl = picUrl,
+                                            bio = bio,
+                                            coverPhotoUrl = coverUrl
+                                        )
+                                    }
+                                )
+                            }
+
+                            is AuthState.Error -> {
+                                PhonePasswordAuthScreen(
+                                    isLoading = false,
+                                    errorMessage = state.message,
+                                    onSignIn = { phone, password ->
+                                        authManager.signInWithPhoneAndPassword(phone, password)
+                                    },
+                                    onSignUp = { phone, password, name ->
+                                        authManager.signUpWithPhoneAndPassword(
+                                            phoneNumber = phone,
+                                            password = password,
+                                            name = name
+                                        )
+                                    },
+                                    onForgotPassword = { phone, onSuccess, onError ->
+                                        authManager.sendPasswordResetForPhone(
+                                            phoneNumber = phone,
+                                            onSuccess = onSuccess,
+                                            onError = onError
+                                        )
+                                    },
+                                    onClearError = {
+                                        authManager.clearError()
+                                    }
+                                )
+                            }
                         }
 
-                        is AuthState.Error -> {
-                            PhonePasswordAuthScreen(
-                                isLoading = false,
-                                errorMessage = state.message,
-                                onSignIn = { phone, password ->
-                                    authManager.signInWithPhoneAndPassword(phone, password)
-                                },
-                                onSignUp = { phone, password, name ->
-                                    authManager.signUpWithPhoneAndPassword(
-                                        phoneNumber = phone,
-                                        password = password,
-                                        name = name
-                                    )
-                                },
-                                onForgotPassword = { phone, onSuccess, onError ->
-                                    authManager.sendPasswordResetForPhone(
-                                        phoneNumber = phone,
-                                        onSuccess = onSuccess,
-                                        onError = onError
-                                    )
-                                },
-                                onClearError = {
-                                    authManager.clearError()
-                                }
-                            )
+                        // Small floating debug button, always on top-right of every screen
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 48.dp, end = 12.dp)
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xAA000000))
+                                .clickable { showDebugLog = true },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("🐞", fontSize = 16.sp)
+                        }
+
+                        if (showDebugLog) {
+                            DebugLogDialog(onDismiss = { showDebugLog = false })
                         }
                     }
                 }
