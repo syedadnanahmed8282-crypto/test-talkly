@@ -103,12 +103,17 @@ class FirebaseChatRepository(private val context: Context) {
 
                 override fun onLost(network: Network) {
                     Log.d(TAG, "NetworkCallback: onLost -> network disconnected")
-                    _isNetworkConnected.value = false
+                    // সত্যিই আর কোনো active network না থাকলে তবেই offline ধরা হবে
+                    _isNetworkConnected.value = isNetworkCurrentlyAvailable()
                 }
 
                 override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                    // শুধু positive সিগন্যাল বিশ্বাস করা হচ্ছে; negative/offline সিদ্ধান্ত
+                    // শুধু onLost() থেকেই আসবে, যাতে ক্ষণিকের capability change এ ভুলভাবে offline না হয়
                     val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                    _isNetworkConnected.value = hasInternet
+                    if (hasInternet) {
+                        _isNetworkConnected.value = true
+                    }
                 }
             })
         } catch (e: Exception) {
