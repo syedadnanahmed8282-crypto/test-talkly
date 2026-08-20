@@ -360,13 +360,32 @@ class MainActivity : ComponentActivity() {
             ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
                 override fun onStart(owner: LifecycleOwner) {
                     super.onStart(owner)
-                    Log.d("MainActivity", "App entered FOREGROUND (ProcessLifecycleOwner.onStart) -> triggering chatRepository.forceReconnectListeners")
+                    Log.d("MainActivity", "App entered FOREGROUND (ProcessLifecycleOwner.onStart) -> triggering chatRepository.forceReconnectListeners and zegoManager.reconnectCallSync")
                     chatRepository.forceReconnectListeners("app_foreground")
+                    zegoManager.reconnectCallSync()
+                    val profile = zegoManager.getLocalUserProfile()
+                    if (profile.uid.isNotBlank() && profile.uid != "self") {
+                        chatRepository.setMemberPresence(
+                            memberId = profile.uid,
+                            isOnline = true,
+                            lastSeen = "Online",
+                            lastActiveTimestamp = System.currentTimeMillis()
+                        )
+                    }
                 }
 
                 override fun onStop(owner: LifecycleOwner) {
                     super.onStop(owner)
                     Log.d("MainActivity", "App entered BACKGROUND (ProcessLifecycleOwner.onStop)")
+                    val profile = zegoManager.getLocalUserProfile()
+                    if (profile.uid.isNotBlank() && profile.uid != "self") {
+                        chatRepository.setMemberPresence(
+                            memberId = profile.uid,
+                            isOnline = false,
+                            lastSeen = com.family.talkly.util.PhoneUtils.formatLastSeenTime(System.currentTimeMillis()),
+                            lastActiveTimestamp = System.currentTimeMillis()
+                        )
+                    }
                 }
             })
             Log.d("MainActivity", "ProcessLifecycleOwner observer registered successfully")
@@ -385,8 +404,9 @@ class MainActivity : ComponentActivity() {
                 networkCallback = object : ConnectivityManager.NetworkCallback() {
                     override fun onAvailable(network: Network) {
                         super.onAvailable(network)
-                        Log.d("MainActivity", "Network available/reconnected (NetworkCallback.onAvailable) -> triggering chatRepository.forceReconnectListeners")
+                        Log.d("MainActivity", "Network available/reconnected (NetworkCallback.onAvailable) -> triggering chatRepository.forceReconnectListeners and zegoManager.reconnectCallSync")
                         chatRepository.forceReconnectListeners("network_available")
+                        zegoManager.reconnectCallSync()
                     }
 
                     override fun onLost(network: Network) {

@@ -107,12 +107,28 @@ fun MainScreen(
                         lastActiveTimestamp = System.currentTimeMillis()
                     )
                 }
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
+                    chatRepository.setMemberPresence(
+                        memberId = uid,
+                        isOnline = false,
+                        lastSeen = com.family.talkly.util.PhoneUtils.formatLastSeenTime(System.currentTimeMillis()),
+                        lastActiveTimestamp = System.currentTimeMillis()
+                    )
+                }
                 else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            if (!uid.isNullOrBlank()) {
+                chatRepository.setMemberPresence(
+                    memberId = uid,
+                    isOnline = false,
+                    lastSeen = com.family.talkly.util.PhoneUtils.formatLastSeenTime(System.currentTimeMillis()),
+                    lastActiveTimestamp = System.currentTimeMillis()
+                )
+            }
         }
     }
 

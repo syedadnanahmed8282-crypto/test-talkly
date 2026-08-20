@@ -8,34 +8,42 @@ data class FamilyMember(
     val coverPhotoUrl: String? = null,
     val status: String = "Available for video call",
     val phone: String,
-    val isOnline: Boolean = true,
+    val isOnline: Boolean = false,
     val isTyping: Boolean = false,
-    val lastSeen: String = "Just now",
-    val lastActiveTimestamp: Long = System.currentTimeMillis(),
+    val lastSeen: String = "Offline",
+    val lastActiveTimestamp: Long = 0L,
     val unreadCount: Int = 0,
     val isPinned: Boolean = false,
     val isRegisteredOnTalkly: Boolean = false,
     val firebaseUid: String? = null
 ) {
     fun isRecentlyActive(maxInactiveMs: Long = 2 * 60 * 1000L): Boolean {
+        if (!isRegisteredOnTalkly) return false
         if (!isOnline) return false
         val now = System.currentTimeMillis()
-        if (lastActiveTimestamp <= 0L) return isOnline
-        return (now - lastActiveTimestamp) <= maxInactiveMs
+        if (lastActiveTimestamp > 0L) {
+            val diff = Math.abs(now - lastActiveTimestamp)
+            return diff <= maxInactiveMs
+        }
+        return lastSeen.equals("Online", ignoreCase = true)
     }
 
     val displayLastSeen: String
         get() {
+            if (!isRegisteredOnTalkly) return "Not on Talkly"
+            if (isRecentlyActive()) {
+                return "Online"
+            }
             if (lastActiveTimestamp > 0L) {
                 val formatted = com.family.talkly.util.PhoneUtils.formatLastSeenTime(lastActiveTimestamp)
-                if (!formatted.equals("Online", ignoreCase = true) && formatted.isNotBlank()) {
+                if (formatted.isNotBlank() && !formatted.equals("Online", ignoreCase = true)) {
                     return formatted
                 }
             }
-            if (lastSeen.equals("Online", ignoreCase = true) || lastSeen.isBlank()) {
-                return "Recently"
+            if (lastSeen.isNotBlank() && !lastSeen.equals("Online", ignoreCase = true) && !lastSeen.equals("Offline", ignoreCase = true)) {
+                return lastSeen
             }
-            return lastSeen
+            return "Recently"
         }
 
     val firstName: String

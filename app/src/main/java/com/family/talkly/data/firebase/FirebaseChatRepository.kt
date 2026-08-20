@@ -2058,6 +2058,9 @@ class FirebaseChatRepository(private val context: Context) {
             currentSyncedUserId = null // Reset so startRealtimeMessageSync bypasses the guard
 
             startRealtimeMessageSync(uid)
+            setupFirestorePresenceListener()
+            setupFirestoreUsersVerificationListener()
+            setupFirestoreStatusesListener()
             Log.d(TAG, "forceReconnectListeners: Successfully attached message listeners for uid=$uid (trigger: $reason)")
         } catch (e: Exception) {
             Log.e(TAG, "forceReconnectListeners encountered error: ${e.localizedMessage}")
@@ -2342,7 +2345,9 @@ class FirebaseChatRepository(private val context: Context) {
         saveStatusesToPrefs()
 
         // Restart realtime message listener, status listener, and user verification listener
+        currentSyncedUserId = null
         startRealtimeMessageSync(primaryUid)
+        setupFirestorePresenceListener()
         setupFirestoreStatusesListener()
         setupFirestoreUsersVerificationListener()
     }

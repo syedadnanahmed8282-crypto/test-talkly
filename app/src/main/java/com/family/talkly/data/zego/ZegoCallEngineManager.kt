@@ -478,6 +478,7 @@ class ZegoCallEngineManager(private val context: Context) {
 
         activeCallListener?.remove()
         secondaryCallListener?.remove()
+        thirdCallListener?.remove()
         currentSyncedUserId = uid
 
         val handleCallSnapshot: (DocumentSnapshot?, Exception?) -> Unit = { snapshot, error ->
@@ -508,6 +509,15 @@ class ZegoCallEngineManager(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.w(TAG, "Error starting realtime call sync: ${e.localizedMessage}")
+        }
+    }
+
+    fun reconnectCallSync() {
+        val profile = currentUserProfile ?: getLocalUserProfile()
+        val repo = chatRepository ?: FirebaseChatRepository.getInstance(context)
+        if (profile.uid.isNotBlank() && profile.uid != "self") {
+            currentSyncedUserId = null
+            startRealtimeCallSync(profile, repo)
         }
     }
 
