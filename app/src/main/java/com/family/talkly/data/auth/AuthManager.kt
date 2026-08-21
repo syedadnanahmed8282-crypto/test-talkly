@@ -7,12 +7,13 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
 import com.family.talkly.data.models.UserProfile
+import com.family.talkly.data.supabase.SupabaseClientProvider
+import com.family.talkly.data.supabase.SupabaseProfile
 import com.family.talkly.util.MediaCompressorAndUploader
 import com.family.talkly.util.PhoneUtils
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.ListenerRegistration
-import com.google.firebase.firestore.SetOptions
+import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.auth.providers.builtin.Email
+import io.github.jan.supabase.postgrest.postgrest
 import java.io.File
 import java.io.FileOutputStream
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +23,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 sealed class AuthState {
     object InitialCheck : AuthState()
@@ -46,7 +49,7 @@ class AuthManager(private val context: Context) {
         private const val KEY_BIO = "user_bio"
 
         /**
-         * Converts phone number into a deterministic internal email address for Firebase Auth
+         * Converts phone number into a deterministic internal email address for Supabase Auth
          */
         fun getInternalEmail(phoneNumber: String): String {
             val cleanNumber = phoneNumber.replace("+", "").replace(" ", "").replace("-", "").trim()
@@ -54,43 +57,8 @@ class AuthManager(private val context: Context) {
         }
     }
 
-    private fun ensureFirebase() {
-        if (com.google.firebase.FirebaseApp.getApps(context).isEmpty()) {
-            try {
-                com.google.firebase.FirebaseApp.initializeApp(context)
-            } catch (e: Exception) {
-                try {
-                    val firebaseApiKey = try {
-                        val key = com.family.talkly.BuildConfig.FIREBASE_API_KEY
-                        if (key.isNullOrBlank()) "AIzaSyCmmYWBqRREKmhNaBvc1drcTJib0EuMgF0" else key
-                    } catch (e: Exception) {
-                        "AIzaSyCmmYWBqRREKmhNaBvc1drcTJib0EuMgF0"
-                    }
-                    val options = com.google.firebase.FirebaseOptions.Builder()
-                        .setApplicationId("1:688875089801:android:07f27e3cf40ca2af913b58")
-                        .setGcmSenderId("688875089801")
-                        .setProjectId("familycallapp-e6b21")
-                        .setStorageBucket("familycallapp-e6b21.firebasestorage.app")
-                        .setApiKey(firebaseApiKey)
-                        .build()
-                    com.google.firebase.FirebaseApp.initializeApp(context, options)
-                } catch (ex: Exception) {
-                    Log.e(TAG, "Failed fallback Firebase init in AuthManager: ${ex.message}")
-                }
-            }
-        }
-    }
-
-    private fun getFirebaseAuth(): FirebaseAuth {
-        ensureFirebase()
-        return FirebaseAuth.getInstance()
-    }
-
-    private fun getFirestore(): FirebaseFirestore {
-        ensureFirebase()
-        return FirebaseFirestore.getInstance()
-    }
-
+    private val auth = SupabaseClientProvider.client.auth
+    private val postgrest = SupabaseClientProvider.client.postgrest
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     @Volatile
@@ -110,65 +78,75 @@ class AuthManager(private val context: Context) {
     }
 
     /**
-     * Checks local session and Firebase Auth current user to resume session
+     * Checks local session and Supabase Auth session to resume user session
      */
     fun checkCurrentSession() {
         if (isLoggingOut) {
             _authState.value = AuthState.Unauthenticated
             return
         }
-        try {
-            val isLoggedIn = prefs.getBoolean(KEY_IS_LOGGED_IN, false)
-            val savedUid = prefs.getString(KEY_UID, null)
-            val firebaseUser = try { getFirebaseAuth().currentUser } catch (e: Exception) { null }
 
-            if (isLoggedIn && !savedUid.isNullOrEmpty()) {
-                val name = prefs.getString(KEY_NAME, "") ?: ""
-                val phone = prefs.getString(KEY_PHONE, "") ?: ""
-                var pic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
-                val coverPic = prefs.getString(KEY_COVER_PHOTO, "") ?: ""
-                val bio = prefs.getString(KEY_BIO, "Available on Talkly 💬") ?: "Available on Talkly 💬"
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val session = auth.currentSessionOrNull()
+                val user = auth.currentUserOrNull()
+                val isLoggedIn = prefs.getBoolean(KEY_IS_LOGGED_IN, false)
+                val savedUid = prefs.getString(KEY_UID, null)
 
-                // Check if pic is a content:// URI and convert to persistent internal avatar file if available
-                if (pic.startsWith("content://") || pic.isBlank()) {
-                    val avatarDir = File(context.filesDir, "profile_avatars")
-                    val internalFile = File(avatarDir, "avatar_${savedUid}.jpg")
-                    if (internalFile.exists()) {
-                        pic = Uri.fromFile(internalFile).toString()
+                if (user != null || (session != null && !savedUid.isNullOrEmpty()) || (isLoggedIn && !savedUid.isNullOrEmpty())) {
+                    val effectiveUid = user?.id ?: savedUid ?: ""
+                    val cachedName = prefs.getString(KEY_NAME, "") ?: ""
+                    val cachedPhone = prefs.getString(KEY_PHONE, "") ?: (user?.phone ?: "")
+                    var cachedPic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
+                    val cachedCover = prefs.getString(KEY_COVER_PHOTO, "") ?: ""
+                    val cachedBio = prefs.getString(KEY_BIO, "Available on Talkly 💬") ?: "Available on Talkly 💬"
+
+                    // Check if pic is a content:// URI and convert to persistent internal avatar file if available
+                    if (cachedPic.startsWith("content://") || cachedPic.isBlank()) {
+                        val avatarDir = File(context.filesDir, "profile_avatars")
+                        val internalFile = File(avatarDir, "avatar_${effectiveUid}.jpg")
+                        if (internalFile.exists()) {
+                            cachedPic = Uri.fromFile(internalFile).toString()
+                        }
+                    }
+
+                    if (cachedName.isNotBlank() && effectiveUid.isNotBlank()) {
+                        val cachedProfile = UserProfile(
+                            uid = effectiveUid,
+                            name = cachedName,
+                            phoneNumber = cachedPhone,
+                            phoneSuffix = PhoneUtils.extractPhoneSuffix(cachedPhone),
+                            profilePicUrl = cachedPic,
+                            coverPhotoUrl = cachedCover,
+                            bio = cachedBio
+                        )
+                        withContext(Dispatchers.Main) {
+                            _authState.value = AuthState.Authenticated(cachedProfile)
+                        }
+                    } else if (effectiveUid.isNotBlank()) {
+                        withContext(Dispatchers.Main) {
+                            _authState.value = AuthState.ProfileSetupRequired(effectiveUid, cachedPhone)
+                        }
+                    }
+
+                    // Sync latest profile from Supabase in background
+                    syncProfileFromSupabase(effectiveUid, cachedPhone)
+                } else {
+                    withContext(Dispatchers.Main) {
+                        _authState.value = AuthState.Unauthenticated
                     }
                 }
-
-                if (name.isNotBlank()) {
-                    val profile = UserProfile(
-                        uid = savedUid,
-                        name = name,
-                        phoneNumber = phone,
-                        profilePicUrl = pic,
-                        coverPhotoUrl = coverPic,
-                        bio = bio
-                    )
-                    _authState.value = AuthState.Authenticated(profile)
-                } else {
-                    _authState.value = AuthState.ProfileSetupRequired(savedUid, phone)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error checking Supabase session: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    _authState.value = AuthState.Unauthenticated
                 }
-
-                // Always sync latest user profile from Firestore in background
-                checkUserProfileInFirestore(savedUid, phone)
-            } else if (firebaseUser != null) {
-                val uid = firebaseUser.uid
-                val phone = firebaseUser.phoneNumber ?: prefs.getString(KEY_PHONE, "") ?: ""
-                checkUserProfileInFirestore(uid, phone)
-            } else {
-                _authState.value = AuthState.Unauthenticated
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error checking current session: ${e.message}")
-            _authState.value = AuthState.Unauthenticated
         }
     }
 
     /**
-     * Registers a new user with Mobile Phone Number and Password
+     * Registers a new user with Mobile Phone Number and Password via Supabase Auth
      */
     fun signUpWithPhoneAndPassword(
         phoneNumber: String,
@@ -196,47 +174,76 @@ class AuthManager(private val context: Context) {
         val internalEmail = getInternalEmail(phoneNumber)
         _authState.value = AuthState.VerificationInProgress("Creating user account...")
 
-        try {
-            getFirebaseAuth().createUserWithEmailAndPassword(internalEmail, password)
-                .addOnCompleteListener { task ->
-                    if (task.isSuccessful) {
-                        val user = task.result?.user
-                        val uid = user?.uid
-                        if (uid != null) {
-                            Log.d(TAG, "Registration successful for phone $phoneNumber ($internalEmail), UID: $uid")
-                            saveUserProfileAndAuthenticate(uid, name, phoneNumber, profilePicUrl, onSuccess, onError)
-                        } else {
-                            val err = "Account created, but user session was null."
-                            _authState.value = AuthState.Error(err)
-                            onError(err)
-                        }
-                    } else {
-                        val rawErr = task.exception?.message ?: "Registration failed."
-                        val formatted = when {
-                            rawErr.contains("already in use", ignoreCase = true) ||
-                            rawErr.contains("email-already-in-use", ignoreCase = true) ->
-                                "An account with this phone number already exists. Please sign in instead."
-                            rawErr.contains("badly formatted", ignoreCase = true) ||
-                            rawErr.contains("invalid-email", ignoreCase = true) ->
-                                "Invalid mobile phone number format."
-                            rawErr.contains("weak-password", ignoreCase = true) ->
-                                "Password is too weak. Please use at least 6 characters."
-                            else -> rawErr
-                        }
-                        _authState.value = AuthState.Error(formatted)
-                        onError(formatted)
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                auth.signUpWith(Email) {
+                    this.email = internalEmail
+                    this.password = password
+                    data = buildJsonObject {
+                        put("phone", phoneNumber)
+                        put("name", name)
+                        put("avatar_url", profilePicUrl)
+                        put("bio", "Available on Talkly 💬")
                     }
                 }
-        } catch (e: Exception) {
-            Log.e(TAG, "Sign up exception: ${e.localizedMessage}", e)
-            val err = e.localizedMessage ?: "Registration error. Please try again."
-            _authState.value = AuthState.Error(err)
-            onError(err)
+
+                val currentUser = auth.currentUserOrNull() ?: auth.currentSessionOrNull()?.user
+                val uid = currentUser?.id
+
+                if (uid != null) {
+                    Log.d(TAG, "Supabase registration successful for phone $phoneNumber ($internalEmail), UID: $uid")
+                    saveUserProfileAndAuthenticate(uid, name, phoneNumber, profilePicUrl, onSuccess, onError)
+                } else {
+                    // In some Supabase configs, sign up without auto-login requires immediate sign in
+                    try {
+                        auth.signInWith(Email) {
+                            this.email = internalEmail
+                            this.password = password
+                        }
+                        val signedInUid = auth.currentUserOrNull()?.id ?: ""
+                        if (signedInUid.isNotBlank()) {
+                            saveUserProfileAndAuthenticate(signedInUid, name, phoneNumber, profilePicUrl, onSuccess, onError)
+                        } else {
+                            val err = "Account created. Please sign in."
+                            withContext(Dispatchers.Main) {
+                                _authState.value = AuthState.Unauthenticated
+                                onError(err)
+                            }
+                        }
+                    } catch (signInEx: Exception) {
+                        val err = "Account registered successfully. Please sign in."
+                        withContext(Dispatchers.Main) {
+                            _authState.value = AuthState.Unauthenticated
+                            onError(err)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Supabase Sign up exception: ${e.localizedMessage}", e)
+                val rawErr = e.localizedMessage ?: "Registration failed."
+                val formatted = when {
+                    rawErr.contains("already registered", ignoreCase = true) ||
+                    rawErr.contains("already in use", ignoreCase = true) ||
+                    rawErr.contains("user_already_exists", ignoreCase = true) ->
+                        "An account with this phone number already exists. Please sign in instead."
+                    rawErr.contains("invalid email", ignoreCase = true) ||
+                    rawErr.contains("invalid-email", ignoreCase = true) ->
+                        "Invalid mobile phone number format."
+                    rawErr.contains("weak-password", ignoreCase = true) ||
+                    (rawErr.contains("password", ignoreCase = true) && rawErr.contains("weak", ignoreCase = true)) ->
+                        "Password is too weak. Please use at least 6 characters."
+                    else -> rawErr
+                }
+                withContext(Dispatchers.Main) {
+                    _authState.value = AuthState.Error(formatted)
+                    onError(formatted)
+                }
+            }
         }
     }
 
     /**
-     * Signs in an existing user with Mobile Phone Number and Password
+     * Signs in an existing user with Mobile Phone Number and Password via Supabase Auth
      */
     fun signInWithPhoneAndPassword(
         phoneNumber: String,
@@ -255,47 +262,55 @@ class AuthManager(private val context: Context) {
         val internalEmail = getInternalEmail(phoneNumber)
         _authState.value = AuthState.VerificationInProgress("Signing in...")
 
-        try {
-            getFirebaseAuth().signInWithEmailAndPassword(internalEmail, password)
-                .addOnCompleteListener { task ->
-                    if (task.isSuccessful) {
-                        val user = task.result?.user
-                        val uid = user?.uid
-                        if (uid != null) {
-                            Log.d(TAG, "Sign in successful for phone $phoneNumber ($internalEmail), UID: $uid")
-                            checkUserProfileInFirestore(uid, phoneNumber)
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                auth.signInWith(Email) {
+                    this.email = internalEmail
+                    this.password = password
+                }
+
+                val user = auth.currentUserOrNull() ?: auth.currentSessionOrNull()?.user
+                val uid = user?.id
+
+                if (uid != null) {
+                    Log.d(TAG, "Supabase sign in successful for phone $phoneNumber ($internalEmail), UID: $uid")
+                    syncProfileFromSupabase(uid, phoneNumber, onComplete = {
+                        CoroutineScope(Dispatchers.Main).launch {
                             onSuccess()
-                        } else {
-                            val err = "Authentication succeeded but user session is null."
-                            _authState.value = AuthState.Error(err)
-                            onError(err)
                         }
-                    } else {
-                        val rawErr = task.exception?.message ?: "Authentication failed."
-                        val formatted = when {
-                            rawErr.contains("no user record", ignoreCase = true) ||
-                            rawErr.contains("user-not-found", ignoreCase = true) ->
-                                "No account found with this phone number. Please register first."
-                            rawErr.contains("invalid-credential", ignoreCase = true) ||
-                            rawErr.contains("wrong-password", ignoreCase = true) ||
-                            rawErr.contains("invalid password", ignoreCase = true) ->
-                                "Incorrect password. Please try again."
-                            else -> rawErr
-                        }
-                        _authState.value = AuthState.Error(formatted)
-                        onError(formatted)
+                    })
+                } else {
+                    val err = "Authentication succeeded but user session is null."
+                    withContext(Dispatchers.Main) {
+                        _authState.value = AuthState.Error(err)
+                        onError(err)
                     }
                 }
-        } catch (e: Exception) {
-            Log.e(TAG, "Sign in exception: ${e.localizedMessage}", e)
-            val err = e.localizedMessage ?: "Sign in error. Please try again."
-            _authState.value = AuthState.Error(err)
-            onError(err)
+            } catch (e: Exception) {
+                Log.e(TAG, "Supabase Sign in exception: ${e.localizedMessage}", e)
+                val rawErr = e.localizedMessage ?: "Authentication failed."
+                val formatted = when {
+                    rawErr.contains("invalid login credentials", ignoreCase = true) ||
+                    rawErr.contains("invalid_grant", ignoreCase = true) ||
+                    rawErr.contains("invalid-credential", ignoreCase = true) ||
+                    rawErr.contains("wrong-password", ignoreCase = true) ||
+                    rawErr.contains("invalid password", ignoreCase = true) ->
+                        "Incorrect password. Please try again."
+                    rawErr.contains("user not found", ignoreCase = true) ||
+                    rawErr.contains("user-not-found", ignoreCase = true) ->
+                        "No account found with this phone number. Please register first."
+                    else -> rawErr
+                }
+                withContext(Dispatchers.Main) {
+                    _authState.value = AuthState.Error(formatted)
+                    onError(formatted)
+                }
+            }
         }
     }
 
     /**
-     * Triggers Firebase sendPasswordResetEmail using mapped internal email address for phone number
+     * Triggers Supabase password reset using mapped internal email address for phone number
      */
     fun sendPasswordResetForPhone(
         phoneNumber: String,
@@ -310,56 +325,143 @@ class AuthManager(private val context: Context) {
 
         val internalEmail = getInternalEmail(phoneNumber)
 
-        try {
-            getFirebaseAuth().sendPasswordResetEmail(internalEmail)
-                .addOnCompleteListener { task ->
-                    if (task.isSuccessful) {
-                        Log.d(TAG, "Password reset email sent to internal email: $internalEmail for phone $phoneNumber")
-                        onSuccess("Password reset instructions sent for account linked to $phoneNumber.")
-                    } else {
-                        val rawErr = task.exception?.message ?: "Password reset failed."
-                        val formatted = when {
-                            rawErr.contains("no user record", ignoreCase = true) ||
-                            rawErr.contains("user-not-found", ignoreCase = true) ->
-                                "No registered account found with mobile number $phoneNumber."
-                            rawErr.contains("invalid-email", ignoreCase = true) ->
-                                "Invalid phone number format."
-                            else -> rawErr
-                        }
-                        onError(formatted)
-                    }
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                auth.resetPasswordForEmail(internalEmail)
+                Log.d(TAG, "Password reset email sent to internal email: $internalEmail for phone $phoneNumber")
+                withContext(Dispatchers.Main) {
+                    onSuccess("Password reset instructions sent for account linked to $phoneNumber.")
                 }
-        } catch (e: Exception) {
-            Log.e(TAG, "Password reset exception: ${e.localizedMessage}", e)
-            onError(e.localizedMessage ?: "Failed to request password reset. Please try again.")
+            } catch (e: Exception) {
+                Log.e(TAG, "Supabase Password reset exception: ${e.localizedMessage}", e)
+                val rawErr = e.localizedMessage ?: "Password reset failed."
+                val formatted = when {
+                    rawErr.contains("user not found", ignoreCase = true) ||
+                    rawErr.contains("user-not-found", ignoreCase = true) ->
+                        "No registered account found with mobile number $phoneNumber."
+                    rawErr.contains("invalid-email", ignoreCase = true) ||
+                    rawErr.contains("invalid email", ignoreCase = true) ->
+                        "Invalid phone number format."
+                    else -> rawErr
+                }
+                withContext(Dispatchers.Main) {
+                    onError(formatted)
+                }
+            }
         }
     }
 
     /**
-     * Deletes previous storage files (Firebase Storage or local files) when a profile picture or cover photo is updated
+     * Synchronizes user profile from Supabase public.profiles table
      */
-    private fun deleteOldStorageFile(oldUrl: String?) {
-        if (oldUrl.isNullOrBlank()) return
-        try {
-            if (oldUrl.startsWith("http://") || oldUrl.startsWith("https://")) {
-                if (oldUrl.contains("firebasestorage.googleapis.com") || oldUrl.contains("firebasestorage")) {
-                    val storageRef = com.google.firebase.storage.FirebaseStorage.getInstance().getReferenceFromUrl(oldUrl)
-                    storageRef.delete().addOnSuccessListener {
-                        Log.d(TAG, "Successfully deleted previous profile file from Firebase Storage: $oldUrl")
-                    }.addOnFailureListener { e ->
-                        Log.w(TAG, "Could not delete old cloud file ($oldUrl): ${e.localizedMessage}")
+    private fun syncProfileFromSupabase(
+        uid: String,
+        fallbackPhone: String,
+        onComplete: ((UserProfile) -> Unit)? = null
+    ) {
+        if (isLoggingOut || uid.isBlank()) return
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val profileDto = postgrest.from("profiles")
+                    .select { filter { eq("id", uid) } }
+                    .decodeSingleOrNull<SupabaseProfile>()
+
+                if (profileDto != null && profileDto.name.isNotBlank()) {
+                    val phone = if (profileDto.phone.isNotBlank()) profileDto.phone else fallbackPhone
+                    val suffix = if (profileDto.phoneSuffix.isNotBlank()) profileDto.phoneSuffix else PhoneUtils.extractPhoneSuffix(phone)
+                    val localSavedPic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
+                    val effectivePic = if (profileDto.avatarUrl.isNotBlank()) {
+                        profileDto.avatarUrl
+                    } else if (localSavedPic.isNotBlank() && !localSavedPic.startsWith("content://")) {
+                        localSavedPic
+                    } else {
+                        ""
                     }
+                    val localSavedCover = prefs.getString(KEY_COVER_PHOTO, "") ?: ""
+                    val effectiveCover = if (profileDto.coverPhotoUrl.isNotBlank()) {
+                        profileDto.coverPhotoUrl
+                    } else if (localSavedCover.isNotBlank() && !localSavedCover.startsWith("content://")) {
+                        localSavedCover
+                    } else {
+                        ""
+                    }
+
+                    val profile = UserProfile(
+                        uid = uid,
+                        name = profileDto.name,
+                        phoneNumber = phone,
+                        phoneSuffix = suffix,
+                        profilePicUrl = effectivePic,
+                        coverPhotoUrl = effectiveCover,
+                        bio = profileDto.bio.ifBlank { "Available on Talkly 💬" }
+                    )
+
+                    saveLocalSession(uid, profile.name, profile.phoneNumber, profile.profilePicUrl, profile.bio, profile.coverPhotoUrl)
+
+                    withContext(Dispatchers.Main) {
+                        _authState.value = AuthState.Authenticated(profile)
+                        onComplete?.invoke(profile)
+                    }
+                } else {
+                    handleMissingProfile(uid, fallbackPhone, onComplete)
                 }
-            } else if (oldUrl.startsWith("file://") || oldUrl.startsWith("/")) {
-                val path = if (oldUrl.startsWith("file://")) Uri.parse(oldUrl).path ?: "" else oldUrl
-                val file = File(path)
-                if (file.exists()) {
-                    val deleted = file.delete()
-                    Log.d(TAG, "Successfully deleted previous local profile file ($path): $deleted")
-                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error fetching profile from Supabase for $uid: ${e.localizedMessage}")
+                handleMissingProfile(uid, fallbackPhone, onComplete)
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Exception during deletion of old profile file: ${e.localizedMessage}")
+        }
+    }
+
+    private suspend fun handleMissingProfile(
+        uid: String,
+        fallbackPhone: String,
+        onComplete: ((UserProfile) -> Unit)? = null
+    ) {
+        val localName = prefs.getString(KEY_NAME, "") ?: ""
+        if (localName.isNotBlank()) {
+            val phone = prefs.getString(KEY_PHONE, fallbackPhone) ?: fallbackPhone
+            val pic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
+            val cover = prefs.getString(KEY_COVER_PHOTO, "") ?: ""
+            val bio = prefs.getString(KEY_BIO, "Available on Talkly 💬") ?: "Available on Talkly 💬"
+            val suffix = PhoneUtils.extractPhoneSuffix(phone)
+
+            val profile = UserProfile(
+                uid = uid,
+                name = localName,
+                phoneNumber = phone,
+                phoneSuffix = suffix,
+                profilePicUrl = pic,
+                coverPhotoUrl = cover,
+                bio = bio
+            )
+
+            // Auto-provision or update in Supabase profiles
+            try {
+                val profileJson = buildJsonObject {
+                    put("id", uid)
+                    put("name", localName)
+                    put("phone", phone)
+                    put("phone_suffix", suffix)
+                    put("avatar_url", pic)
+                    put("cover_photo_url", cover)
+                    put("bio", bio)
+                }
+                postgrest.from("profiles").upsert(profileJson)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed syncing local profile to Supabase: ${e.localizedMessage}")
+            }
+
+            saveLocalSession(uid, localName, phone, pic, bio, cover)
+            withContext(Dispatchers.Main) {
+                _authState.value = AuthState.Authenticated(profile)
+                onComplete?.invoke(profile)
+            }
+        } else {
+            saveLocalSession(uid, "", fallbackPhone, "", "")
+            withContext(Dispatchers.Main) {
+                _authState.value = AuthState.ProfileSetupRequired(uid, fallbackPhone)
+            }
         }
     }
 
@@ -429,264 +531,6 @@ class AuthManager(private val context: Context) {
         return Pair(rawProfilePicUrl, rawProfilePicUrl)
     }
 
-    /**
-     * Consolidates duplicate user accounts under a single Primary User document and session.
-     */
-    fun performAutomaticAccountMerge(
-        authUid: String,
-        loginPhone: String,
-        onComplete: ((UserProfile) -> Unit)? = null
-    ) {
-        val db = getFirestore()
-        val suffix = PhoneUtils.extractPhoneSuffix(loginPhone)
-
-        if (suffix.isBlank()) {
-            checkUserProfileInFirestore(authUid, loginPhone)
-            return
-        }
-
-        try {
-            db.collection("users")
-                .whereEqualTo("phoneSuffix", suffix)
-                .get()
-                .addOnSuccessListener { querySnap ->
-                    val documents = querySnap?.documents ?: emptyList()
-
-                    if (documents.isEmpty()) {
-                        // Document not found by phoneSuffix - search by authUid
-                        db.collection("users").document(authUid).get()
-                            .addOnSuccessListener { doc ->
-                                if (doc != null && doc.exists() && !doc.getString("name").isNullOrBlank()) {
-                                    val profile = extractUserProfileFromDoc(authUid, loginPhone, doc)
-                                    saveLocalSession(profile.uid, profile.name, profile.phoneNumber, profile.profilePicUrl, profile.bio)
-                                    _authState.value = AuthState.Authenticated(profile)
-                                    onComplete?.invoke(profile)
-                                } else {
-                                    handleMissingProfile(authUid, loginPhone)
-                                }
-                            }
-                            .addOnFailureListener {
-                                handleMissingProfile(authUid, loginPhone)
-                            }
-                        return@addOnSuccessListener
-                    }
-
-                    // 1. DUPLICATE ACCOUNT DETECTION & SELECTION:
-                    // Sort the documents by lastLoginAt, updatedAt, or createdAt timestamp DESCENDING
-                    val sortedDocs = documents.sortedByDescending { doc ->
-                        doc.getLong("lastLoginAt")
-                            ?: doc.getLong("updatedAt")
-                            ?: doc.getLong("createdAt")
-                            ?: 0L
-                    }
-
-                    // Set the NEWEST / MOST RECENT document as the Primary User Account source
-                    val newestDoc = sortedDocs.first()
-                    val primaryName = newestDoc.getString("name")?.takeIf { it.isNotBlank() }
-                        ?: prefs.getString(KEY_NAME, "")?.takeIf { it.isNotBlank() }
-                        ?: "Talkly User"
-                    val primaryPhone = newestDoc.getString("phoneNumber")?.takeIf { it.isNotBlank() } ?: loginPhone
-                    val docPic = newestDoc.getString("profilePicUrl")
-                        ?: newestDoc.getString("photoUrl")
-                        ?: newestDoc.getString("photoURL")
-                        ?: newestDoc.getString("avatarUrl")
-                        ?: newestDoc.getString("profilePic") ?: ""
-                    val localPic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
-                    val currentAuthPic = (_authState.value as? AuthState.Authenticated)?.profile?.profilePicUrl ?: ""
-                    val primaryPic = if (localPic.isNotBlank() && !localPic.startsWith("content://")) {
-                        localPic
-                    } else if (currentAuthPic.isNotBlank() && !currentAuthPic.startsWith("content://")) {
-                        currentAuthPic
-                    } else if (docPic.isNotBlank()) {
-                        docPic
-                    } else {
-                        ""
-                    }
-                    val docCover = newestDoc.getString("coverPhotoUrl") ?: newestDoc.getString("coverUrl") ?: ""
-                    val localCover = prefs.getString(KEY_COVER_PHOTO, "") ?: ""
-                    val currentAuthCover = (_authState.value as? AuthState.Authenticated)?.profile?.coverPhotoUrl ?: ""
-                    val primaryCover = if (localCover.isNotBlank() && !localCover.startsWith("content://")) {
-                        localCover
-                    } else if (currentAuthCover.isNotBlank() && !currentAuthCover.startsWith("content://")) {
-                        currentAuthCover
-                    } else if (docCover.isNotBlank()) {
-                        docCover
-                    } else {
-                        ""
-                    }
-                    val primaryBio = newestDoc.getString("bio")?.takeIf { it.isNotBlank() } ?: "Available on Talkly 💬"
-                    val primaryCreated = newestDoc.getLong("createdAt") ?: System.currentTimeMillis()
-
-                    val primaryUid = authUid
-                    val now = System.currentTimeMillis()
-
-                    val primaryProfile = UserProfile(
-                        uid = primaryUid,
-                        name = primaryName,
-                        phoneNumber = primaryPhone,
-                        phoneSuffix = suffix,
-                        profilePicUrl = primaryPic,
-                        coverPhotoUrl = primaryCover,
-                        bio = primaryBio
-                    )
-
-                    // 3. PERSIST SINGLE PRIMARY SESSION:
-                    val primaryProfileMap = mapOf(
-                        "uid" to primaryUid,
-                        "name" to primaryName,
-                        "phoneNumber" to primaryPhone,
-                        "phoneSuffix" to suffix,
-                        "email" to getInternalEmail(primaryPhone),
-                        "profilePicUrl" to primaryPic,
-                        "coverPhotoUrl" to primaryCover,
-                        "bio" to primaryBio,
-                        "createdAt" to primaryCreated,
-                        "lastLoginAt" to now,
-                        "updatedAt" to now,
-                        "isMerged" to false
-                    )
-
-                    db.collection("users").document(primaryUid)
-                        .set(primaryProfileMap, SetOptions.merge())
-
-                    saveLocalSession(primaryUid, primaryName, primaryPhone, primaryPic, primaryBio)
-
-                    // 2. DATA MIGRATION & CLEANUP:
-                    val olderDuplicateDocs = documents.filter { it.id != primaryUid }
-                    for (dupDoc in olderDuplicateDocs) {
-                        val dupUid = dupDoc.id
-                        Log.d(TAG, "Merging duplicate user account $dupUid into primary account $primaryUid")
-
-                        db.collection("users").document(dupUid).set(
-                            mapOf("isMerged" to true, "mergedIntoUid" to primaryUid),
-                            SetOptions.merge()
-                        )
-
-                        migrateDuplicateAccountData(dupUid, primaryUid)
-
-                        db.collection("users").document(dupUid).delete()
-                    }
-
-                    _authState.value = AuthState.Authenticated(primaryProfile)
-                    onComplete?.invoke(primaryProfile)
-                }
-                .addOnFailureListener { e ->
-                    Log.w(TAG, "Error querying users by phoneSuffix for merge: ${e.localizedMessage}")
-                    checkUserProfileInFirestore(authUid, loginPhone)
-                }
-        } catch (e: Exception) {
-            Log.w(TAG, "Exception in performAutomaticAccountMerge: ${e.localizedMessage}")
-            checkUserProfileInFirestore(authUid, loginPhone)
-        }
-    }
-
-    private fun migrateDuplicateAccountData(fromUid: String, toUid: String) {
-        if (fromUid == toUid) return
-        val db = getFirestore()
-        try {
-            // Re-link existing chat threads and messages
-            db.collection("family_chats").document(fromUid).collection("messages").get()
-                .addOnSuccessListener { snap ->
-                    if (snap != null && !snap.isEmpty) {
-                        for (doc in snap.documents) {
-                            val msgData = doc.data?.toMutableMap() ?: mutableMapOf()
-                            val msgId = doc.id
-                            if (msgData["senderId"] == fromUid) msgData["senderId"] = toUid
-                            if (msgData["receiverId"] == fromUid) msgData["receiverId"] = toUid
-
-                            db.collection("family_chats").document(toUid)
-                                .collection("messages").document(msgId)
-                                .set(msgData)
-
-                            doc.reference.delete()
-                        }
-                    }
-                    db.collection("family_chats").document(fromUid).delete()
-                }
-
-            // Re-link contact references in family_members
-            db.collection("family_members").document(fromUid).get()
-                .addOnSuccessListener { doc ->
-                    if (doc != null && doc.exists()) {
-                        val memberData = doc.data?.toMutableMap() ?: mutableMapOf()
-                        memberData["id"] = toUid
-                        memberData["firebaseUid"] = toUid
-                        db.collection("family_members").document(toUid).set(memberData)
-                        doc.reference.delete()
-                    }
-                }
-
-            // Re-link / Merge Statuses & Stories in Firestore "statuses" collection
-            db.collection("statuses").whereEqualTo("userId", fromUid).get()
-                .addOnSuccessListener { snap ->
-                    if (snap != null && !snap.isEmpty) {
-                        for (doc in snap.documents) {
-                            doc.reference.update("userId", toUid)
-                        }
-                    }
-                }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error migrating duplicate data from $fromUid to $toUid: ${e.localizedMessage}")
-        }
-    }
-
-    private fun extractUserProfileFromDoc(uid: String, fallbackPhone: String, doc: com.google.firebase.firestore.DocumentSnapshot): UserProfile {
-        val name = doc.getString("name") ?: ""
-        val phone = doc.getString("phoneNumber") ?: fallbackPhone
-        val suffix = doc.getString("phoneSuffix") ?: PhoneUtils.extractPhoneSuffix(phone)
-        val docPic = doc.getString("profilePicUrl")
-            ?: doc.getString("photoUrl")
-            ?: doc.getString("photoURL")
-            ?: doc.getString("avatarUrl")
-            ?: doc.getString("profilePic") ?: ""
-        val localPic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
-        val currentAuthPic = (_authState.value as? AuthState.Authenticated)?.profile?.profilePicUrl ?: ""
-        val finalPic = if (localPic.isNotBlank() && !localPic.startsWith("content://")) {
-            localPic
-        } else if (currentAuthPic.isNotBlank() && !currentAuthPic.startsWith("content://")) {
-            currentAuthPic
-        } else if (docPic.isNotBlank()) {
-            docPic
-        } else {
-            ""
-        }
-        val bio = doc.getString("bio") ?: "Available on Talkly 💬"
-
-        return UserProfile(
-            uid = uid,
-            name = name,
-            phoneNumber = phone,
-            phoneSuffix = suffix,
-            profilePicUrl = finalPic,
-            bio = bio
-        )
-    }
-
-    private fun cleanupDuplicateUserDocsAndSave(
-        uid: String,
-        profileMap: Map<String, Any?>,
-        onComplete: (() -> Unit)? = null
-    ) {
-        val phone = profileMap["phoneNumber"] as? String ?: ""
-        val db = getFirestore()
-        if (uid.isNotBlank() && profileMap.isNotEmpty()) {
-            try {
-                db.collection("users").document(uid).set(profileMap, com.google.firebase.firestore.SetOptions.merge())
-                    .addOnSuccessListener {
-                        Log.d(TAG, "Saved user profileMap to Firestore for $uid")
-                    }
-                    .addOnFailureListener { e ->
-                        Log.w(TAG, "Failed saving user profileMap to Firestore: ${e.localizedMessage}")
-                    }
-            } catch (e: Exception) {
-                Log.w(TAG, "Error setting user profile map: ${e.localizedMessage}")
-            }
-        }
-        performAutomaticAccountMerge(uid, phone) {
-            onComplete?.invoke()
-        }
-    }
-
     private fun saveUserProfileAndAuthenticate(
         uid: String,
         name: String,
@@ -697,7 +541,7 @@ class AuthManager(private val context: Context) {
     ) {
         val bio = "Available on Talkly 💬"
         val phoneSuffix = PhoneUtils.extractPhoneSuffix(phoneNumber)
-        val (localPicUrl, firestorePicUrl) = processProfileAvatarImage(uid, profilePicUrl)
+        val (localPicUrl, cloudPicUrl) = processProfileAvatarImage(uid, profilePicUrl)
 
         saveLocalSession(uid, name, phoneNumber, localPicUrl, bio)
         val profile = UserProfile(
@@ -708,188 +552,31 @@ class AuthManager(private val context: Context) {
             profilePicUrl = localPicUrl,
             bio = bio
         )
-        _authState.value = AuthState.Authenticated(profile)
 
-        val profileMap = mapOf(
-            "uid" to uid,
-            "name" to name,
-            "phoneNumber" to phoneNumber,
-            "phoneSuffix" to phoneSuffix,
-            "email" to getInternalEmail(phoneNumber),
-            "profilePicUrl" to firestorePicUrl,
-            "bio" to bio,
-            "createdAt" to System.currentTimeMillis(),
-            "lastLoginAt" to System.currentTimeMillis(),
-            "updatedAt" to System.currentTimeMillis()
-        )
-
-        cleanupDuplicateUserDocsAndSave(uid, profileMap, onSuccess)
-    }
-
-    private var currentUserSnapshotListener: ListenerRegistration? = null
-
-    fun setupCurrentUserSnapshotListener(uid: String) {
-        if (isLoggingOut || uid.isBlank()) return
-        currentUserSnapshotListener?.remove()
-        try {
-            currentUserSnapshotListener = getFirestore().collection("users").document(uid)
-                .addSnapshotListener { snapshot, error ->
-                    if (isLoggingOut || error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
-                    val name = snapshot.getString("name") ?: ""
-                    val pic = snapshot.getString("profilePicUrl")
-                        ?: snapshot.getString("photoUrl")
-                        ?: snapshot.getString("photoURL")
-                        ?: snapshot.getString("avatarUrl")
-                        ?: snapshot.getString("profilePic") ?: ""
-                    val bio = snapshot.getString("bio") ?: "Available on Talkly 💬"
-                    val phone = snapshot.getString("phoneNumber") ?: ""
-                    val cover = snapshot.getString("coverPhotoUrl") ?: snapshot.getString("coverUrl") ?: ""
-
-                    if (name.isNotBlank()) {
-                        val currentProfile = (_authState.value as? AuthState.Authenticated)?.profile
-                        val localSavedPic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
-                        val effectivePic = if (pic.isNotBlank()) {
-                            pic
-                        } else if (localSavedPic.isNotBlank() && !localSavedPic.startsWith("content://")) {
-                            localSavedPic
-                        } else {
-                            currentProfile?.profilePicUrl ?: ""
-                        }
-
-                        val localSavedCover = prefs.getString(KEY_COVER_PHOTO, "") ?: ""
-                        val effectiveCover = if (cover.isNotBlank()) {
-                            cover
-                        } else if (localSavedCover.isNotBlank() && !localSavedCover.startsWith("content://")) {
-                            localSavedCover
-                        } else {
-                            currentProfile?.coverPhotoUrl ?: ""
-                        }
-
-                        val updateTimestamp = snapshot.getLong("updatedAt") ?: System.currentTimeMillis()
-                        val effectivePicBusted = PhoneUtils.appendCacheBuster(effectivePic, updateTimestamp) ?: effectivePic
-                        val effectiveCoverBusted = PhoneUtils.appendCacheBuster(effectiveCover, updateTimestamp) ?: effectiveCover
-
-                        if (effectivePicBusted != currentProfile?.profilePicUrl || effectiveCoverBusted != currentProfile?.coverPhotoUrl) {
-                            try {
-                                val imageLoader = coil.Coil.imageLoader(context)
-                                imageLoader.memoryCache?.clear()
-                                imageLoader.diskCache?.clear()
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Failed clearing Coil image cache: ${e.localizedMessage}")
-                            }
-                        }
-
-                        val updatedProfile = UserProfile(
-                            uid = uid,
-                            name = name,
-                            phoneNumber = if (phone.isNotBlank()) phone else (currentProfile?.phoneNumber ?: ""),
-                            phoneSuffix = PhoneUtils.extractPhoneSuffix(phone),
-                            profilePicUrl = effectivePicBusted,
-                            coverPhotoUrl = effectiveCoverBusted,
-                            bio = bio
-                        )
-                        saveLocalSession(uid, updatedProfile.name, updatedProfile.phoneNumber, updatedProfile.profilePicUrl, updatedProfile.bio, updatedProfile.coverPhotoUrl)
-                        _authState.value = AuthState.Authenticated(updatedProfile)
-                    }
-                }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error in setupCurrentUserSnapshotListener: ${e.localizedMessage}")
-        }
-    }
-
-    /**
-     * Checks Firestore 'users/{uid}' collection to see if user has completed profile setup
-     */
-    private fun checkUserProfileInFirestore(uid: String, phoneNumber: String) {
-        if (isLoggingOut) return
-        setupCurrentUserSnapshotListener(uid)
-        performAutomaticAccountMerge(uid, phoneNumber)
-    }
-
-    private fun restoreAndAuthenticateUser(uid: String, loginPhone: String, doc: com.google.firebase.firestore.DocumentSnapshot) {
-        val name = doc.getString("name") ?: ""
-        val phone = doc.getString("phoneNumber") ?: loginPhone
-        val suffix = doc.getString("phoneSuffix") ?: PhoneUtils.extractPhoneSuffix(phone)
-        val docPic = doc.getString("profilePicUrl")
-            ?: doc.getString("photoUrl")
-            ?: doc.getString("photoURL")
-            ?: doc.getString("avatarUrl")
-            ?: doc.getString("profilePic") ?: ""
-        val bio = doc.getString("bio") ?: "Available on Talkly 💬"
-
-        val profile = UserProfile(
-            uid = uid,
-            name = name,
-            phoneNumber = phone,
-            phoneSuffix = suffix,
-            profilePicUrl = docPic,
-            bio = bio
-        )
-        saveLocalSession(uid, name, phone, docPic, bio)
-
-        val profileMap = mapOf(
-            "uid" to uid,
-            "name" to name,
-            "phoneNumber" to phone,
-            "phoneSuffix" to suffix,
-            "email" to getInternalEmail(phone),
-            "profilePicUrl" to docPic,
-            "bio" to bio,
-            "updatedAt" to System.currentTimeMillis()
-        )
-
-        cleanupDuplicateUserDocsAndSave(uid, profileMap)
-
-        if (doc.id != uid) {
+        CoroutineScope(Dispatchers.IO).launch {
             try {
-                getFirestore().collection("users").document(doc.id).delete()
+                val profileJson = buildJsonObject {
+                    put("id", uid)
+                    put("name", name)
+                    put("phone", phoneNumber)
+                    put("phone_suffix", phoneSuffix)
+                    put("avatar_url", cloudPicUrl.ifBlank { localPicUrl })
+                    put("bio", bio)
+                }
+                postgrest.from("profiles").upsert(profileJson)
             } catch (e: Exception) {
-                Log.w(TAG, "Failed deleting old user document ${doc.id}: ${e.localizedMessage}")
+                Log.w(TAG, "Error saving profile to Supabase during registration: ${e.localizedMessage}")
+            }
+
+            withContext(Dispatchers.Main) {
+                _authState.value = AuthState.Authenticated(profile)
+                onSuccess()
             }
         }
-
-        _authState.value = AuthState.Authenticated(profile)
-    }
-
-    private fun handleMissingProfile(uid: String, phoneNumber: String) {
-        val localName = prefs.getString(KEY_NAME, "") ?: ""
-        if (localName.isNotBlank()) {
-            val phone = prefs.getString(KEY_PHONE, phoneNumber) ?: phoneNumber
-            val pic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
-            val bio = prefs.getString(KEY_BIO, "Available on Talkly 💬") ?: "Available on Talkly 💬"
-            val suffix = PhoneUtils.extractPhoneSuffix(phone)
-
-            val profile = UserProfile(
-                uid = uid,
-                name = localName,
-                phoneNumber = phone,
-                phoneSuffix = suffix,
-                profilePicUrl = pic,
-                bio = bio
-            )
-
-            val profileMap = mapOf(
-                "uid" to uid,
-                "name" to localName,
-                "phoneNumber" to phone,
-                "phoneSuffix" to suffix,
-                "email" to getInternalEmail(phone),
-                "profilePicUrl" to pic,
-                "bio" to bio,
-                "updatedAt" to System.currentTimeMillis()
-            )
-
-            cleanupDuplicateUserDocsAndSave(uid, profileMap)
-
-            _authState.value = AuthState.Authenticated(profile)
-        } else {
-            saveLocalSession(uid, "", phoneNumber, "", "")
-            _authState.value = AuthState.ProfileSetupRequired(uid, phoneNumber)
-        }
     }
 
     /**
-     * Saves name, bio and profile picture to Firestore 'users' collection and local session
+     * Saves name, bio, cover photo and profile picture to Supabase profiles and local session
      */
     fun saveUserProfile(
         name: String,
@@ -907,7 +594,7 @@ class AuthManager(private val context: Context) {
             uid = currentState.uid
             phone = currentState.phoneNumber
         } else {
-            uid = prefs.getString(KEY_UID, "") ?: ""
+            uid = prefs.getString(KEY_UID, "") ?: (auth.currentUserOrNull()?.id ?: "")
             phone = prefs.getString(KEY_PHONE, "") ?: ""
         }
 
@@ -919,55 +606,20 @@ class AuthManager(private val context: Context) {
         }
 
         val phoneSuffix = PhoneUtils.extractPhoneSuffix(phone)
-        val oldPicUrl = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
-        val oldCoverUrl = prefs.getString(KEY_COVER_PHOTO, "") ?: ""
 
-        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+        CoroutineScope(Dispatchers.IO).launch {
             var finalPicUrl = profilePicUrl
             var finalCoverUrl = coverPhotoUrl
 
             if (profilePicUrl.startsWith("content://") || profilePicUrl.startsWith("file://")) {
-                try {
-                    val uri = Uri.parse(profilePicUrl)
-                    val uploader = MediaCompressorAndUploader(context)
-                    val compressedFile = uploader.compressImage(uri) { _, _ -> }
-                    val remotePath = "profile_avatars/${uid}_${System.currentTimeMillis()}.jpg"
-                    finalPicUrl = uploader.uploadToFirebaseStorage(compressedFile, remotePath) { _, _ -> }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Firebase Storage avatar upload error: ${e.localizedMessage}")
-                    val (localPicUrl, firestorePicUrl) = processProfileAvatarImage(uid, profilePicUrl)
-                    val localDisplayPic = if (localPicUrl.isNotBlank()) localPicUrl else profilePicUrl
-                    finalPicUrl = if (firestorePicUrl.isNotBlank()) firestorePicUrl else localDisplayPic
-                }
+                val (localPic, processedPic) = processProfileAvatarImage(uid, profilePicUrl)
+                finalPicUrl = if (localPic.isNotBlank()) localPic else processedPic
             }
 
             if (coverPhotoUrl.startsWith("content://") || coverPhotoUrl.startsWith("file://")) {
-                try {
-                    val uri = Uri.parse(coverPhotoUrl)
-                    val uploader = MediaCompressorAndUploader(context)
-                    val compressedFile = uploader.compressImage(uri) { _, _ -> }
-                    val remotePath = "profile_covers/${uid}_${System.currentTimeMillis()}.jpg"
-                    finalCoverUrl = uploader.uploadToFirebaseStorage(compressedFile, remotePath) { _, _ -> }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Firebase Storage cover photo upload error: ${e.localizedMessage}")
-                    val (localCoverUrl, firestoreCoverUrl) = processProfileAvatarImage("${uid}_cover", coverPhotoUrl)
-                    val localDisplayCover = if (localCoverUrl.isNotBlank()) localCoverUrl else coverPhotoUrl
-                    finalCoverUrl = if (firestoreCoverUrl.isNotBlank()) firestoreCoverUrl else localDisplayCover
-                }
+                val (localCover, processedCover) = processProfileAvatarImage("${uid}_cover", coverPhotoUrl)
+                finalCoverUrl = if (localCover.isNotBlank()) localCover else processedCover
             }
-
-            // Delete previous profile picture from cloud/local storage if a new picture was uploaded
-            if (oldPicUrl.isNotBlank() && oldPicUrl != finalPicUrl) {
-                deleteOldStorageFile(oldPicUrl)
-            }
-            // Delete previous cover photo from cloud/local storage if a new cover photo was uploaded
-            if (oldCoverUrl.isNotBlank() && oldCoverUrl != finalCoverUrl) {
-                deleteOldStorageFile(oldCoverUrl)
-            }
-
-            val saveTimestamp = System.currentTimeMillis()
-            finalPicUrl = PhoneUtils.appendCacheBuster(finalPicUrl, saveTimestamp) ?: finalPicUrl
-            finalCoverUrl = PhoneUtils.appendCacheBuster(finalCoverUrl, saveTimestamp) ?: finalCoverUrl
 
             saveLocalSession(uid, name, phone, finalPicUrl, bio, finalCoverUrl)
 
@@ -990,94 +642,24 @@ class AuthManager(private val context: Context) {
                 bio = bio
             )
 
-            withContext(Dispatchers.Main) {
-                _authState.value = AuthState.Authenticated(profile)
+            try {
+                val updateJson = buildJsonObject {
+                    put("id", uid)
+                    put("name", name)
+                    put("phone", phone)
+                    put("phone_suffix", phoneSuffix)
+                    put("avatar_url", finalPicUrl)
+                    put("cover_photo_url", finalCoverUrl)
+                    put("bio", bio)
+                }
+                postgrest.from("profiles").upsert(updateJson)
+            } catch (e: Exception) {
+                Log.w(TAG, "Error updating Supabase profile: ${e.localizedMessage}")
             }
 
-            val profileMap = mapOf(
-                "uid" to uid,
-                "name" to name,
-                "phoneNumber" to phone,
-                "phoneSuffix" to phoneSuffix,
-                "email" to getInternalEmail(phone),
-                "profilePicUrl" to finalPicUrl,
-                "photoUrl" to finalPicUrl,
-                "photoURL" to finalPicUrl,
-                "avatarUrl" to finalPicUrl,
-                "profilePic" to finalPicUrl,
-                "coverPhotoUrl" to finalCoverUrl,
-                "coverUrl" to finalCoverUrl,
-                "bio" to bio,
-                "updatedAt" to System.currentTimeMillis()
-            )
-
-            cleanupDuplicateUserDocsAndSave(uid, profileMap) {
-                try {
-                    val familyMemberMap = mapOf(
-                        "avatarUrl" to finalPicUrl,
-                        "photoUrl" to finalPicUrl,
-                        "profilePicUrl" to finalPicUrl,
-                        "coverPhotoUrl" to finalCoverUrl,
-                        "coverUrl" to finalCoverUrl,
-                        "name" to name,
-                        "status" to bio,
-                        "updatedAt" to System.currentTimeMillis()
-                    )
-                    getFirestore().collection("family_members").document(uid).set(
-                        familyMemberMap,
-                        com.google.firebase.firestore.SetOptions.merge()
-                    )
-                    if (phoneSuffix.isNotBlank()) {
-                        getFirestore().collection("family_members").document(phoneSuffix).set(
-                            familyMemberMap,
-                            com.google.firebase.firestore.SetOptions.merge()
-                        )
-                        getFirestore().collection("users").document(phoneSuffix).set(
-                            profileMap,
-                            com.google.firebase.firestore.SetOptions.merge()
-                        )
-                    }
-
-                    // Update all contacts subcollections across all users where current user is saved
-                    val contactUpdates = mapOf(
-                        "avatarUrl" to finalPicUrl,
-                        "profilePicUrl" to finalPicUrl,
-                        "photoUrl" to finalPicUrl,
-                        "coverPhotoUrl" to finalCoverUrl,
-                        "coverUrl" to finalCoverUrl,
-                        "updatedAt" to System.currentTimeMillis()
-                    )
-                    val updateContactDocs = { querySnap: com.google.firebase.firestore.QuerySnapshot? ->
-                        if (querySnap != null) {
-                            for (doc in querySnap.documents) {
-                                try {
-                                    doc.reference.update(contactUpdates)
-                                } catch (e: Exception) {
-                                    Log.w(TAG, "Failed updating contact doc ${doc.id}: ${e.localizedMessage}")
-                                }
-                            }
-                        }
-                    }
-
-                    if (uid.isNotBlank()) {
-                        getFirestore().collectionGroup("contacts").whereEqualTo("uid", uid).get()
-                            .addOnSuccessListener { updateContactDocs(it) }
-                    }
-                    if (phoneSuffix.isNotBlank()) {
-                        getFirestore().collectionGroup("contacts").whereEqualTo("phoneSuffix", phoneSuffix).get()
-                            .addOnSuccessListener { updateContactDocs(it) }
-                    }
-                    if (phone.isNotBlank()) {
-                        getFirestore().collectionGroup("contacts").whereEqualTo("phone", phone).get()
-                            .addOnSuccessListener { updateContactDocs(it) }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error updating family_members or contacts doc for avatar: ${e.localizedMessage}")
-                }
-                setupCurrentUserSnapshotListener(uid)
-                kotlinx.coroutines.CoroutineScope(Dispatchers.Main).launch {
-                    onSuccess()
-                }
+            withContext(Dispatchers.Main) {
+                _authState.value = AuthState.Authenticated(profile)
+                onSuccess()
             }
         }
     }
@@ -1109,17 +691,13 @@ class AuthManager(private val context: Context) {
 
     fun logout() {
         isLoggingOut = true
-        try {
-            currentUserSnapshotListener?.remove()
-            currentUserSnapshotListener = null
-        } catch (e: Exception) {
-            Log.w(TAG, "Error detaching snapshot listener on logout: ${e.localizedMessage}")
-        }
 
-        try {
-            getFirebaseAuth().signOut()
-        } catch (e: Exception) {
-            Log.w(TAG, "Sign out exception: ${e.localizedMessage}")
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                auth.signOut()
+            } catch (e: Exception) {
+                Log.w(TAG, "Supabase signOut exception: ${e.localizedMessage}")
+            }
         }
 
         val prefNames = listOf(
