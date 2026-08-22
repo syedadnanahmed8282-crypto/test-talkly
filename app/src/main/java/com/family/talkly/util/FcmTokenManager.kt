@@ -221,7 +221,11 @@ object FcmTokenManager {
                 } catch (e: Exception) {
                     null
                 }
-                val authToken = currentSessionToken ?: publishableKey
+
+                if (currentSessionToken.isNullOrBlank()) {
+                    Log.w(TAG, "Skipping push notification dispatch: No active authenticated Supabase user session.")
+                    return@launch
+                }
 
                 val payloadType = dataPayload["type"] ?: "CHAT_MESSAGE"
                 val title = dataPayload["senderName"] ?: dataPayload["callerName"] ?: dataPayload["title"] ?: "Talkly"
@@ -247,7 +251,7 @@ object FcmTokenManager {
                 val request = Request.Builder()
                     .url(edgeFunctionUrl)
                     .addHeader("apikey", publishableKey)
-                    .addHeader("Authorization", "Bearer $authToken")
+                    .addHeader("Authorization", "Bearer $currentSessionToken")
                     .addHeader("Content-Type", "application/json")
                     .post(requestBody)
                     .build()
