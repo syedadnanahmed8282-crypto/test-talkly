@@ -1986,7 +1986,7 @@ class FirebaseChatRepository(private val context: Context) {
                 withContext(Dispatchers.Main) {
                     android.app.AlertDialog.Builder(context)
                         .setTitle("DEBUG: sendMessage failed")
-                        .setMessage("sender=$resolvedSenderUid\nreceiver=$resolvedReceiverUuid\nconvId=$conversationId")
+                        .setMessage("sender=$resolvedSenderUuid\nreceiver=$resolvedReceiverUuid\nconvId=$conversationId")
                         .setPositiveButton("OK", null)
                         .show()
                 }
