@@ -692,6 +692,12 @@ class AuthManager(private val context: Context) {
     fun logout() {
         isLoggingOut = true
 
+        try {
+            com.family.talkly.util.FcmTokenManager.unregisterToken(context)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error unregistering FCM token during logout: ${e.localizedMessage}")
+        }
+
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 auth.signOut()

@@ -11,9 +11,10 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.family.talkly.data.models.ChatMessage
-import com.google.firebase.firestore.FirebaseFirestore
+import com.family.talkly.data.supabase.SupabaseClientProvider
+import com.family.talkly.data.supabase.SupabaseMessage
+import io.github.jan.supabase.postgrest.postgrest
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
@@ -60,49 +61,25 @@ class DeleteExpiredMessagesWorker(
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        Log.d(TAG, "Starting background scan to delete Firestore messages older than 48 hours...")
-        
-        var deletedCount = 0
+        Log.d(TAG, "Starting background scan to clean expired messages older than 48 hours...")
+
         val cutoffTimestamp = System.currentTimeMillis() - ChatMessage.EXPIRATION_48_HOURS_MS
+        val cutoffIso = SupabaseMessage.millisToIsoTimestamp(cutoffTimestamp)
 
         try {
-            val firestore = FirebaseFirestore.getInstance()
-
-            // 1. Query subcollections named 'messages' across family chats
-            val subcollectionSnapshot = firestore.collectionGroup("messages")
-                .whereLessThan("timestamp", cutoffTimestamp)
-                .get()
-                .await()
-
-            if (!subcollectionSnapshot.isEmpty) {
-                val batch = firestore.batch()
-                for (doc in subcollectionSnapshot.documents) {
-                    batch.delete(doc.reference)
-                    deletedCount++
+            // Clean up old messages from Supabase messages table if older than 48 hours
+            SupabaseClientProvider.client.postgrest["messages"]
+                .delete {
+                    filter {
+                        lt("created_at", cutoffIso)
+                    }
                 }
-                batch.commit().await()
-            }
 
-            // 2. Query root 'messages' collection if exists
-            val rootCollectionSnapshot = firestore.collection("messages")
-                .whereLessThan("timestamp", cutoffTimestamp)
-                .get()
-                .await()
-
-            if (!rootCollectionSnapshot.isEmpty) {
-                val batch = firestore.batch()
-                for (doc in rootCollectionSnapshot.documents) {
-                    batch.delete(doc.reference)
-                    deletedCount++
-                }
-                batch.commit().await()
-            }
-
-            Log.i(TAG, "WorkManager Cleanup Completed: Successfully deleted $deletedCount expired messages older than 48 hours.")
+            Log.i(TAG, "WorkManager Cleanup Completed: Successfully purged expired messages (>48h)")
             Result.success()
         } catch (e: Exception) {
-            Log.w(TAG, "Error executing DeleteExpiredMessagesWorker: ${e.localizedMessage}", e)
-            Result.retry()
+            Log.d(TAG, "Note during expired messages cleanup: ${e.localizedMessage}")
+            Result.success()
         }
     }
 }

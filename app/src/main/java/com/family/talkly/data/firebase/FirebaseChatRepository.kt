@@ -1428,7 +1428,7 @@ class FirebaseChatRepository(private val context: Context) {
                     val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
                     val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
                     val uid = currentSyncedUserId
-                        ?: com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+                        ?: com.family.talkly.data.supabase.SupabaseClientProvider.auth.currentUserOrNull()?.id
                         ?: sessionPrefs.getString("user_uid", null)
                         ?: fallbackPrefs.getString("user_uid", null)
 
@@ -1472,7 +1472,7 @@ class FirebaseChatRepository(private val context: Context) {
         val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
         val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
         val uid = currentSyncedUserId
-            ?: com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+            ?: com.family.talkly.data.supabase.SupabaseClientProvider.auth.currentUserOrNull()?.id
             ?: sessionPrefs.getString("user_uid", null)
             ?: fallbackPrefs.getString("user_uid", null)
 

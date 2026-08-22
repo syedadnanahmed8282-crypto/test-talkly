@@ -74,7 +74,7 @@ class CallForegroundService : Service() {
         ) {
             val prefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
             val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
-            val currentUid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+            val currentUid = com.family.talkly.data.supabase.SupabaseClientProvider.auth.currentUserOrNull()?.id
                 ?: prefs.getString("user_uid", null)
                 ?: fallbackPrefs.getString("user_uid", null) ?: ""
             val currentPhone = prefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", null) ?: ""
@@ -173,7 +173,7 @@ class CallForegroundService : Service() {
 
                 val prefs = getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
                 val fallbackPrefs = getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
-                val currentUid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+                val currentUid = com.family.talkly.data.supabase.SupabaseClientProvider.auth.currentUserOrNull()?.id
                     ?: prefs.getString("user_uid", null)
                     ?: fallbackPrefs.getString("user_uid", null) ?: ""
                 val currentPhone = prefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", null) ?: ""

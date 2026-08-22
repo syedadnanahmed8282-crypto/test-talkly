@@ -2,11 +2,16 @@ package com.family.talkly.util
 
 import android.content.Context
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FirebaseFirestore
+import com.family.talkly.data.supabase.SupabaseClientProvider
+import com.family.talkly.data.supabase.SupabaseFcmToken
 import com.google.firebase.messaging.FirebaseMessaging
-import com.google.firebase.firestore.SetOptions
+import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.postgrest.postgrest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -20,6 +25,7 @@ object FcmTokenManager {
     private const val KEY_FCM_TOKEN = "fcm_token"
 
     private val httpClient by lazy { OkHttpClient() }
+    private val scope = CoroutineScope(Dispatchers.IO)
 
     private fun isGooglePlayServicesAvailableSafely(context: Context): Boolean {
         return try {
@@ -31,23 +37,31 @@ object FcmTokenManager {
         }
     }
 
+    private fun getDeviceId(context: Context): String {
+        return try {
+            Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: Build.MODEL
+        } catch (e: Exception) {
+            Build.MODEL ?: "android_device"
+        }
+    }
+
     /**
-     * Fetches current FCM token and registers it in Firestore for the authenticated user.
+     * Fetches current FCM token and registers it in Supabase for the authenticated user.
      */
     fun syncFcmToken(context: Context) {
         try {
             if (!isGooglePlayServicesAvailableSafely(context)) {
-                Log.i(TAG, "Google Play Services unavailable or non-standard on this device/emulator. Real-time Firestore sync active.")
+                Log.i(TAG, "Google Play Services unavailable on this device. Using cached token if present.")
                 syncExistingCachedToken(context)
                 return
             }
 
             val fcmInstance = try {
                 FirebaseMessaging.getInstance().apply {
-                    isAutoInitEnabled = false
+                    isAutoInitEnabled = true
                 }
             } catch (e: Throwable) {
-                Log.i(TAG, "FirebaseMessaging initialization bypassed: ${e.localizedMessage}")
+                Log.i(TAG, "FirebaseMessaging initialization note: ${e.localizedMessage}")
                 syncExistingCachedToken(context)
                 return
             }
@@ -56,7 +70,7 @@ object FcmTokenManager {
                 fcmInstance.token.addOnCompleteListener { task ->
                     try {
                         if (!task.isSuccessful) {
-                            Log.i(TAG, "FCM token registration skipped (Google Play Services restricted or offline): ${task.exception?.localizedMessage}")
+                            Log.i(TAG, "FCM token retrieval skipped: ${task.exception?.localizedMessage}")
                             syncExistingCachedToken(context)
                             return@addOnCompleteListener
                         }
@@ -66,15 +80,15 @@ object FcmTokenManager {
                             syncExistingCachedToken(context)
                             return@addOnCompleteListener
                         }
-                        Log.d(TAG, "FCM registration token obtained: $token")
+                        Log.d(TAG, "FCM registration token obtained: ${token.take(12)}...")
 
                         // Save locally
                         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                         prefs.edit().putString(KEY_FCM_TOKEN, token).apply()
 
-                        updateTokenInFirestore(context, token)
+                        updateTokenInSupabase(context, token)
                     } catch (e: Throwable) {
-                        Log.i(TAG, "FCM token processing error handled: ${e.localizedMessage}")
+                        Log.i(TAG, "FCM token processing error: ${e.localizedMessage}")
                         syncExistingCachedToken(context)
                     }
                 }
@@ -86,7 +100,7 @@ object FcmTokenManager {
                 syncExistingCachedToken(context)
             }
         } catch (e: Throwable) {
-            Log.i(TAG, "FCM service initialization skipped on this device/emulator: ${e.localizedMessage}")
+            Log.i(TAG, "FCM service initialization skipped: ${e.localizedMessage}")
             syncExistingCachedToken(context)
         }
     }
@@ -96,50 +110,72 @@ object FcmTokenManager {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val cachedToken = prefs.getString(KEY_FCM_TOKEN, null)
             if (!cachedToken.isNullOrBlank()) {
-                updateTokenInFirestore(context, cachedToken)
+                updateTokenInSupabase(context, cachedToken)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error syncing cached FCM token: ${e.localizedMessage}")
         }
     }
 
-    private fun updateTokenInFirestore(context: Context, token: String) {
-        try {
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val uid = FirebaseAuth.getInstance().currentUser?.uid
-                ?: prefs.getString("user_uid", null)
-            val phone = prefs.getString("user_phone", "") ?: ""
-            val phoneSuffix = PhoneUtils.extractPhoneSuffix(phone)
+    private fun updateTokenInSupabase(context: Context, token: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        
+        val uid = SupabaseClientProvider.auth.currentUserOrNull()?.id
+            ?: prefs.getString("user_uid", null)
+            ?: fallbackPrefs.getString("user_uid", null)
 
-            val firestore = FirebaseFirestore.getInstance()
+        if (uid.isNullOrBlank() || uid == "self") {
+            Log.d(TAG, "Skipping Supabase FCM token registration: No authenticated user session yet.")
+            return
+        }
 
-            if (!uid.isNullOrBlank()) {
-                val tokenMap = mapOf(
-                    "fcmToken" to token,
-                    "lastTokenUpdate" to System.currentTimeMillis()
+        val deviceId = getDeviceId(context)
+
+        scope.launch {
+            try {
+                val fcmEntry = SupabaseFcmToken(
+                    userId = uid,
+                    token = token,
+                    deviceId = deviceId,
+                    platform = "android"
                 )
-                firestore.collection("users").document(uid)
-                    .set(tokenMap, SetOptions.merge())
-                    .addOnSuccessListener {
-                        Log.d(TAG, "Successfully updated FCM token for user $uid")
-                    }
-            }
 
-            if (phoneSuffix.isNotBlank()) {
-                val phoneMap = mapOf("fcmToken" to token)
-                firestore.collection("users_phone_index").document(phoneSuffix)
-                    .set(phoneMap, SetOptions.merge())
-                    .addOnSuccessListener {
-                        Log.d(TAG, "Successfully updated FCM token for phone suffix $phoneSuffix")
-                    }
+                SupabaseClientProvider.client.postgrest["fcm_tokens"]
+                    .upsert(fcmEntry)
+
+                Log.d(TAG, "Successfully registered FCM token in Supabase for user: $uid (device: $deviceId)")
+            } catch (e: Exception) {
+                Log.w(TAG, "Error registering FCM token in Supabase: ${e.localizedMessage}")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error updating token in Firestore: ${e.localizedMessage}")
+        }
+    }
+
+    /**
+     * Removes the current device's FCM token from Supabase upon logout.
+     */
+    fun unregisterToken(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val cachedToken = prefs.getString(KEY_FCM_TOKEN, null) ?: return
+
+        scope.launch {
+            try {
+                SupabaseClientProvider.client.postgrest["fcm_tokens"]
+                    .delete {
+                        filter {
+                            eq("token", cachedToken)
+                        }
+                    }
+                Log.d(TAG, "Successfully removed FCM token from Supabase upon logout")
+            } catch (e: Exception) {
+                Log.w(TAG, "Error unregistering FCM token from Supabase: ${e.localizedMessage}")
+            }
         }
     }
 
     /**
      * Triggers high priority FCM push notification for incoming calls or chat messages
+     * via the secure Supabase server-side notification bridge (Edge Function).
      */
     fun sendHighPriorityPush(
         targetUid: String,
@@ -147,7 +183,7 @@ object FcmTokenManager {
         dataPayload: Map<String, String>
     ) {
         try {
-            val callerUid = dataPayload["callerUid"] ?: dataPayload["senderUid"] ?: ""
+            val callerUid = dataPayload["callerUid"] ?: dataPayload["caller_id"] ?: dataPayload["senderUid"] ?: ""
             val callerPhone = dataPayload["callerPhone"] ?: ""
             val callerPhoneSuffix = PhoneUtils.extractPhoneSuffix(callerPhone)
 
@@ -161,115 +197,74 @@ object FcmTokenManager {
                 return
             }
 
-            val firestore = FirebaseFirestore.getInstance()
-
-            // Find target FCM token
-            val onTokenFound: (String) -> Unit = { fcmToken ->
-                if (fcmToken.isNotBlank()) {
-                    dispatchFcmPushToToken(fcmToken, dataPayload)
-                }
-            }
-
-            if (targetUid.isNotBlank()) {
-                firestore.collection("users").document(targetUid).get()
-                    .addOnSuccessListener { doc ->
-                        val token = doc.getString("fcmToken") ?: ""
-                        if (token.isNotBlank()) {
-                            onTokenFound(token)
-                        } else if (targetPhoneSuffix.isNotBlank()) {
-                            lookupPhoneIndexToken(firestore, targetPhoneSuffix, onTokenFound)
-                        }
-                    }
-                    .addOnFailureListener {
-                        if (targetPhoneSuffix.isNotBlank()) {
-                            lookupPhoneIndexToken(firestore, targetPhoneSuffix, onTokenFound)
-                        }
-                    }
-            } else if (targetPhoneSuffix.isNotBlank()) {
-                lookupPhoneIndexToken(firestore, targetPhoneSuffix, onTokenFound)
-            }
+            dispatchPushViaSupabaseBridge(
+                targetUid = targetUid,
+                targetPhoneSuffix = targetPhoneSuffix,
+                dataPayload = dataPayload
+            )
         } catch (e: Exception) {
-            Log.e(TAG, "Error triggering FCM push: ${e.localizedMessage}")
+            Log.e(TAG, "Error triggering FCM push via Supabase: ${e.localizedMessage}")
         }
     }
 
-    private fun lookupPhoneIndexToken(
-        firestore: FirebaseFirestore,
-        phoneSuffix: String,
-        onTokenFound: (String) -> Unit
+    private fun dispatchPushViaSupabaseBridge(
+        targetUid: String,
+        targetPhoneSuffix: String,
+        dataPayload: Map<String, String>
     ) {
-        firestore.collection("users_phone_index").document(phoneSuffix).get()
-            .addOnSuccessListener { doc ->
-                val token = doc.getString("fcmToken") ?: ""
-                if (token.isNotBlank()) {
-                    onTokenFound(token)
+        scope.launch {
+            try {
+                val supabaseUrl = SupabaseClientProvider.supabaseUrl
+                val publishableKey = SupabaseClientProvider.supabasePublishableKey
+                val currentSessionToken = try {
+                    SupabaseClientProvider.auth.currentAccessTokenOrNull()
+                } catch (e: Exception) {
+                    null
                 }
-            }
-    }
+                val authToken = currentSessionToken ?: publishableKey
 
-    private fun dispatchFcmPushToToken(targetFcmToken: String, dataPayload: Map<String, String>) {
-        try {
-            // Write to Firestore fcm_outbox trigger collection for backend FCM Cloud Functions
-            val firestore = FirebaseFirestore.getInstance()
-            val pushDoc = mapOf(
-                "to" to targetFcmToken,
-                "priority" to "high",
-                "content_available" to true,
-                "time_to_live" to 0,
-                "direct_boot_ok" to true,
-                "data" to dataPayload,
-                "timestamp" to System.currentTimeMillis()
-            )
-            firestore.collection("fcm_outbox").add(pushDoc)
-                .addOnSuccessListener {
-                    Log.d(TAG, "Queued high-priority FCM push (time_to_live: 0) in fcm_outbox")
-                }
-
-            // Also send direct legacy HTTP payload for instant notification delivery
-            val json = JSONObject().apply {
-                put("to", targetFcmToken)
-                put("priority", "high")
-                put("content_available", true)
-                put("time_to_live", 0)
-                put("direct_boot_ok", true)
-
-                val dataObj = JSONObject()
-                dataPayload.forEach { (key, value) ->
-                    dataObj.put(key, value)
-                }
-                put("data", dataObj)
-
+                val payloadType = dataPayload["type"] ?: "CHAT_MESSAGE"
                 val title = dataPayload["senderName"] ?: dataPayload["callerName"] ?: dataPayload["title"] ?: "Talkly"
-                val body = dataPayload["messageText"] ?: if (dataPayload["type"] == "INCOMING_CALL") "Incoming Call" else "New message"
-                val notifObj = JSONObject().apply {
+                val body = dataPayload["messageText"] ?: if (payloadType == "INCOMING_CALL") "Incoming Call" else "New message"
+
+                val json = JSONObject().apply {
+                    put("recipient_id", targetUid)
+                    put("recipient_phone_suffix", targetPhoneSuffix)
+                    put("type", payloadType)
                     put("title", title)
                     put("body", body)
-                    put("sound", "default")
-                    put("priority", "high")
-                    put("channel_id", if (dataPayload["type"] == "INCOMING_CALL") TalklyNotificationHelper.CHANNEL_CALLS_ID else TalklyNotificationHelper.CHANNEL_MESSAGES_ID)
+
+                    val dataObj = JSONObject()
+                    dataPayload.forEach { (key, value) ->
+                        dataObj.put(key, value)
+                    }
+                    put("data", dataObj)
                 }
-                put("notification", notifObj)
+
+                val requestBody = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                val edgeFunctionUrl = "$supabaseUrl/functions/v1/send-push-notification"
+
+                val request = Request.Builder()
+                    .url(edgeFunctionUrl)
+                    .addHeader("apikey", publishableKey)
+                    .addHeader("Authorization", "Bearer $authToken")
+                    .addHeader("Content-Type", "application/json")
+                    .post(requestBody)
+                    .build()
+
+                httpClient.newCall(request).enqueue(object : Callback {
+                    override fun onFailure(call: Call, e: IOException) {
+                        Log.w(TAG, "Supabase Push Bridge network request note: ${e.message}")
+                    }
+
+                    override fun onResponse(call: Call, response: Response) {
+                        Log.d(TAG, "Supabase Push Bridge response code: ${response.code}")
+                        response.close()
+                    }
+                })
+            } catch (e: Exception) {
+                Log.w(TAG, "Error invoking Supabase Push notification bridge: ${e.localizedMessage}")
             }
-
-            val body = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-            val request = Request.Builder()
-                .url("https://fcm.googleapis.com/fcm/send")
-                .addHeader("Content-Type", "application/json")
-                .post(body)
-                .build()
-
-            httpClient.newCall(request).enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    Log.w(TAG, "FCM HTTP direct push failed: ${e.message}")
-                }
-
-                override fun onResponse(call: Call, response: Response) {
-                    Log.d(TAG, "FCM HTTP direct push result code: ${response.code}")
-                    response.close()
-                }
-            })
-        } catch (e: Exception) {
-            Log.e(TAG, "Error dispatching FCM push payload: ${e.localizedMessage}")
         }
     }
 }

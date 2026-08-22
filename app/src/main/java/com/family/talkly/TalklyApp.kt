@@ -4,7 +4,6 @@ import android.app.Application
 import android.util.Log
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
-import com.google.firebase.firestore.FirebaseFirestore
 
 class TalklyApp : Application() {
 
@@ -13,41 +12,7 @@ class TalklyApp : Application() {
 
         ensureFirebaseInitialized()
 
-        // Enable Firestore internal SDK logging for connection/WatchStream diagnostics.
-        FirebaseFirestore.setLoggingEnabled(true)
-
-        configureFirestoreSettings()
-
         com.family.talkly.util.TalklyNotificationHelper.initNotificationChannels(this)
-    }
-
-    private fun configureFirestoreSettings() {
-        try {
-            val firestore = FirebaseFirestore.getInstance()
-
-            val settings = com.google.firebase.firestore.FirebaseFirestoreSettings.Builder()
-                .setLocalCacheSettings(
-                    com.google.firebase.firestore.PersistentCacheSettings.newBuilder()
-                        .setSizeBytes(
-                            com.google.firebase.firestore.FirebaseFirestoreSettings.CACHE_SIZE_UNLIMITED
-                        )
-                        .build()
-                )
-                .build()
-
-            firestore.firestoreSettings = settings
-
-            Log.d(
-                "TalklyApp",
-                "FirebaseFirestoreSettings configured with unlimited local persistent cache"
-            )
-
-        } catch (e: Exception) {
-            Log.w(
-                "TalklyApp",
-                "Firestore settings configuration note: ${e.localizedMessage}"
-            )
-        }
     }
 
     private fun ensureFirebaseInitialized() {

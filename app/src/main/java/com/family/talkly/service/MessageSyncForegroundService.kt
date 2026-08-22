@@ -62,7 +62,7 @@ class MessageSyncForegroundService : Service() {
         try {
             val sessionPrefs = getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
             val fallbackPrefs = getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
-            val uid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+            val uid = com.family.talkly.data.supabase.SupabaseClientProvider.auth.currentUserOrNull()?.id
                 ?: sessionPrefs.getString("user_uid", null)
                 ?: fallbackPrefs.getString("user_uid", null)
 
