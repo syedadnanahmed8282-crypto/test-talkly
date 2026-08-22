@@ -18,10 +18,6 @@ import com.family.talkly.data.models.DEFAULT_FAMILY_MEMBERS
 import com.family.talkly.data.models.FamilyMember
 import com.family.talkly.data.models.MessageType
 import com.family.talkly.util.MediaCompressorAndUploader
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.ListenerRegistration
-import com.google.firebase.firestore.MetadataChanges
-import com.google.firebase.firestore.Source
 import java.io.File
 import java.io.FileOutputStream
 import kotlinx.coroutines.CoroutineScope
@@ -32,7 +28,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -89,13 +84,6 @@ class FirebaseChatRepository(private val context: Context) {
         }
     }
 
-    private var firestore: FirebaseFirestore? = null
-    private var membersListener: ListenerRegistration? = null
-    private var usersCollectionListener: ListenerRegistration? = null
-    private var messagesListener: ListenerRegistration? = null
-    private var statusesListener: ListenerRegistration? = null
-    private var messageRequestsListener: ListenerRegistration? = null
-    private var contactsSavedMeListener: ListenerRegistration? = null
     private var supabaseRealtimeChannel: RealtimeChannel? = null
     private var currentSyncedUserId: String? = null
     private val contactPrefs = context.getSharedPreferences(CONTACTS_PREFS, Context.MODE_PRIVATE)
@@ -739,21 +727,6 @@ class FirebaseChatRepository(private val context: Context) {
         }
         if (targetSuffix.isNotBlank()) {
             _messagesMap.value[targetSuffix]?.let { messagesToDelete.addAll(it) }
-        }
-
-        // Delete associated media files from Firebase Storage bucket
-        messagesToDelete.distinctBy { it.id }.forEach { msg ->
-            val url = msg.mediaUrl
-            if (!url.isNullOrBlank() && (url.startsWith("http") || url.startsWith("gs://"))) {
-                try {
-                    val storageRef = com.google.firebase.storage.FirebaseStorage.getInstance().getReferenceFromUrl(url)
-                    storageRef.delete().addOnFailureListener { e ->
-                        Log.w(TAG, "Storage media delete failed: ${e.localizedMessage}")
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error parsing media URL for deletion: ${e.localizedMessage}")
-                }
-            }
         }
 
         // 2. Wipe from local messagesMap memory cache and Room Database
@@ -1411,62 +1384,7 @@ class FirebaseChatRepository(private val context: Context) {
         return true
     }
 
-    private var secondaryMessagesListener: ListenerRegistration? = null
-    private var thirdMessagesListener: ListenerRegistration? = null
     private var isInitialMessageSyncDone = false
-    private var heartbeatJob: Job? = null
-
-    private fun startHeartbeatLoop() {
-        if (heartbeatJob != null && heartbeatJob?.isActive == true) return
-
-        heartbeatJob = repositoryScope.launch {
-            Log.d(TAG, "Starting Firestore message sync presence heartbeat loop (25s interval)")
-            while (true) {
-                try {
-                    delay(25000L)
-
-                    val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
-                    val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
-                    val uid = currentSyncedUserId
-                        ?: com.family.talkly.data.supabase.SupabaseClientProvider.auth.currentUserOrNull()?.id
-                        ?: sessionPrefs.getString("user_uid", null)
-                        ?: fallbackPrefs.getString("user_uid", null)
-
-                    if (uid.isNullOrBlank()) {
-                        continue
-                    }
-
-                    val now = System.currentTimeMillis()
-                    val myPhone = sessionPrefs.getString("user_phone", "") ?: ""
-                    val myPhoneSuffix = PhoneUtils.extractPhoneSuffix(myPhone)
-
-                    val presenceMap = mapOf(
-                        "isOnline" to true,
-                        "lastSeen" to "Online",
-                        "lastActiveTimestamp" to now,
-                        "updatedAt" to now
-                    )
-
-                    try {
-                        firestore?.collection("users")?.document(uid)?.set(presenceMap, com.google.firebase.firestore.SetOptions.merge())
-                        firestore?.collection("family_members")?.document(uid)?.set(presenceMap, com.google.firebase.firestore.SetOptions.merge())
-                        if (myPhoneSuffix.isNotBlank() && myPhoneSuffix != uid) {
-                            firestore?.collection("users")?.document(myPhoneSuffix)?.set(presenceMap, com.google.firebase.firestore.SetOptions.merge())
-                            firestore?.collection("family_members")?.document(myPhoneSuffix)?.set(presenceMap, com.google.firebase.firestore.SetOptions.merge())
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Heartbeat presence update error: ${e.localizedMessage}")
-                    }
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) {
-                        Log.d(TAG, "Heartbeat loop cancelled")
-                        break
-                    }
-                    Log.w(TAG, "Heartbeat loop caught exception: ${e.localizedMessage}")
-                }
-            }
-        }
-    }
 
     fun forceReconnectListeners(reason: String = "manual") {
         val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
@@ -1482,19 +1400,7 @@ class FirebaseChatRepository(private val context: Context) {
             return
         }
 
-        // If listeners are already active and reason is foregrounding, keep current live stream to avoid latency
-        if (messagesListener != null && currentSyncedUserId == uid && reason == "app_foreground") {
-            Log.d(TAG, "forceReconnectListeners: Listeners already active for uid=$uid, maintaining connection.")
-            return
-        }
-
         try {
-            messagesListener?.remove()
-            messagesListener = null
-            secondaryMessagesListener?.remove()
-            secondaryMessagesListener = null
-            thirdMessagesListener?.remove()
-            thirdMessagesListener = null
             currentSyncedUserId = null // Reset so startRealtimeMessageSync bypasses the guard
 
             startRealtimeMessageSync(uid)
@@ -1509,13 +1415,6 @@ class FirebaseChatRepository(private val context: Context) {
     fun startRealtimeMessageSync(currentUserId: String?) {
         if (currentUserId.isNullOrBlank()) return
         if (currentSyncedUserId == currentUserId && supabaseRealtimeChannel != null) return
-
-        messagesListener?.remove()
-        messagesListener = null
-        secondaryMessagesListener?.remove()
-        secondaryMessagesListener = null
-        thirdMessagesListener?.remove()
-        thirdMessagesListener = null
 
         repositoryScope.launch(Dispatchers.IO) {
             SupabaseMessagingService.unsubscribeChannel(supabaseRealtimeChannel)
@@ -1576,7 +1475,6 @@ class FirebaseChatRepository(private val context: Context) {
         }
 
         setupFirestoreMessageRequestsListener(currentUserId)
-        startHeartbeatLoop()
     }
 
     private fun handleIncomingSupabaseMessageAction(action: io.github.jan.supabase.realtime.PostgresAction, currentUserId: String) {
@@ -1808,22 +1706,10 @@ class FirebaseChatRepository(private val context: Context) {
 
     fun resetSessionOnLogout() {
         try {
-            messagesListener?.remove()
-            messagesListener = null
-            secondaryMessagesListener?.remove()
-            secondaryMessagesListener = null
-            thirdMessagesListener?.remove()
-            thirdMessagesListener = null
-            membersListener?.remove()
-            membersListener = null
-            usersCollectionListener?.remove()
-            usersCollectionListener = null
-            statusesListener?.remove()
-            statusesListener = null
-            messageRequestsListener?.remove()
-            messageRequestsListener = null
-            contactsSavedMeListener?.remove()
-            contactsSavedMeListener = null
+            repositoryScope.launch(Dispatchers.IO) {
+                SupabaseMessagingService.unsubscribeChannel(supabaseRealtimeChannel)
+                supabaseRealtimeChannel = null
+            }
 
             currentSyncedUserId = null
             _messagesMap.value = emptyMap()
@@ -1900,88 +1786,62 @@ class FirebaseChatRepository(private val context: Context) {
             return
         }
 
-        firestore?.collection("users")
-            ?.document(memberOrUidOrPhone)
-            ?.get()
-            ?.addOnSuccessListener { doc ->
-                if (doc != null && doc.exists() && !doc.getString("name").isNullOrBlank()) {
-                    val uid = doc.id
-                    val name = doc.getString("name") ?: validFallback ?: memberOrUidOrPhone
-                    val phone = doc.getString("phoneNumber") ?: memberOrUidOrPhone
-                    val pic = doc.getString("profilePicUrl")
-                        ?: doc.getString("photoUrl")
-                        ?: doc.getString("photoURL")
-                        ?: doc.getString("avatarUrl")
-                        ?: doc.getString("profilePic")
-                    val bio = doc.getString("bio") ?: "Available on Talkly 💬"
+        repositoryScope.launch(Dispatchers.IO) {
+            try {
+                var profile: SupabaseProfile? = null
+                if (memberOrUidOrPhone.length >= 30) {
+                    profile = try {
+                        SupabaseClientProvider.postgrest.from("profiles")
+                            .select { filter { eq("id", memberOrUidOrPhone) } }
+                            .decodeSingleOrNull<SupabaseProfile>()
+                    } catch (e: Exception) { null }
+                }
+                if (profile == null && suffix.isNotBlank()) {
+                    val res = socialService.searchUserByPhone(suffix)
+                    profile = res.getOrNull()
+                }
+                if (profile == null && (memberOrUidOrPhone.startsWith("+") || memberOrUidOrPhone.all { it.isDigit() })) {
+                    val res = socialService.searchUserByPhone(memberOrUidOrPhone)
+                    profile = res.getOrNull()
+                }
 
-                    val newMember = FamilyMember(
-                        id = uid,
-                        name = name,
-                        relation = "Contact",
-                        avatarUrl = pic,
-                        status = bio,
-                        phone = phone,
-                        isOnline = true,
-                        isRegisteredOnTalkly = true,
-                        firebaseUid = uid
-                    )
+                withContext(Dispatchers.Main) {
+                    if (profile != null && profile.name.isNotBlank()) {
+                        val uid = profile.id
+                        val name = profile.name.ifBlank { validFallback ?: memberOrUidOrPhone }
+                        val phone = profile.phone
+                        val pic = profile.avatarUrl
+                        val bio = profile.bio.ifBlank { "Available on Talkly 💬" }
 
-                    val currentList = _familyMembers.value.toMutableList()
-                    if (currentList.none { it.id == uid || it.firebaseUid == uid }) {
-                        currentList.add(0, newMember)
-                        setFamilyMembersWithDeduplication(currentList)
-                        saveContactsToPrefs()
+                        val newMember = FamilyMember(
+                            id = uid,
+                            name = name,
+                            relation = "Contact",
+                            avatarUrl = pic,
+                            status = bio,
+                            phone = phone,
+                            isOnline = true,
+                            isRegisteredOnTalkly = true,
+                            firebaseUid = uid
+                        )
+
+                        val currentList = _familyMembers.value.toMutableList()
+                        if (currentList.none { it.id == uid || it.firebaseUid == uid }) {
+                            currentList.add(0, newMember)
+                            setFamilyMembersWithDeduplication(currentList)
+                            saveContactsToPrefs()
+                        }
+                    } else {
+                        createFallbackContact(memberOrUidOrPhone, validFallback)
                     }
-                } else if (suffix.isNotBlank()) {
-                    firestore?.collection("users")
-                        ?.whereEqualTo("phoneSuffix", suffix)
-                        ?.get()
-                        ?.addOnSuccessListener { querySnap ->
-                            val foundDoc = querySnap?.documents?.firstOrNull { !it.getString("name").isNullOrBlank() }
-                            if (foundDoc != null) {
-                                val uid = foundDoc.id
-                                val name = foundDoc.getString("name") ?: validFallback ?: memberOrUidOrPhone
-                                val phone = foundDoc.getString("phoneNumber") ?: memberOrUidOrPhone
-                                val pic = foundDoc.getString("profilePicUrl")
-                                    ?: foundDoc.getString("photoUrl")
-                                    ?: foundDoc.getString("photoURL")
-                                    ?: foundDoc.getString("avatarUrl")
-                                    ?: foundDoc.getString("profilePic")
-                                val bio = foundDoc.getString("bio") ?: "Available on Talkly 💬"
-
-                                val newMember = FamilyMember(
-                                    id = uid,
-                                    name = name,
-                                    relation = "Contact",
-                                    avatarUrl = pic,
-                                    status = bio,
-                                    phone = phone,
-                                    isOnline = true,
-                                    isRegisteredOnTalkly = true,
-                                    firebaseUid = uid
-                                )
-
-                                val currentList = _familyMembers.value.toMutableList()
-                                if (currentList.none { it.id == uid || it.firebaseUid == uid }) {
-                                    currentList.add(0, newMember)
-                                    setFamilyMembersWithDeduplication(currentList)
-                                    saveContactsToPrefs()
-                                }
-                            } else {
-                                createFallbackContact(memberOrUidOrPhone, validFallback)
-                            }
-                        }
-                        ?.addOnFailureListener {
-                            createFallbackContact(memberOrUidOrPhone, validFallback)
-                        }
-                } else {
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "ensureContactInChatList error: ${e.localizedMessage}")
+                withContext(Dispatchers.Main) {
                     createFallbackContact(memberOrUidOrPhone, validFallback)
                 }
             }
-            ?.addOnFailureListener {
-                createFallbackContact(memberOrUidOrPhone, validFallback)
-            }
+        }
     }
 
     private fun createFallbackContact(memberOrUidOrPhone: String, validFallbackName: String?) {
@@ -2022,33 +1882,6 @@ class FirebaseChatRepository(private val context: Context) {
         if (modified) {
             _messagesMap.value = currentMap
             saveMessagesToDisk()
-        }
-    }
-
-    private fun writeMessageToCollection(targetDocId: String, message: ChatMessage) {
-        if (targetDocId.isBlank()) return
-        val safeMessage = if ((message.mediaUrl?.length ?: 0) > 800_000) {
-            Log.e(TAG, "Preventing Firestore write: mediaUrl length (${message.mediaUrl?.length}) exceeds safe 800KB size limit.")
-            message.copy(
-                mediaUrl = null,
-                textContent = message.textContent + " (মিডিয়া ফাইলের সাইজ অতিরিক্ত বড় হওয়ার কারণে পাঠানো সম্ভব হয়নি)"
-            )
-        } else {
-            message
-        }
-        try {
-            firestore?.collection("family_chats")
-                ?.document(targetDocId)
-                ?.collection("messages")
-                ?.document(safeMessage.id)
-                ?.set(safeMessage)
-                ?.addOnSuccessListener {
-                    if (_isNetworkConnected.value) {
-                        updateMessagePendingState(safeMessage.id, false)
-                    }
-                }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error writing message to $targetDocId: ${e.localizedMessage}")
         }
     }
 
@@ -2200,105 +2033,6 @@ class FirebaseChatRepository(private val context: Context) {
     }
 
     // --- 24-HOUR DISAPPEARING STATUS METHODS ---
-
-    private fun setupFirestoreStatusesListener() {
-        try {
-            statusesListener?.remove()
-            statusesListener = firestore?.collection("statuses")
-                ?.addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
-                    if (error != null) {
-                        Log.w(TAG, "Firestore statuses listener error: ${error.localizedMessage}")
-                        return@addSnapshotListener
-                    }
-                    if (snapshot != null) {
-                        val isFromCache = snapshot.metadata.isFromCache
-                        if (!isFromCache) {
-                            _lastServerSyncTime.value = System.currentTimeMillis()
-                        }
-                        val firestoreStatuses = mutableListOf<StatusItem>()
-                        for (doc in snapshot.documents) {
-                            try {
-                                val id = doc.id
-                                val userId = doc.getString("userId") ?: ""
-                                val userName = doc.getString("userName") ?: ""
-                                val userAvatarUrl = doc.getString("userAvatarUrl")
-                                val textContent = doc.getString("textContent")
-                                val photoUrl = doc.getString("photoUrl")
-                                val backgroundColorHex = doc.getString("backgroundColorHex") ?: "#321C3B"
-                                val timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
-                                val isVideo = doc.getBoolean("isVideo") ?: false
-
-                                val viewersList = mutableListOf<StatusViewer>()
-                                val rawViewers = doc.get("viewers") as? List<*>
-                                rawViewers?.forEach { v ->
-                                    if (v is Map<*, *>) {
-                                        val vUid = v["userId"]?.toString() ?: ""
-                                        val vName = v["userName"]?.toString() ?: ""
-                                        val vAvatar = v["userAvatarUrl"]?.toString()
-                                        val vTime = v["timeAgo"]?.toString() ?: "Recently"
-                                        if (vUid.isNotBlank()) {
-                                            viewersList.add(StatusViewer(vUid, vName, vAvatar, vTime))
-                                        }
-                                    }
-                                }
-
-                                val likesList = mutableListOf<StatusLiker>()
-                                val rawLikes = doc.get("likes") as? List<*>
-                                rawLikes?.forEach { l ->
-                                    if (l is Map<*, *>) {
-                                        val lUid = l["userId"]?.toString() ?: ""
-                                        val lName = l["userName"]?.toString() ?: ""
-                                        val lAvatar = l["userAvatarUrl"]?.toString()
-                                        if (lUid.isNotBlank()) {
-                                            likesList.add(StatusLiker(lUid, lName, lAvatar))
-                                        }
-                                    }
-                                }
-
-                                val existingLocal = _statuses.value.firstOrNull { it.id == id }
-                                val isSeen = existingLocal?.isSeen ?: false
-
-                                val item = StatusItem(
-                                    id = id,
-                                    userId = userId,
-                                    userName = userName,
-                                    userAvatarUrl = userAvatarUrl,
-                                    textContent = textContent,
-                                    photoUrl = photoUrl,
-                                    isVideo = isVideo,
-                                    backgroundColorHex = backgroundColorHex,
-                                    timestamp = timestamp,
-                                    isSeen = isSeen,
-                                    viewers = viewersList,
-                                    likes = likesList
-                                )
-
-                                if (!item.isExpired(_simulatedTimeOffsetMs.value)) {
-                                    firestoreStatuses.add(item)
-                                }
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Error parsing status doc ${doc.id}: ${e.localizedMessage}")
-                            }
-                        }
-
-                        val mergedMap = mutableMapOf<String, StatusItem>()
-                        _statuses.value.forEach { local ->
-                            if (!local.isExpired(_simulatedTimeOffsetMs.value)) {
-                                mergedMap[local.id] = local
-                            }
-                        }
-                        firestoreStatuses.forEach { remote ->
-                            mergedMap[remote.id] = remote
-                        }
-
-                        _statuses.value = mergedMap.values.sortedByDescending { it.timestamp }
-                        saveStatusesToPrefs()
-                    }
-                }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to setup Firestore statuses listener: ${e.localizedMessage}")
-        }
-    }
 
     private fun loadStatuses() {
         val savedStatusesJson = contactPrefs.getString(KEY_STATUSES_JSON, null)
@@ -2498,7 +2232,7 @@ class FirebaseChatRepository(private val context: Context) {
                     try {
                         val uploader = MediaCompressorAndUploader(context)
                         val remotePath = "status_photos/${newStatus.id}.jpg"
-                        val downloadUrl = uploader.uploadToFirebaseStorage(targetUploadFile, remotePath) { _, _ -> }
+                        val downloadUrl = uploader.uploadMediaFile(targetUploadFile, remotePath) { _, _ -> }
                         if (downloadUrl.startsWith("http://") || downloadUrl.startsWith("https://")) {
                             finalMediaUrl = downloadUrl
                             withContext(Dispatchers.Main) {
@@ -2719,31 +2453,22 @@ class FirebaseChatRepository(private val context: Context) {
             }
         }
 
-        try {
-            contactsSavedMeListener?.remove()
-            contactsSavedMeListener = firestore?.collectionGroup("contacts")
-                ?.addSnapshotListener(MetadataChanges.INCLUDE) { snap, _ ->
-                    if (snap != null && !snap.isEmpty) {
-                        val isFromCache = snap.metadata.isFromCache
-                        if (!isFromCache) {
-                            _lastServerSyncTime.value = System.currentTimeMillis()
+        if (userSuffix.isNotBlank()) {
+            repositoryScope.launch(Dispatchers.IO) {
+                try {
+                    val result = socialService.loadContactsWhoSavedMe(userSuffix)
+                    val ownerIds = result.getOrDefault(emptyList())
+                    if (ownerIds.isNotEmpty()) {
+                        withContext(Dispatchers.Main) {
+                            val savedMeSet = _contactsWhoSavedMe.value.toMutableSet()
+                            savedMeSet.addAll(ownerIds)
+                            _contactsWhoSavedMe.value = savedMeSet
                         }
-                        val savedMeSet = _contactsWhoSavedMe.value.toMutableSet()
-                        for (doc in snap.documents) {
-                            val cSuffix = doc.getString("phoneSuffix") ?: ""
-                            val cPhone = doc.getString("phone") ?: ""
-                            if ((userSuffix.isNotBlank() && cSuffix == userSuffix) || (userPhone.isNotBlank() && cPhone == userPhone)) {
-                                val uploaderUid = doc.reference.parent.parent?.id ?: ""
-                                if (uploaderUid.isNotBlank()) {
-                                    savedMeSet.add(uploaderUid)
-                                }
-                            }
-                        }
-                        _contactsWhoSavedMe.value = savedMeSet
                     }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to load contacts who saved me from Supabase: ${e.localizedMessage}")
                 }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to setup contactsSavedMeListener: ${e.localizedMessage}")
+            }
         }
     }
 

@@ -118,7 +118,7 @@ class MediaUploadWorker(
                 )
 
                 val remotePath = "chats/media/${System.currentTimeMillis()}_vid.mp4"
-                finalRemoteUrl = uploader.uploadToFirebaseStorage(compressedFile, remotePath) { progress, statusText ->
+                finalRemoteUrl = uploader.uploadMediaFile(compressedFile, remotePath) { progress, statusText ->
                     val overallProgress = (30 + ((progress / 100.0) * 70)).toInt().coerceIn(30, 100)
                     updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
                 }
@@ -139,7 +139,7 @@ class MediaUploadWorker(
                 )
 
                 val remotePath = "chats/media/${System.currentTimeMillis()}_img.jpg"
-                finalRemoteUrl = uploader.uploadToFirebaseStorage(compressedFile, remotePath) { progress, statusText ->
+                finalRemoteUrl = uploader.uploadMediaFile(compressedFile, remotePath) { progress, statusText ->
                     val overallProgress = (30 + ((progress / 100.0) * 70)).toInt().coerceIn(30, 100)
                     updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
                 }
@@ -148,7 +148,7 @@ class MediaUploadWorker(
                 val file = File(filePath)
                 val remotePath = "family_chats/${recipientId}/voice_notes/vn_${System.currentTimeMillis()}.m4a"
                 finalRemoteUrl = try {
-                    uploader.uploadToFirebaseStorage(file, remotePath) { progress, statusText ->
+                    uploader.uploadMediaFile(file, remotePath) { progress, statusText ->
                         updateProgressState(dao, messageId, progress, notificationId, statusText)
                     }
                 } catch (e: Exception) {

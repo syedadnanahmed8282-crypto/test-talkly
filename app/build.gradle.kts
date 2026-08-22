@@ -134,7 +134,6 @@ dependencies {
   implementation(libs.androidx.navigation.compose)
   implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
-  implementation(libs.firebase.firestore)
   implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
@@ -152,11 +151,8 @@ dependencies {
   implementation(libs.ktor.client.core)
   implementation(libs.kotlinx.serialization.json)
 
-  // Firebase Auth
-  implementation(libs.firebase.auth)
-  implementation(libs.firebase.storage)
+  // Firebase Cloud Messaging (FCM push delivery only)
   implementation(libs.firebase.messaging)
-  // implementation(libs.firebase.appcheck.recaptcha)
   implementation("im.zego:express-video:3.15.0")
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)

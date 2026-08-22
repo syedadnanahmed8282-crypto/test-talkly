@@ -29,10 +29,13 @@ object FcmTokenManager {
 
     private fun isGooglePlayServicesAvailableSafely(context: Context): Boolean {
         return try {
-            val availability = com.google.android.gms.common.GoogleApiAvailability.getInstance()
-            availability.isGooglePlayServicesAvailable(context) == com.google.android.gms.common.ConnectionResult.SUCCESS
+            val clazz = Class.forName("com.google.android.gms.common.GoogleApiAvailability")
+            val getInstanceMethod = clazz.getMethod("getInstance")
+            val instance = getInstanceMethod.invoke(null)
+            val isAvailableMethod = clazz.getMethod("isGooglePlayServicesAvailable", Context::class.java)
+            val resultCode = isAvailableMethod.invoke(instance, context) as? Int ?: -1
+            resultCode == 0
         } catch (e: Throwable) {
-            Log.d(TAG, "Google Play Services availability check: ${e.localizedMessage}")
             false
         }
     }

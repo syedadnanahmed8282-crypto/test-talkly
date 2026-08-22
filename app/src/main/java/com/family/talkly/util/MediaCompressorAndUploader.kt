@@ -455,13 +455,13 @@ class MediaCompressorAndUploader(private val context: Context) {
      * Uploads compressed file to Cloudinary with unsigned upload API,
      * progress reporting, and coroutine retry handling.
      */
-    suspend fun uploadToFirebaseStorage(
+    suspend fun uploadMediaFile(
         file: File,
-        remotePath: String,
-        onProgress: (Int, String) -> Unit
+        remotePath: String = "",
+        onProgress: (Int, String) -> Unit = { _, _ -> }
     ): String = withContext(Dispatchers.IO) {
         val canonicalFile = file.absoluteFile
-        Log.d(TAG, "uploadToFirebaseStorage (Cloudinary) called: remotePath='$remotePath', file='${canonicalFile.absolutePath}', exists=${canonicalFile.exists()}, length=${canonicalFile.length()}")
+        Log.d(TAG, "uploadMediaFile (Cloudinary) called: remotePath='$remotePath', file='${canonicalFile.absolutePath}', exists=${canonicalFile.exists()}, length=${canonicalFile.length()}")
 
         if (!canonicalFile.exists() || canonicalFile.length() == 0L) {
             val errorMsg = "Upload aborted: File does not exist at location (${canonicalFile.absolutePath})"
@@ -566,6 +566,12 @@ class MediaCompressorAndUploader(private val context: Context) {
 
         throw IOException("Media upload failed after retries: ${lastException?.localizedMessage}")
     }
+
+    suspend fun uploadToFirebaseStorage(
+        file: File,
+        remotePath: String,
+        onProgress: (Int, String) -> Unit
+    ): String = uploadMediaFile(file, remotePath, onProgress)
 
     fun encodeFileToBase64(file: File): String {
         return try {

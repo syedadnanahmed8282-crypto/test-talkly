@@ -52,7 +52,7 @@ class AuthManager(private val context: Context) {
          * Converts phone number into a deterministic internal email address for Supabase Auth
          */
         fun getInternalEmail(phoneNumber: String): String {
-            val cleanNumber = phoneNumber.replace("+", "").replace(" ", "").replace("-", "").trim()
+            val cleanNumber = PhoneUtils.cleanPhoneNumber(phoneNumber).ifBlank { phoneNumber.replace("+", "").trim() }
             return "${cleanNumber}@talkly.app"
         }
     }
@@ -291,14 +291,20 @@ class AuthManager(private val context: Context) {
                 val rawErr = e.localizedMessage ?: "Authentication failed."
                 val formatted = when {
                     rawErr.contains("invalid login credentials", ignoreCase = true) ||
+                    rawErr.contains("invalid_credentials", ignoreCase = true) ||
                     rawErr.contains("invalid_grant", ignoreCase = true) ||
                     rawErr.contains("invalid-credential", ignoreCase = true) ||
                     rawErr.contains("wrong-password", ignoreCase = true) ||
                     rawErr.contains("invalid password", ignoreCase = true) ->
-                        "Incorrect password. Please try again."
+                        "Incorrect mobile number or password. If you do not have an account, please switch to Register."
                     rawErr.contains("user not found", ignoreCase = true) ||
                     rawErr.contains("user-not-found", ignoreCase = true) ->
                         "No account found with this phone number. Please register first."
+                    rawErr.contains("network", ignoreCase = true) ||
+                    rawErr.contains("timeout", ignoreCase = true) ||
+                    rawErr.contains("connect", ignoreCase = true) ||
+                    rawErr.contains("Unable to resolve host", ignoreCase = true) ->
+                        "Network error. Please check your internet connection."
                     else -> rawErr
                 }
                 withContext(Dispatchers.Main) {
@@ -692,13 +698,19 @@ class AuthManager(private val context: Context) {
     fun logout() {
         isLoggingOut = true
 
-        try {
-            com.family.talkly.util.FcmTokenManager.unregisterToken(context)
-        } catch (e: Exception) {
-            Log.w(TAG, "Error unregistering FCM token during logout: ${e.localizedMessage}")
-        }
-
         CoroutineScope(Dispatchers.IO).launch {
+            try {
+                com.family.talkly.util.FcmTokenManager.unregisterToken(context)
+            } catch (e: Exception) {
+                Log.w(TAG, "Error unregistering FCM token during logout: ${e.localizedMessage}")
+            }
+
+            try {
+                com.family.talkly.data.local.TalklyDatabase.getInstance(context).chatMessageDao().clearAllMessages()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error clearing Room database during logout: ${e.localizedMessage}")
+            }
+
             try {
                 auth.signOut()
             } catch (e: Exception) {
