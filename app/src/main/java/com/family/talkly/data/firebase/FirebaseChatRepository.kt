@@ -2552,7 +2552,7 @@ class FirebaseChatRepository(private val context: Context) {
         val receiverSuffix = PhoneUtils.extractPhoneSuffix(receiverPhone)
         val receiverUid = if (!targetMember.firebaseUid.isNullOrBlank()) targetMember.firebaseUid!! else targetMember.id
 
-        val docId = "req_${senderSuffix.ifBlank { senderUid }}_${receiverSuffix.ifBlank { receiverUid }}"
+        val docId = java.util.UUID.randomUUID().toString()
 
         val supabaseReq = SupabaseMessageRequest(
             id = docId,
