@@ -89,6 +89,8 @@ fun MainScreen(
     androidx.compose.runtime.LaunchedEffect(currentUserProfile) {
         if (currentUserProfile != null && currentUserProfile.uid.isNotBlank()) {
             chatRepository.invalidateLocalCacheAndSyncPrimaryProfile(currentUserProfile.uid)
+            chatRepository.syncContactsFromSupabase(currentUserProfile.uid)
+            chatRepository.syncStatusesFromSupabase(currentUserProfile.uid)
             zegoManager.startRealtimeCallSync(currentUserProfile, chatRepository)
         }
     }
@@ -96,53 +98,28 @@ fun MainScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, currentUserProfile?.uid) {
         val uid = currentUserProfile?.uid
+        val name = currentUserProfile?.name ?: "Talkly User"
+        val avatar = currentUserProfile?.profilePicUrl
         val observer = LifecycleEventObserver { _, event ->
             if (uid.isNullOrBlank()) return@LifecycleEventObserver
             when (event) {
                 Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> {
-                    chatRepository.setMemberPresence(
-                        memberId = uid,
-                        isOnline = true,
-                        lastSeen = "Online",
-                        lastActiveTimestamp = System.currentTimeMillis()
-                    )
+                    chatRepository.startRealtimePresenceSync(uid, name, avatar)
                 }
                 Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
-                    chatRepository.setMemberPresence(
-                        memberId = uid,
-                        isOnline = false,
-                        lastSeen = com.family.talkly.util.PhoneUtils.formatLastSeenTime(System.currentTimeMillis()),
-                        lastActiveTimestamp = System.currentTimeMillis()
-                    )
+                    chatRepository.stopRealtimePresenceSync(uid)
                 }
                 else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
+        if (!uid.isNullOrBlank()) {
+            chatRepository.startRealtimePresenceSync(uid, name, avatar)
+        }
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             if (!uid.isNullOrBlank()) {
-                chatRepository.setMemberPresence(
-                    memberId = uid,
-                    isOnline = false,
-                    lastSeen = com.family.talkly.util.PhoneUtils.formatLastSeenTime(System.currentTimeMillis()),
-                    lastActiveTimestamp = System.currentTimeMillis()
-                )
-            }
-        }
-    }
-
-    androidx.compose.runtime.LaunchedEffect(currentUserProfile?.uid) {
-        val uid = currentUserProfile?.uid
-        if (!uid.isNullOrBlank()) {
-            while (true) {
-                chatRepository.setMemberPresence(
-                    memberId = uid,
-                    isOnline = true,
-                    lastSeen = "Online",
-                    lastActiveTimestamp = System.currentTimeMillis()
-                )
-                kotlinx.coroutines.delay(30_000L)
+                chatRepository.stopRealtimePresenceSync(uid)
             }
         }
     }

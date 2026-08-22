@@ -15,8 +15,12 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.family.talkly.MainActivity
 import com.family.talkly.R
+import com.family.talkly.data.supabase.SupabaseCallService
+import com.family.talkly.data.zego.ZegoCallEngineManager
 import com.family.talkly.util.TalklyNotificationHelper
-import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class CallForegroundService : Service() {
 
@@ -45,6 +49,18 @@ class CallForegroundService : Service() {
             } catch (e: Exception) {
                 Log.w(TAG, "Error stopping ringtone directly in memory: ${e.localizedMessage}")
             }
+        }
+
+        fun startIncomingCallService(
+            context: Context,
+            callerName: String,
+            callerUid: String,
+            callerPhone: String,
+            callerAvatar: String,
+            roomId: String,
+            callType: String
+        ) {
+            startCallService(context, callerName, callerUid, callerPhone, callerAvatar, roomId, callType)
         }
 
         fun startCallService(
@@ -204,7 +220,8 @@ class CallForegroundService : Service() {
                 val roomId = intent.getStringExtra(EXTRA_ROOM_ID) ?: ""
                 val callerUid = intent.getStringExtra(EXTRA_CALLER_UID) ?: ""
                 val callerPhone = intent.getStringExtra(EXTRA_CALLER_PHONE) ?: ""
-                declineCallInFirestore(roomId, callerUid, callerPhone)
+                declineCallInSupabase(roomId, callerUid, callerPhone)
+                ZegoCallEngineManager.getInstance(applicationContext).declineCall()
                 stopSelfAndRingtone()
             }
             ACTION_STOP_INCOMING_CALL -> {
@@ -421,28 +438,15 @@ class CallForegroundService : Service() {
         safeStartForeground(NOTIFICATION_ID, notificationBuilder.build(), foregroundType)
     }
 
-    private fun declineCallInFirestore(roomId: String, callerUid: String, callerPhone: String) {
-        try {
-            val firestore = FirebaseFirestore.getInstance()
-            val declinePayload = mapOf(
-                "status" to "DECLINED",
-                "updatedAt" to System.currentTimeMillis()
-            )
-            if (roomId.isNotBlank()) {
-                firestore.collection("active_calls").document(roomId)
-                    .set(declinePayload, com.google.firebase.firestore.SetOptions.merge())
+    private fun declineCallInSupabase(roomId: String, callerUid: String, callerPhone: String) {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                if (roomId.isNotBlank()) {
+                    SupabaseCallService.updateActiveCallStatus(roomId, "REJECTED")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating decline call status in Supabase: ${e.localizedMessage}")
             }
-            if (callerUid.isNotBlank() && callerUid != "self") {
-                firestore.collection("active_calls").document("user_$callerUid")
-                    .set(declinePayload, com.google.firebase.firestore.SetOptions.merge())
-            }
-            val callerSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(callerPhone)
-            if (callerSuffix.isNotBlank()) {
-                firestore.collection("active_calls").document("user_$callerSuffix")
-                    .set(declinePayload, com.google.firebase.firestore.SetOptions.merge())
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error updating decline call status in Firestore: ${e.localizedMessage}")
         }
     }
 

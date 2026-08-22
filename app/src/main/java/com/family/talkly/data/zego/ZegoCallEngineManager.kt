@@ -10,12 +10,13 @@ import com.family.talkly.data.models.CallLog
 import com.family.talkly.data.models.CallType
 import com.family.talkly.data.models.FamilyMember
 import com.family.talkly.data.models.UserProfile
+import com.family.talkly.data.supabase.SupabaseActiveCall
+import com.family.talkly.data.supabase.SupabaseCallLog
+import com.family.talkly.data.supabase.SupabaseCallService
+import com.family.talkly.data.supabase.SupabaseMessage
+import com.family.talkly.data.supabase.SupabaseMessagingService
 import com.family.talkly.util.CallSoundManager
 import com.family.talkly.util.PhoneUtils
-import com.google.firebase.firestore.DocumentSnapshot
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.ListenerRegistration
-import com.google.firebase.firestore.SetOptions
 import im.zego.zegoexpress.ZegoExpressEngine
 import im.zego.zegoexpress.callback.IZegoEventHandler
 import im.zego.zegoexpress.constants.ZegoBeautifyFeature
@@ -32,6 +33,8 @@ import im.zego.zegoexpress.entity.ZegoEngineProfile
 import im.zego.zegoexpress.entity.ZegoRoomConfig
 import im.zego.zegoexpress.entity.ZegoStream
 import im.zego.zegoexpress.entity.ZegoUser
+import io.github.jan.supabase.realtime.PostgresAction
+import io.github.jan.supabase.realtime.RealtimeChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,6 +43,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.decodeFromJsonElement
 import org.json.JSONObject
 
 enum class CallState {
@@ -97,7 +102,6 @@ class ZegoCallEngineManager(private val context: Context) {
         )
         val ZEGO_APP_ID: Long = 196267710L
         val ZEGO_APP_SIGN: String = "620de7961f58b3a6f8390c8a484233ff60aafd59a6f4bc8a538b25c502fd4403"
-        const val FIREBASE_PROJECT_ID: String = "familycallapp-e6b21"
 
         @Volatile
         private var INSTANCE: ZegoCallEngineManager? = null
@@ -111,18 +115,13 @@ class ZegoCallEngineManager(private val context: Context) {
 
     private val callSoundManager = CallSoundManager(context)
 
-    private val firestore: FirebaseFirestore? by lazy {
-        try { FirebaseFirestore.getInstance() } catch (e: Exception) { null }
-    }
-
     private var expressEngine: ZegoExpressEngine? = null
     private var isJoinedRoom = false
     private var localViewRef: View? = null
     private var remoteViewRef: View? = null
 
-    private var activeCallListener: ListenerRegistration? = null
-    private var secondaryCallListener: ListenerRegistration? = null
-    private var thirdCallListener: ListenerRegistration? = null
+    private var callsRealtimeChannel: RealtimeChannel? = null
+    private var callSyncJob: Job? = null
     private var currentSyncedUserId: String? = null
 
     var currentUserProfile: UserProfile? = null
@@ -453,12 +452,15 @@ class ZegoCallEngineManager(private val context: Context) {
         try {
             leaveCallRoom()
             callSoundManager.stopAllSounds()
-            activeCallListener?.remove()
-            activeCallListener = null
-            secondaryCallListener?.remove()
-            secondaryCallListener = null
-            thirdCallListener?.remove()
-            thirdCallListener = null
+            callSyncJob?.cancel()
+            callSyncJob = null
+
+            val channelToClose = callsRealtimeChannel
+            callsRealtimeChannel = null
+            scope.launch(Dispatchers.IO) {
+                SupabaseCallService.unsubscribeChannel(channelToClose)
+            }
+
             currentSyncedUserId = null
             currentUserProfile = null
             _callState.value = CurrentCallInfo(state = CallState.IDLE)
@@ -474,41 +476,40 @@ class ZegoCallEngineManager(private val context: Context) {
 
         val uid = userProfile.uid
         if (uid.isBlank() || uid == "self") return
-        if (currentSyncedUserId == uid && activeCallListener != null) return
+        if (currentSyncedUserId == uid && callsRealtimeChannel != null) return
 
-        activeCallListener?.remove()
-        secondaryCallListener?.remove()
-        thirdCallListener?.remove()
+        callSyncJob?.cancel()
         currentSyncedUserId = uid
 
-        val handleCallSnapshot: (DocumentSnapshot?, Exception?) -> Unit = { snapshot, error ->
-            if (error != null) {
-                Log.w(TAG, "Listen failed for active_calls: ${error.localizedMessage}")
-            } else {
-                handleCallDocSnapshot(snapshot)
+        // 1. Fetch persistent call history logs from Supabase
+        scope.launch(Dispatchers.IO) {
+            try {
+                val logsResult = SupabaseCallService.fetchCallLogs(uid)
+                val logs = logsResult.getOrDefault(emptyList()).map { it.toCallLog() }
+                if (logs.isNotEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        _callLogs.value = logs
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error loading initial call logs from Supabase: ${e.localizedMessage}")
             }
         }
 
-        try {
-            activeCallListener = firestore?.collection("active_calls")
-                ?.document("user_$uid")
-                ?.addSnapshotListener { snapshot, error -> handleCallSnapshot(snapshot, error) }
-
-            val suffix = userProfile.phoneSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(userProfile.phoneNumber) }
-            val cleanPhone = PhoneUtils.cleanPhoneNumber(userProfile.phoneNumber)
-
-            if (suffix.isNotBlank() && suffix != uid) {
-                secondaryCallListener = firestore?.collection("active_calls")
-                    ?.document("user_$suffix")
-                    ?.addSnapshotListener { snapshot, error -> handleCallSnapshot(snapshot, error) }
+        // 2. Subscribe to Supabase Realtime channel for active_calls
+        callSyncJob = scope.launch(Dispatchers.IO) {
+            try {
+                callsRealtimeChannel?.let { SupabaseCallService.unsubscribeChannel(it) }
+                callsRealtimeChannel = SupabaseCallService.createCallsRealtimeChannel(
+                    currentUserId = uid,
+                    coroutineScope = this,
+                    onCallAction = { action ->
+                        handleRealtimeCallAction(action)
+                    }
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Error starting Supabase Realtime calls sync: ${e.localizedMessage}")
             }
-            if (cleanPhone.isNotBlank() && cleanPhone != uid && cleanPhone != suffix) {
-                thirdCallListener = firestore?.collection("active_calls")
-                    ?.document("user_$cleanPhone")
-                    ?.addSnapshotListener { snapshot, error -> handleCallSnapshot(snapshot, error) }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error starting realtime call sync: ${e.localizedMessage}")
         }
     }
 
@@ -521,35 +522,57 @@ class ZegoCallEngineManager(private val context: Context) {
         }
     }
 
-    private fun handleCallDocSnapshot(doc: DocumentSnapshot?) {
-        if (doc == null || !doc.exists()) {
-            val currentState = _callState.value.state
-            if (currentState == CallState.INCOMING_RINGING) {
-                endCallInternal("Call Cancelled")
+    private fun handleRealtimeCallAction(action: PostgresAction) {
+        when (action) {
+            is PostgresAction.Insert -> {
+                try {
+                    val activeCall = SupabaseMessagingService.json.decodeFromJsonElement<SupabaseActiveCall>(action.record)
+                    scope.launch(Dispatchers.Main) {
+                        handleActiveCallSignal(activeCall)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error decoding active call Insert: ${e.localizedMessage}")
+                }
             }
-            return
+            is PostgresAction.Update -> {
+                try {
+                    val activeCall = SupabaseMessagingService.json.decodeFromJsonElement<SupabaseActiveCall>(action.record)
+                    scope.launch(Dispatchers.Main) {
+                        handleActiveCallSignal(activeCall)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error decoding active call Update: ${e.localizedMessage}")
+                }
+            }
+            is PostgresAction.Delete -> {
+                scope.launch(Dispatchers.Main) {
+                    val currentState = _callState.value.state
+                    if (currentState == CallState.INCOMING_RINGING || currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) {
+                        endCallInternal("Call Cancelled")
+                    }
+                }
+            }
+            else -> {}
         }
+    }
 
-        val id = doc.getString("id") ?: ""
-        val callerUid = doc.getString("callerUid") ?: ""
-        val callerName = doc.getString("callerName") ?: "Talkly User"
-        val callerPhone = doc.getString("callerPhone") ?: ""
-        val callerSuffix = doc.getString("callerSuffix") ?: PhoneUtils.extractPhoneSuffix(callerPhone)
-        val callerAvatarUrl = doc.getString("callerAvatarUrl") ?: ""
-
-        val receiverUid = doc.getString("receiverUid") ?: ""
-        val receiverPhone = doc.getString("receiverPhone") ?: ""
-        val receiverSuffix = doc.getString("receiverSuffix") ?: PhoneUtils.extractPhoneSuffix(receiverPhone)
-
-        val callTypeStr = doc.getString("callType") ?: "VIDEO"
-        val callType = try { CallType.valueOf(callTypeStr) } catch (e: Exception) { CallType.VIDEO }
-        val status = doc.getString("status") ?: ""
-        val roomID = doc.getString("roomID") ?: id
-
+    private fun handleActiveCallSignal(call: SupabaseActiveCall) {
         val myProfile = currentUserProfile ?: getLocalUserProfile()
         val myUid = myProfile.uid
-        val myPhone = myProfile.phoneNumber
+        val myPhone = PhoneUtils.cleanPhoneNumber(myProfile.phoneNumber)
         val mySuffix = myProfile.phoneSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(myPhone) }
+
+        val callerUid = call.callerId
+        val callerPhone = PhoneUtils.cleanPhoneNumber(call.callerPhone)
+        val callerSuffix = call.callerSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(callerPhone) }
+
+        val receiverUid = call.receiverId ?: ""
+        val receiverPhone = PhoneUtils.cleanPhoneNumber(call.receiverPhone)
+        val receiverSuffix = call.receiverSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(receiverPhone) }
+
+        val callType = try { CallType.valueOf(call.callType.uppercase()) } catch (e: Exception) { CallType.VIDEO }
+        val status = call.status.uppercase()
+        val roomID = call.roomId.ifBlank { call.id }
 
         val isMeCaller = (myUid.isNotBlank() && myUid != "self" && callerUid == myUid) ||
                 (mySuffix.isNotBlank() && callerSuffix.isNotBlank() && callerSuffix == mySuffix) ||
@@ -563,49 +586,44 @@ class ZegoCallEngineManager(private val context: Context) {
                 (myPhone.isNotBlank() && receiverPhone.isNotBlank() && receiverPhone == myPhone)
         )
 
+        Log.d(TAG, "handleActiveCallSignal: id=${call.id}, status=$status, isMeCaller=$isMeCaller, isMeReceiver=$isMeReceiver")
+
         when (status) {
-            "CALLING", "RINGING" -> {
+            "CALLING" -> {
                 if (isMeReceiver && !isMeCaller) {
                     val currentState = _callState.value.state
                     if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING || currentState == CallState.ACTIVE) {
-                        Log.d(TAG, "Ignoring incoming call doc: already in active/outgoing call ($currentState)")
+                        Log.d(TAG, "User is busy in existing call ($currentState), updating status to BUSY")
+                        scope.launch(Dispatchers.IO) {
+                            SupabaseCallService.updateActiveCallStatus(call.id, "BUSY")
+                        }
                         return
                     }
 
-                    val callTimestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
-                    val callAgeMs = System.currentTimeMillis() - callTimestamp
+                    val callCreatedMillis = SupabaseMessage.parseIsoTimestampToMillis(call.createdAt)
+                    val callAgeMs = if (callCreatedMillis > 0) System.currentTimeMillis() - callCreatedMillis else 0L
                     if (callAgeMs > 45_000L) {
                         Log.d(TAG, "Ignoring stale incoming call (age: ${callAgeMs}ms)")
-                        try {
-                            firestore?.collection("active_calls")?.document("user_$myUid")?.update("status", "MISSED")
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to update stale call status: ${e.localizedMessage}")
+                        scope.launch(Dispatchers.IO) {
+                            SupabaseCallService.updateActiveCallStatus(call.id, "MISSED")
                         }
                         return
                     }
 
-                    // Fire PEER_RINGING ACK back to caller instantly
-                    try {
-                        val ringingAck = mapOf("status" to "PEER_RINGING", "updatedAt" to System.currentTimeMillis())
-                        if (id.isNotBlank()) {
-                            firestore?.collection("active_calls")?.document(id)?.set(ringingAck, com.google.firebase.firestore.SetOptions.merge())
-                        }
-                        if (callerUid.isNotBlank()) {
-                            firestore?.collection("active_calls")?.document("user_$callerUid")?.set(ringingAck, com.google.firebase.firestore.SetOptions.merge())
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Error sending PEER_RINGING ACK: ${e.localizedMessage}")
+                    // Acknowledge ringing back to caller via Supabase
+                    scope.launch(Dispatchers.IO) {
+                        SupabaseCallService.updateActiveCallStatus(call.id, "RINGING")
                     }
 
                     if (currentState == CallState.IDLE || currentState == CallState.ENDED) {
                         callSoundManager.startIncomingRingtone()
                         val incomingCaller = FamilyMember(
                             id = if (callerSuffix.isNotBlank()) callerSuffix else callerUid,
-                            name = if (callerName.isNotBlank()) callerName else "Talkly User",
-                            phone = callerPhone,
+                            name = call.callerName.ifBlank { "Talkly User" },
+                            phone = call.callerPhone,
                             relation = "Family Member",
                             status = "Incoming call...",
-                            avatarUrl = if (callerAvatarUrl.isNotBlank()) callerAvatarUrl else null,
+                            avatarUrl = if (call.callerAvatarUrl.isNotBlank()) call.callerAvatarUrl else null,
                             isOnline = true,
                             firebaseUid = callerUid,
                             isRegisteredOnTalkly = true
@@ -617,14 +635,24 @@ class ZegoCallEngineManager(private val context: Context) {
                             roomID = roomID,
                             durationSeconds = 0
                         )
+
+                        com.family.talkly.service.CallForegroundService.startIncomingCallService(
+                            context = context,
+                            callerName = call.callerName.ifBlank { "Talkly User" },
+                            callerUid = callerUid,
+                            callerPhone = call.callerPhone,
+                            callerAvatar = call.callerAvatarUrl,
+                            roomId = roomID,
+                            callType = callType.name
+                        )
                     }
                 }
             }
-            "PEER_RINGING" -> {
+            "RINGING", "PEER_RINGING" -> {
                 if (isMeCaller) {
                     val currentState = _callState.value.state
                     if (currentState == CallState.OUTGOING_CALLING) {
-                        Log.d(TAG, "Recipient device received signal. Transitioning state to OUTGOING_RINGING")
+                        Log.d(TAG, "Recipient device ringing. Transitioning state to OUTGOING_RINGING")
                         _callState.value = _callState.value.copy(state = CallState.OUTGOING_RINGING)
                     }
                 }
@@ -655,7 +683,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     }
                 }
             }
-            "DECLINED" -> {
+            "REJECTED", "DECLINED" -> {
                 val currentState = _callState.value.state
                 if (currentState != CallState.IDLE && currentState != CallState.ENDED) {
                     if (isMeCaller) {
@@ -664,7 +692,16 @@ class ZegoCallEngineManager(private val context: Context) {
                     endCallInternal("Call Declined")
                 }
             }
-            "ENDED", "TIMED_OUT", "CANCELLED" -> {
+            "BUSY" -> {
+                val currentState = _callState.value.state
+                if (currentState != CallState.IDLE && currentState != CallState.ENDED) {
+                    if (isMeCaller) {
+                        android.widget.Toast.makeText(context, "User is busy", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    endCallInternal("User Busy")
+                }
+            }
+            "ENDED", "TIMED_OUT", "TIMEOUT", "MISSED", "CANCELLED" -> {
                 val currentState = _callState.value.state
                 if (currentState != CallState.IDLE && currentState != CallState.ENDED) {
                     endCallInternal("Call Ended")
@@ -694,7 +731,6 @@ class ZegoCallEngineManager(private val context: Context) {
         val targetUid = member.firebaseUid ?: if (!member.id.startsWith("contact_") && !member.id.contains(" ")) member.id else ""
         val targetPhone = member.phone
         val targetSuffix = PhoneUtils.extractPhoneSuffix(targetPhone)
-        val cleanReceiverPhone = PhoneUtils.cleanPhoneNumber(targetPhone)
 
         val combinedUserIds = listOf(callerProfile.uid, targetUid.ifBlank { targetSuffix }).filter { it.isNotBlank() }.sorted().joinToString("_")
         val roomID = "call_room_${combinedUserIds}"
@@ -724,48 +760,50 @@ class ZegoCallEngineManager(private val context: Context) {
         // Connect and publish stream early for outgoing call
         joinCallRoom(roomID, isVideo)
 
-        val callData = mapOf(
-            "id" to roomID,
-            "callerUid" to callerProfile.uid,
-            "callerName" to callerProfile.name,
-            "callerPhone" to callerProfile.phoneNumber,
-            "callerSuffix" to callerProfile.phoneSuffix,
-            "callerAvatarUrl" to callerProfile.profilePicUrl,
-            "receiverUid" to targetUid,
-            "receiverPhone" to targetPhone,
-            "receiverSuffix" to targetSuffix,
-            "callType" to callType.name,
-            "status" to "CALLING",
-            "roomID" to roomID,
-            "timestamp" to System.currentTimeMillis()
-        )
-
-        publishCallSignalToTargets(callerProfile, targetUid, targetSuffix, callData)
-
-        // Async resolution if targetUid was blank to ensure recipient receives call without delay
-        if (targetUid.isBlank() && targetSuffix.isNotBlank()) {
-            scope.launch {
-                try {
-                    firestore?.collection("users_phone_index")?.document(targetSuffix)?.get()
-                        ?.addOnSuccessListener { doc ->
-                            val foundUid = doc?.getString("uid") ?: doc?.getString("firebaseUid")
-                            if (!foundUid.isNullOrBlank()) {
-                                val updatedData = callData.toMutableMap().apply { put("receiverUid", foundUid) }
-                                publishCallSignalToTargets(callerProfile, foundUid, targetSuffix, updatedData)
-                            }
-                        }
-                    firestore?.collection("users")?.whereEqualTo("phoneSuffix", targetSuffix)?.get()
-                        ?.addOnSuccessListener { snap ->
-                            val foundUid = snap?.documents?.firstOrNull()?.id
-                            if (!foundUid.isNullOrBlank()) {
-                                val updatedData = callData.toMutableMap().apply { put("receiverUid", foundUid) }
-                                publishCallSignalToTargets(callerProfile, foundUid, targetSuffix, updatedData)
-                            }
-                        }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Async target lookup for call exception: ${e.localizedMessage}")
+        // Async resolve receiver UUID if needed and insert active_call row in Supabase
+        scope.launch(Dispatchers.IO) {
+            var resolvedTargetId = targetUid
+            if (resolvedTargetId.isBlank() || resolvedTargetId.startsWith("contact_")) {
+                val found = SupabaseMessagingService.resolveUserUuid(targetPhone) ?: SupabaseMessagingService.resolveUserUuid(targetSuffix)
+                if (!found.isNullOrBlank()) {
+                    resolvedTargetId = found
                 }
             }
+
+            val activeCall = SupabaseActiveCall(
+                id = roomID,
+                roomId = roomID,
+                callerId = callerProfile.uid,
+                callerName = callerProfile.name,
+                callerPhone = callerProfile.phoneNumber,
+                callerSuffix = callerProfile.phoneSuffix,
+                callerAvatarUrl = callerProfile.profilePicUrl,
+                receiverId = resolvedTargetId.ifBlank { null },
+                receiverPhone = targetPhone,
+                receiverSuffix = targetSuffix,
+                callType = callType.name,
+                status = "CALLING"
+            )
+
+            SupabaseCallService.createActiveCall(activeCall)
+
+            // Send high priority FCM push for incoming calls (for killed/background recipient)
+            val fcmPayload = mapOf(
+                "type" to "INCOMING_CALL",
+                "callerName" to callerProfile.name,
+                "callerUid" to callerProfile.uid,
+                "caller_id" to callerProfile.uid,
+                "callerPhone" to callerProfile.phoneNumber,
+                "callerAvatarUrl" to callerProfile.profilePicUrl,
+                "roomID" to roomID,
+                "callType" to callType.name,
+                "status" to "RINGING"
+            )
+            com.family.talkly.util.FcmTokenManager.sendHighPriorityPush(
+                targetUid = resolvedTargetId,
+                targetPhoneSuffix = targetSuffix,
+                dataPayload = fcmPayload
+            )
         }
 
         ringingTimeoutJob?.cancel()
@@ -777,76 +815,25 @@ class ZegoCallEngineManager(private val context: Context) {
                 Log.d(TAG, "Call timed out after 30s: ${member.name} is unavailable or unreachable")
                 android.widget.Toast.makeText(context, "${member.name} is unavailable / unreachable", android.widget.Toast.LENGTH_SHORT).show()
 
-                val timedOutData = callData.toMutableMap()
-                timedOutData["status"] = "UNAVAILABLE"
-                publishCallSignalToTargets(callerProfile, targetUid, targetSuffix, timedOutData)
+                scope.launch(Dispatchers.IO) {
+                    SupabaseCallService.updateActiveCallStatus(roomID, "TIMEOUT")
+                }
 
                 sendMissedCallMessageOnce(member, callType, roomID)
 
-                addCallLog(
-                    CallLog(
-                        id = "call_${System.currentTimeMillis()}",
-                        memberId = member.id,
-                        memberName = member.name,
-                        direction = CallDirection.OUTGOING,
-                        callType = callType,
-                        timestamp = System.currentTimeMillis(),
-                        durationSeconds = 0
-                    )
+                val callLog = CallLog(
+                    id = "call_${System.currentTimeMillis()}",
+                    memberId = member.id,
+                    memberName = member.name,
+                    direction = CallDirection.OUTGOING,
+                    callType = callType,
+                    timestamp = System.currentTimeMillis(),
+                    durationSeconds = 0
                 )
+                addCallLog(callLog)
 
                 endCallInternal("No Answer")
             }
-        }
-    }
-
-    private fun publishCallSignalToTargets(
-        callerProfile: UserProfile,
-        targetUid: String,
-        targetSuffix: String,
-        data: Map<String, Any>
-    ) {
-        try {
-            val db = firestore ?: return
-            val receiverPhone = data["receiverPhone"] as? String ?: ""
-            val cleanReceiverPhone = PhoneUtils.cleanPhoneNumber(receiverPhone)
-            val roomID = data["roomID"] as? String ?: (data["id"] as? String ?: "")
-
-            if (roomID.isNotBlank()) {
-                db.collection("active_calls").document(roomID).set(data)
-            }
-            if (targetUid.isNotBlank() && targetUid != "self") {
-                db.collection("active_calls").document("user_$targetUid").set(data)
-            }
-            if (targetSuffix.isNotBlank() && targetSuffix != targetUid) {
-                db.collection("active_calls").document("user_$targetSuffix").set(data)
-            }
-            if (cleanReceiverPhone.isNotBlank() && cleanReceiverPhone != targetUid && cleanReceiverPhone != targetSuffix) {
-                db.collection("active_calls").document("user_$cleanReceiverPhone").set(data)
-            }
-
-            // Send high priority FCM push for incoming calls
-            val status = data["status"] as? String ?: ""
-            if (status.equals("RINGING", ignoreCase = true) || status.equals("CALLING", ignoreCase = true)) {
-                val fcmPayload = mapOf(
-                    "type" to "INCOMING_CALL",
-                    "callerName" to callerProfile.name,
-                    "callerUid" to callerProfile.uid,
-                    "caller_id" to callerProfile.uid,
-                    "callerPhone" to callerProfile.phoneNumber,
-                    "callerAvatarUrl" to callerProfile.profilePicUrl,
-                    "roomID" to (data["roomID"] as? String ?: ""),
-                    "callType" to (data["callType"] as? String ?: "VIDEO"),
-                    "status" to "RINGING"
-                )
-                com.family.talkly.util.FcmTokenManager.sendHighPriorityPush(
-                    targetUid = targetUid,
-                    targetPhoneSuffix = targetSuffix,
-                    dataPayload = fcmPayload
-                )
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error publishing call signal to Firestore: ${e.localizedMessage}")
         }
     }
 
@@ -864,35 +851,6 @@ class ZegoCallEngineManager(private val context: Context) {
             roomID = roomID,
             durationSeconds = 0
         )
-    }
-
-    private fun publishCallUpdateToTargets(
-        callerProfile: UserProfile,
-        targetUid: String,
-        targetSuffix: String,
-        newStatus: String
-    ) {
-        try {
-            val db = firestore ?: return
-            val updateMap = mapOf<String, Any>(
-                "status" to newStatus,
-                "timestamp" to System.currentTimeMillis()
-            )
-            if (targetUid.isNotBlank() && targetUid != "self") {
-                db.collection("active_calls").document("user_$targetUid").set(updateMap, SetOptions.merge())
-            }
-            if (targetSuffix.isNotBlank() && targetSuffix != targetUid) {
-                db.collection("active_calls").document("user_$targetSuffix").set(updateMap, SetOptions.merge())
-            }
-            if (callerProfile.uid.isNotBlank() && callerProfile.uid != "self") {
-                db.collection("active_calls").document("user_${callerProfile.uid}").set(updateMap, SetOptions.merge())
-            }
-            if (callerProfile.phoneSuffix.isNotBlank() && callerProfile.phoneSuffix != callerProfile.uid) {
-                db.collection("active_calls").document("user_${callerProfile.phoneSuffix}").set(updateMap, SetOptions.merge())
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error updating call status in Firestore: ${e.localizedMessage}")
-        }
     }
 
     fun triggerIncomingCall(member: FamilyMember, callType: CallType) {
@@ -935,15 +893,13 @@ class ZegoCallEngineManager(private val context: Context) {
         callSoundManager.stopAllSounds()
         val current = _callState.value
         val member = current.targetMember
-        val myProfile = currentUserProfile ?: getLocalUserProfile()
-
-        val targetUid = member?.firebaseUid ?: if (!member?.id.orEmpty().startsWith("contact_")) member?.id.orEmpty() else ""
-        val targetSuffix = PhoneUtils.extractPhoneSuffix(member?.phone ?: "")
 
         val isVideo = (current.callType == CallType.VIDEO)
         callSoundManager.configureAudioForActiveCall(isSpeakerOn = isVideo, isMuted = current.isMuted)
 
-        publishCallUpdateToTargets(myProfile, targetUid, targetSuffix, "ACCEPTED")
+        scope.launch(Dispatchers.IO) {
+            SupabaseCallService.updateActiveCallStatus(current.roomID, "ACCEPTED")
+        }
 
         lastMissedCallSessionId = current.roomID
         _callState.value = current.copy(state = CallState.ACTIVE, isSpeakerOn = isVideo, isOutgoing = false)
@@ -967,26 +923,23 @@ class ZegoCallEngineManager(private val context: Context) {
         callSoundManager.stopAllSounds()
         val current = _callState.value
         val member = current.targetMember
-        val myProfile = currentUserProfile ?: getLocalUserProfile()
 
-        val targetUid = member?.firebaseUid ?: if (!member?.id.orEmpty().startsWith("contact_")) member?.id.orEmpty() else ""
-        val targetSuffix = PhoneUtils.extractPhoneSuffix(member?.phone ?: "")
-
-        publishCallUpdateToTargets(myProfile, targetUid, targetSuffix, "DECLINED")
+        scope.launch(Dispatchers.IO) {
+            SupabaseCallService.updateActiveCallStatus(current.roomID, "REJECTED")
+        }
 
         if (member != null) {
             sendMissedCallMessageOnce(member, current.callType, current.roomID)
-            addCallLog(
-                CallLog(
-                    id = "call_${System.currentTimeMillis()}",
-                    memberId = member.id,
-                    memberName = member.name,
-                    direction = CallDirection.MISSED,
-                    callType = current.callType,
-                    timestamp = System.currentTimeMillis(),
-                    durationSeconds = 0
-                )
+            val callLog = CallLog(
+                id = "call_${System.currentTimeMillis()}",
+                memberId = member.id,
+                memberName = member.name,
+                direction = CallDirection.MISSED,
+                callType = current.callType,
+                timestamp = System.currentTimeMillis(),
+                durationSeconds = 0
             )
+            addCallLog(callLog)
         }
         endCallInternal("Call Declined")
     }
@@ -1001,33 +954,31 @@ class ZegoCallEngineManager(private val context: Context) {
         callSoundManager.stopAllSounds()
         val current = _callState.value
         val member = current.targetMember
-        val myProfile = currentUserProfile ?: getLocalUserProfile()
 
-        val targetUid = member?.firebaseUid ?: if (!member?.id.orEmpty().startsWith("contact_")) member?.id.orEmpty() else ""
-        val targetSuffix = PhoneUtils.extractPhoneSuffix(member?.phone ?: "")
-
-        publishCallUpdateToTargets(myProfile, targetUid, targetSuffix, "ENDED")
+        scope.launch(Dispatchers.IO) {
+            SupabaseCallService.updateActiveCallStatus(current.roomID, "ENDED")
+        }
         lastMissedCallSessionId = current.roomID
 
         if (member != null) {
             val isOutgoing = current.isOutgoing || current.state == CallState.OUTGOING_RINGING || current.state == CallState.OUTGOING_CALLING
             val direction = if (isOutgoing) CallDirection.OUTGOING else CallDirection.INCOMING
-            addCallLog(
-                CallLog(
-                    id = "call_${System.currentTimeMillis()}",
-                    memberId = member.id,
-                    memberName = member.name,
-                    direction = direction,
-                    callType = current.callType,
-                    timestamp = System.currentTimeMillis(),
-                    durationSeconds = current.durationSeconds
-                )
+            val callLog = CallLog(
+                id = "call_${System.currentTimeMillis()}",
+                memberId = member.id,
+                memberName = member.name,
+                direction = direction,
+                callType = current.callType,
+                timestamp = System.currentTimeMillis(),
+                durationSeconds = current.durationSeconds
             )
+            addCallLog(callLog)
         }
         endCallInternal("Call Ended")
     }
 
     private fun endCallInternal(reason: String) {
+        val currentRoom = _callState.value.roomID
         ringingTimeoutJob?.cancel()
         timerJob?.cancel()
         try {
@@ -1040,16 +991,15 @@ class ZegoCallEngineManager(private val context: Context) {
         leaveCallRoom()
         _callState.value = _callState.value.copy(state = CallState.ENDED)
 
-        val profile = currentUserProfile ?: getLocalUserProfile()
-        try {
-            if (profile.uid.isNotBlank() && profile.uid != "self") {
-                firestore?.collection("active_calls")?.document("user_${profile.uid}")?.delete()
+        // Delete active call row from Supabase
+        scope.launch(Dispatchers.IO) {
+            try {
+                if (currentRoom.isNotBlank()) {
+                    SupabaseCallService.deleteActiveCall(currentRoom)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error deleting active call from Supabase: ${e.localizedMessage}")
             }
-            if (profile.phoneSuffix.isNotBlank()) {
-                firestore?.collection("active_calls")?.document("user_${profile.phoneSuffix}")?.delete()
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error clearing active call document: ${e.localizedMessage}")
         }
 
         scope.launch {
@@ -1105,5 +1055,38 @@ class ZegoCallEngineManager(private val context: Context) {
         list.add(0, log)
         _callLogs.value = list
         onCallLogAdded?.invoke(log)
+
+        // Persist call log in Supabase
+        val profile = currentUserProfile ?: getLocalUserProfile()
+        if (profile.uid.isNotBlank() && profile.uid != "self") {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    var peerUid = log.memberId
+                    if (peerUid.startsWith("contact_") || peerUid.contains(" ")) {
+                        val member = _callState.value.targetMember
+                        if (member != null && !member.firebaseUid.isNullOrBlank()) {
+                            peerUid = member.firebaseUid!!
+                        } else {
+                            val resolved = SupabaseMessagingService.resolveUserUuid(peerUid)
+                            if (resolved != null) peerUid = resolved
+                        }
+                    }
+
+                    val supabaseLog = SupabaseCallLog(
+                        id = log.id,
+                        userId = profile.uid,
+                        peerId = if (peerUid.isNotBlank() && !peerUid.startsWith("contact_")) peerUid else null,
+                        peerName = log.memberName,
+                        direction = log.direction.name,
+                        callType = log.callType.name,
+                        durationSeconds = log.durationSeconds,
+                        createdAt = SupabaseMessage.millisToIsoTimestamp(log.timestamp)
+                    )
+                    SupabaseCallService.insertCallLog(supabaseLog)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error persisting call log in Supabase: ${e.localizedMessage}")
+                }
+            }
+        }
     }
 }
