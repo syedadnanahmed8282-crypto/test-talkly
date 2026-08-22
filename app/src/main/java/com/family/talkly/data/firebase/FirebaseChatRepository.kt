@@ -1977,15 +1977,30 @@ class FirebaseChatRepository(private val context: Context) {
                 )
 
                 val sendSuccess = SupabaseMessagingService.sendMessage(supabaseMessage)
-                if (sendSuccess) {
-                    updateMessagePendingState(newMessage.id, false)
-                    try {
-                        database.chatMessageDao().updatePendingStatus(newMessage.id, false)
-                    } catch (e: Exception) {}
+            if (sendSuccess) {
+                updateMessagePendingState(newMessage.id, false)
+                try {
+                    database.chatMessageDao().updatePendingStatus(newMessage.id, false)
+                } catch (e: Exception) {}
+            } else {
+                withContext(Dispatchers.Main) {
+                    android.app.AlertDialog.Builder(context)
+                        .setTitle("DEBUG: sendMessage failed")
+                        .setMessage("sender=$resolvedSenderUid\nreceiver=$resolvedReceiverUuid\nconvId=$conversationId")
+                        .setPositiveButton("OK", null)
+                        .show()
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error sending message to Supabase: ${e.localizedMessage}")
             }
+        } catch (e: Exception) {
+            withContext(Dispatchers.Main) {
+                android.app.AlertDialog.Builder(context)
+                    .setTitle("DEBUG: sendMessage exception")
+                    .setMessage(e.localizedMessage ?: "unknown error")
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+            Log.e(TAG, "Error sending message to Supabase: ${e.localizedMessage}")
+        }
         }
 
         // Send high priority FCM push notification to recipient
