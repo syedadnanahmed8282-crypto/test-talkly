@@ -1916,7 +1916,8 @@ class FirebaseChatRepository(private val context: Context) {
         replyToMessageId: String? = null,
         replyToSenderName: String? = null,
         replyToText: String? = null,
-        explicitSenderUid: String? = null
+        explicitSenderUid: String? = null,
+        explicitMessageId: String? = null
     ) {
         val canonicalId = getCanonicalMemberId(memberId)
 
@@ -1945,7 +1946,7 @@ class FirebaseChatRepository(private val context: Context) {
         val isOnline = _isNetworkConnected.value
 
         val newMessage = ChatMessage(
-            id = java.util.UUID.randomUUID().toString(),
+            id = explicitMessageId?.takeIf { it.isNotBlank() } ?: java.util.UUID.randomUUID().toString(),
             senderId = senderUid,
             senderName = senderName,
             receiverId = canonicalId,
@@ -2014,6 +2015,8 @@ class FirebaseChatRepository(private val context: Context) {
                     resolvedSenderId = resolvedSenderUuid,
                     resolvedReceiverId = resolvedReceiverUuid
                 )
+
+                Log.e(TAG, "DEBUG_BEFORE_SENDMSG: resolvedSenderUuid='$resolvedSenderUuid', resolvedReceiverUuid='$resolvedReceiverUuid', conversationId='$conversationId', canonicalId='$canonicalId', targetLookupKey='$targetLookupKey', memberId='$memberId'")
 
                 val sendSuccess = SupabaseMessagingService.sendMessage(supabaseMessage)
                 if (sendSuccess) {

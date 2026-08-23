@@ -178,7 +178,8 @@ class MediaUploadWorker(
                 replyToSenderName = replyToName,
                 replyToText = replyToText,
                 forcedTimestamp = System.currentTimeMillis(),
-                explicitSenderUid = senderUid.ifBlank { null }
+                explicitSenderUid = senderUid.ifBlank { null },
+                explicitMessageId = messageId
             )
 
             val updatedEntity = dao.getMessageById(messageId)?.copy(
