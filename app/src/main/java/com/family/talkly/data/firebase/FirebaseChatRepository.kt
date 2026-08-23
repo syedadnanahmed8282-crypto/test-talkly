@@ -1920,7 +1920,7 @@ class FirebaseChatRepository(private val context: Context) {
         val isOnline = _isNetworkConnected.value
 
         val newMessage = ChatMessage(
-            id = "msg_${System.currentTimeMillis()}",
+            id = java.util.UUID.randomUUID().toString(),
             senderId = senderUid,
             senderName = senderName,
             receiverId = canonicalId,
