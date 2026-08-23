@@ -1983,23 +1983,24 @@ class FirebaseChatRepository(private val context: Context) {
                     database.chatMessageDao().updatePendingStatus(newMessage.id, false)
                 } catch (e: Exception) {}
             } else {
+                Log.e(TAG, "DEBUG_SENDMSG_FAILED sender=$resolvedSenderUuid receiver=$resolvedReceiverUuid convId=$conversationId")
                 withContext(Dispatchers.Main) {
-                    android.app.AlertDialog.Builder(context)
-                        .setTitle("DEBUG: sendMessage failed")
-                        .setMessage("sender=$resolvedSenderUuid\nreceiver=$resolvedReceiverUuid\nconvId=$conversationId")
-                        .setPositiveButton("OK", null)
-                        .show()
+                    android.widget.Toast.makeText(
+                        context.applicationContext,
+                        "DEBUG FAILED\nsender=$resolvedSenderUuid\nreceiver=$resolvedReceiverUuid\nconv=$conversationId",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         } catch (e: Exception) {
+            Log.e(TAG, "DEBUG_SENDMSG_EXCEPTION message=${e.message} localizedMessage=${e.localizedMessage} class=${e.javaClass.simpleName}", e)
             withContext(Dispatchers.Main) {
-                android.app.AlertDialog.Builder(context)
-                    .setTitle("DEBUG: sendMessage exception")
-                    .setMessage(e.localizedMessage ?: "unknown error")
-                    .setPositiveButton("OK", null)
-                    .show()
+                android.widget.Toast.makeText(
+                    context.applicationContext,
+                    "DEBUG EXCEPTION: ${e.javaClass.simpleName}: ${e.localizedMessage}",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
             }
-            Log.e(TAG, "Error sending message to Supabase: ${e.localizedMessage}")
         }
         }
 
