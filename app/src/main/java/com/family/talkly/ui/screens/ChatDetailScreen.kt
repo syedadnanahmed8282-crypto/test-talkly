@@ -365,6 +365,10 @@ fun ChatDetailScreen(
         val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository(context)
         val canonicalId = chatRepo.getCanonicalMemberId(member.id)
 
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val currentUid = sessionPrefs.getString("user_uid", null)
+        val currentName = sessionPrefs.getString("user_name", null)
+
         com.family.talkly.util.MediaUploadManager.enqueueMediaUpload(
             context = context,
             messageId = tempId,
@@ -373,6 +377,8 @@ fun ChatDetailScreen(
             messageType = messageType,
             localMediaUrl = localMediaUrl,
             textContent = textContent,
+            senderUid = currentUid,
+            senderName = currentName,
             replyToId = replyId,
             replyToName = replyName,
             replyToText = replyText
@@ -2148,6 +2154,8 @@ fun ChatDetailScreen(
                                                                         messageId = msg.id,
                                                                         chatKey = canonicalId,
                                                                         recipientId = member.id,
+                                                                        senderUid = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE).getString("user_uid", null),
+                                                                        senderName = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE).getString("user_name", null),
                                                                         messageType = msg.messageType,
                                                                         localMediaUrl = msg.mediaUrl,
                                                                         textContent = msg.textContent,

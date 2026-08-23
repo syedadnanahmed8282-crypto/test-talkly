@@ -174,10 +174,13 @@ object SupabaseCallService {
     suspend fun createCallsRealtimeChannel(
         currentUserId: String,
         coroutineScope: CoroutineScope,
-        onCallAction: (PostgresAction) -> Unit
+        onCallAction: (PostgresAction) -> Unit,
+        onStatusChange: ((RealtimeChannel.Status) -> Unit)? = null
     ): RealtimeChannel? = withContext(Dispatchers.IO) {
         if (currentUserId.isBlank() || currentUserId == "self") return@withContext null
         try {
+            SupabaseClientProvider.client.realtime.connect()
+
             val channelName = "calls-user-$currentUserId"
             val channel = SupabaseClientProvider.client.realtime.channel(channelName)
 
@@ -189,8 +192,15 @@ object SupabaseCallService {
                 onCallAction(action)
             }.launchIn(coroutineScope)
 
-            channel.subscribe()
-            Log.i(TAG, "Subscribed to Supabase Realtime Calls channel: $channelName")
+            if (onStatusChange != null) {
+                channel.status.onEach { status ->
+                    Log.d(TAG, "Realtime Calls channel $channelName status changed: $status")
+                    onStatusChange(status)
+                }.launchIn(coroutineScope)
+            }
+
+            channel.subscribe(blockUntilSubscribed = true)
+            Log.i(TAG, "Subscribed to Supabase Realtime Calls channel: $channelName, status=${channel.status.value}")
             channel
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create Supabase Realtime Calls channel: ${e.localizedMessage}", e)

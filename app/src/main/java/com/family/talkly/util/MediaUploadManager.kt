@@ -28,6 +28,8 @@ object MediaUploadManager {
         messageType: MessageType,
         localMediaUrl: String,
         textContent: String = "",
+        senderUid: String? = null,
+        senderName: String? = null,
         replyToId: String? = null,
         replyToName: String? = null,
         replyToText: String? = null
@@ -35,6 +37,17 @@ object MediaUploadManager {
         val appContext = context.applicationContext
 
         CoroutineScope(Dispatchers.IO).launch {
+            val sessionPrefs = appContext.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+            val fallbackPrefs = appContext.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+            val effectiveSenderUid = senderUid
+                ?: sessionPrefs.getString("user_uid", null)
+                ?: fallbackPrefs.getString("user_uid", null)
+                ?: "self"
+            val effectiveSenderName = senderName
+                ?: sessionPrefs.getString("user_name", null)
+                ?: fallbackPrefs.getString("user_name", null)
+                ?: "You"
+
             val db = TalklyDatabase.getInstance(appContext)
             val dao = db.chatMessageDao()
 
@@ -43,8 +56,8 @@ object MediaUploadManager {
                 val entity = ChatMessageEntity(
                     id = messageId,
                     chatKey = chatKey,
-                    senderId = "self",
-                    senderName = "You",
+                    senderId = effectiveSenderUid,
+                    senderName = effectiveSenderName,
                     receiverId = recipientId,
                     messageType = messageType.name,
                     textContent = textContent,
@@ -74,6 +87,8 @@ object MediaUploadManager {
                 .putString("message_id", messageId)
                 .putString("chat_key", chatKey)
                 .putString("recipient_id", recipientId)
+                .putString("sender_uid", effectiveSenderUid)
+                .putString("sender_name", effectiveSenderName)
                 .putString("message_type", messageType.name)
                 .putString("local_media_url", localMediaUrl)
                 .putString("text_content", textContent)

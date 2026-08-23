@@ -35,6 +35,8 @@ class MediaUploadWorker(
         val messageId = inputData.getString("message_id") ?: return@withContext Result.failure()
         val chatKey = inputData.getString("chat_key") ?: return@withContext Result.failure()
         val recipientId = inputData.getString("recipient_id") ?: ""
+        val senderUid = inputData.getString("sender_uid") ?: ""
+        val senderName = inputData.getString("sender_name") ?: ""
         val typeStr = inputData.getString("message_type") ?: MessageType.VIDEO.name
         val localMediaUrl = inputData.getString("local_media_url") ?: return@withContext Result.failure()
         val textContent = inputData.getString("text_content") ?: ""
@@ -168,7 +170,8 @@ class MediaUploadWorker(
                 replyToMessageId = replyToId,
                 replyToSenderName = replyToName,
                 replyToText = replyToText,
-                forcedTimestamp = System.currentTimeMillis()
+                forcedTimestamp = System.currentTimeMillis(),
+                explicitSenderUid = senderUid.ifBlank { null }
             )
 
             val updatedEntity = dao.getMessageById(messageId)?.copy(

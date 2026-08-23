@@ -53,6 +53,7 @@ import com.family.talkly.data.supabase.SupabaseContact
 import com.family.talkly.data.supabase.SupabaseStatus
 import com.family.talkly.data.supabase.toSupabaseContact
 
+import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.realtime.PostgresAction
 import io.github.jan.supabase.realtime.RealtimeChannel
@@ -86,6 +87,7 @@ class FirebaseChatRepository(private val context: Context) {
 
     private var supabaseRealtimeChannel: RealtimeChannel? = null
     private var currentSyncedUserId: String? = null
+    private var messageSyncJob: Job? = null
     private val contactPrefs = context.getSharedPreferences(CONTACTS_PREFS, Context.MODE_PRIVATE)
     private val database: TalklyDatabase by lazy { TalklyDatabase.getInstance(context) }
     private val socialService: SupabaseSocialService by lazy { SupabaseSocialService.getInstance(context) }
@@ -1414,18 +1416,28 @@ class FirebaseChatRepository(private val context: Context) {
 
     fun startRealtimeMessageSync(currentUserId: String?) {
         if (currentUserId.isNullOrBlank()) return
-        if (currentSyncedUserId == currentUserId && supabaseRealtimeChannel != null) return
-
-        repositoryScope.launch(Dispatchers.IO) {
-            SupabaseMessagingService.unsubscribeChannel(supabaseRealtimeChannel)
-            supabaseRealtimeChannel = null
+        val isChannelActive = supabaseRealtimeChannel != null && supabaseRealtimeChannel?.status?.value == RealtimeChannel.Status.SUBSCRIBED
+        if (currentSyncedUserId == currentUserId && isChannelActive) {
+            Log.d(TAG, "startRealtimeMessageSync: Channel already active for $currentUserId")
+            return
         }
 
         currentSyncedUserId = currentUserId
         isInitialMessageSyncDone = false
 
-        // Fetch recent messages from Supabase Postgrest to initialize local DB & state
-        repositoryScope.launch(Dispatchers.IO) {
+        messageSyncJob?.cancel()
+        messageSyncJob = repositoryScope.launch(Dispatchers.IO) {
+            // 1. Cleanly unsubscribe and clear any previous channel sequentially
+            try {
+                if (supabaseRealtimeChannel != null) {
+                    SupabaseMessagingService.unsubscribeChannel(supabaseRealtimeChannel)
+                    supabaseRealtimeChannel = null
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error cleaning previous realtime channel: ${e.localizedMessage}")
+            }
+
+            // 2. Fetch recent messages from Supabase PostgREST to initialize local DB & state
             try {
                 val recentSupabaseMessages = SupabaseMessagingService.fetchRecentMessagesForUser(currentUserId, limit = 200)
                 if (recentSupabaseMessages.isNotEmpty()) {
@@ -1454,10 +1466,8 @@ class FirebaseChatRepository(private val context: Context) {
                 Log.w(TAG, "Error performing initial Supabase message fetch: ${e.localizedMessage}")
                 isInitialMessageSyncDone = true
             }
-        }
 
-        // Connect Supabase Realtime Channel
-        repositoryScope.launch(Dispatchers.IO) {
+            // 3. Connect Supabase Realtime Channel with auto-reconnect listener
             try {
                 supabaseRealtimeChannel = SupabaseMessagingService.createMessagingRealtimeChannel(
                     currentUserId = currentUserId,
@@ -1467,6 +1477,18 @@ class FirebaseChatRepository(private val context: Context) {
                     },
                     onRequestAction = { action ->
                         handleIncomingSupabaseRequestAction(action, currentUserId)
+                    },
+                    onStatusChange = { status ->
+                        if (status == RealtimeChannel.Status.UNSUBSCRIBED) {
+                            Log.w(TAG, "Messaging channel disconnected (status=$status). Reconnecting in 3s...")
+                            repositoryScope.launch(Dispatchers.IO) {
+                                delay(3000)
+                                if (currentSyncedUserId == currentUserId &&
+                                    supabaseRealtimeChannel?.status?.value != RealtimeChannel.Status.SUBSCRIBED) {
+                                    startRealtimeMessageSync(currentUserId)
+                                }
+                            }
+                        }
                     }
                 )
             } catch (e: Exception) {
@@ -1893,7 +1915,8 @@ class FirebaseChatRepository(private val context: Context) {
         forcedTimestamp: Long = System.currentTimeMillis(),
         replyToMessageId: String? = null,
         replyToSenderName: String? = null,
-        replyToText: String? = null
+        replyToText: String? = null,
+        explicitSenderUid: String? = null
     ) {
         val canonicalId = getCanonicalMemberId(memberId)
 
@@ -1906,7 +1929,9 @@ class FirebaseChatRepository(private val context: Context) {
         val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
         val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
 
-        val senderUid = currentSyncedUserId
+        val senderUid = explicitSenderUid?.takeIf { it.isNotBlank() }
+            ?: currentSyncedUserId
+            ?: com.family.talkly.data.supabase.SupabaseClientProvider.client.auth.currentUserOrNull()?.id
             ?: sessionPrefs.getString("user_uid", null)
             ?: fallbackPrefs.getString("user_uid", null)
             ?: "self"
@@ -1961,13 +1986,27 @@ class FirebaseChatRepository(private val context: Context) {
         // Send via Supabase Postgrest
         repositoryScope.launch(Dispatchers.IO) {
             try {
-                val resolvedSenderUuid = SupabaseMessagingService.resolveUserUuid(senderUid) ?: senderUid
+                val resolvedSenderUuid = SupabaseMessagingService.resolveUserUuid(senderUid)
+                    ?: com.family.talkly.data.supabase.SupabaseClientProvider.client.auth.currentUserOrNull()?.id
+                    ?: sessionPrefs.getString("user_uid", null)
+                    ?: fallbackPrefs.getString("user_uid", null)
+                    ?: ""
+
                 val targetLookupKey = when {
                     !targetMember?.firebaseUid.isNullOrBlank() -> targetMember!!.firebaseUid!!
                     targetPhone.isNotBlank() -> targetPhone
                     else -> canonicalId
                 }
-                val resolvedReceiverUuid = SupabaseMessagingService.resolveUserUuid(targetLookupKey) ?: targetLookupKey
+                val resolvedReceiverUuid = SupabaseMessagingService.resolveUserUuid(targetLookupKey)
+                    ?: SupabaseMessagingService.resolveUserUuid(memberId)
+                    ?: SupabaseMessagingService.resolveUserUuid(canonicalId)
+                    ?: ""
+
+                if (resolvedSenderUuid.isBlank() || resolvedReceiverUuid.isBlank()) {
+                    Log.w(TAG, "Cannot send message to Supabase: invalid UUID (sender='$resolvedSenderUuid', receiver='$resolvedReceiverUuid')")
+                    return@launch
+                }
+
                 val conversationId = SupabaseMessagingService.getOrCreateConversationId(resolvedSenderUuid, resolvedReceiverUuid)
 
                 val supabaseMessage = newMessage.toSupabaseMessage(
@@ -1977,31 +2016,17 @@ class FirebaseChatRepository(private val context: Context) {
                 )
 
                 val sendSuccess = SupabaseMessagingService.sendMessage(supabaseMessage)
-            if (sendSuccess) {
-                updateMessagePendingState(newMessage.id, false)
-                try {
-                    database.chatMessageDao().updatePendingStatus(newMessage.id, false)
-                } catch (e: Exception) {}
-            } else {
-                Log.e(TAG, "DEBUG_SENDMSG_FAILED sender=$resolvedSenderUuid receiver=$resolvedReceiverUuid convId=$conversationId")
-                withContext(Dispatchers.Main) {
-                    android.widget.Toast.makeText(
-                        context.applicationContext,
-                        "DEBUG FAILED\nsender=$resolvedSenderUuid\nreceiver=$resolvedReceiverUuid\nconv=$conversationId",
-                        android.widget.Toast.LENGTH_LONG
-                    ).show()
+                if (sendSuccess) {
+                    updateMessagePendingState(newMessage.id, false)
+                    try {
+                        database.chatMessageDao().updatePendingStatus(newMessage.id, false)
+                    } catch (e: Exception) {}
+                } else {
+                    Log.e(TAG, "DEBUG_SENDMSG_FAILED sender=$resolvedSenderUuid receiver=$resolvedReceiverUuid convId=$conversationId")
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "DEBUG_SENDMSG_EXCEPTION message=${e.message} localizedMessage=${e.localizedMessage} class=${e.javaClass.simpleName}", e)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "DEBUG_SENDMSG_EXCEPTION message=${e.message} localizedMessage=${e.localizedMessage} class=${e.javaClass.simpleName}", e)
-            withContext(Dispatchers.Main) {
-                android.widget.Toast.makeText(
-                    context.applicationContext,
-                    "DEBUG EXCEPTION: ${e.javaClass.simpleName}: ${e.localizedMessage}",
-                    android.widget.Toast.LENGTH_LONG
-                ).show()
-            }
-        }
         }
 
         // Send high priority FCM push notification to recipient

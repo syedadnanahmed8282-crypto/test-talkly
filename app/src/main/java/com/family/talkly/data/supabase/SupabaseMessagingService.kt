@@ -1,6 +1,7 @@
 package com.family.talkly.data.supabase
 
 import android.util.Log
+import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.realtime.PostgresAction
@@ -39,6 +40,13 @@ object SupabaseMessagingService {
 
     suspend fun resolveUserUuid(identifier: String): String? = withContext(Dispatchers.IO) {
         if (identifier.isBlank()) return@withContext null
+        if (identifier == "self") {
+            val currentAuthUid = SupabaseClientProvider.client.auth.currentUserOrNull()?.id
+            if (!currentAuthUid.isNullOrBlank()) {
+                resolvedUuidCache["self"] = currentAuthUid
+                return@withContext currentAuthUid
+            }
+        }
         if (resolvedUuidCache.containsKey(identifier)) {
             return@withContext resolvedUuidCache[identifier]
         }
@@ -526,7 +534,8 @@ object SupabaseMessagingService {
         currentUserId: String,
         coroutineScope: CoroutineScope,
         onMessageAction: (PostgresAction) -> Unit,
-        onRequestAction: (PostgresAction) -> Unit
+        onRequestAction: (PostgresAction) -> Unit,
+        onStatusChange: ((RealtimeChannel.Status) -> Unit)? = null
     ): RealtimeChannel? = withContext(Dispatchers.IO) {
         try {
             SupabaseClientProvider.client.realtime.connect()
@@ -549,6 +558,13 @@ object SupabaseMessagingService {
             requestsFlow.onEach { action ->
                 onRequestAction(action)
             }.launchIn(coroutineScope)
+
+            if (onStatusChange != null) {
+                channel.status.onEach { status ->
+                    Log.d(TAG, "Realtime channel $channelName status changed: $status")
+                    onStatusChange(status)
+                }.launchIn(coroutineScope)
+            }
 
             channel.subscribe(blockUntilSubscribed = true)
             Log.i(TAG, "Subscribed to Supabase Realtime channel: $channelName, status=${channel.status.value}")

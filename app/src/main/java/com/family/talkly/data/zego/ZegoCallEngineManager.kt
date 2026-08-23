@@ -38,6 +38,7 @@ import io.github.jan.supabase.realtime.RealtimeChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -137,6 +138,7 @@ class ZegoCallEngineManager(private val context: Context) {
     private var ringingTimeoutJob: Job? = null
     private var lastMissedCallSessionId: String? = null
     private val scope = CoroutineScope(Dispatchers.Main)
+    private val callScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     var onCallLogAdded: ((CallLog) -> Unit)? = null
 
     private fun sendMissedCallMessageOnce(targetMember: FamilyMember?, callType: CallType, roomId: String) {
@@ -476,13 +478,17 @@ class ZegoCallEngineManager(private val context: Context) {
 
         val uid = userProfile.uid
         if (uid.isBlank() || uid == "self") return
-        if (currentSyncedUserId == uid && callsRealtimeChannel != null) return
+        val isChannelActive = callsRealtimeChannel != null && callsRealtimeChannel?.status?.value == RealtimeChannel.Status.SUBSCRIBED
+        if (currentSyncedUserId == uid && isChannelActive) {
+            Log.d(TAG, "startRealtimeCallSync: Calls channel already active for $uid")
+            return
+        }
 
         callSyncJob?.cancel()
         currentSyncedUserId = uid
 
         // 1. Fetch persistent call history logs from Supabase
-        scope.launch(Dispatchers.IO) {
+        callScope.launch {
             try {
                 val logsResult = SupabaseCallService.fetchCallLogs(uid)
                 val logs = logsResult.getOrDefault(emptyList()).map { it.toCallLog() }
@@ -497,14 +503,30 @@ class ZegoCallEngineManager(private val context: Context) {
         }
 
         // 2. Subscribe to Supabase Realtime channel for active_calls
-        callSyncJob = scope.launch(Dispatchers.IO) {
+        callSyncJob = callScope.launch {
             try {
                 callsRealtimeChannel?.let { SupabaseCallService.unsubscribeChannel(it) }
                 callsRealtimeChannel = SupabaseCallService.createCallsRealtimeChannel(
                     currentUserId = uid,
-                    coroutineScope = this,
+                    coroutineScope = callScope,
                     onCallAction = { action ->
                         handleRealtimeCallAction(action)
+                    },
+                    onStatusChange = { status ->
+                        if (status == RealtimeChannel.Status.UNSUBSCRIBED) {
+                            Log.w(TAG, "Calls channel disconnected (status=$status). Reconnecting in 3s...")
+                            callScope.launch {
+                                delay(3000)
+                                if (currentSyncedUserId == uid &&
+                                    callsRealtimeChannel?.status?.value != RealtimeChannel.Status.SUBSCRIBED) {
+                                    currentUserProfile?.let { prof ->
+                                        chatRepository?.let { repo ->
+                                            startRealtimeCallSync(prof, repo)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 )
             } catch (e: Exception) {
