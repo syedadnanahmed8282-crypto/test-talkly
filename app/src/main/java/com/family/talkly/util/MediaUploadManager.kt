@@ -1,6 +1,8 @@
 package com.family.talkly.util
 
 import android.content.Context
+import android.net.Uri
+import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.Data
@@ -16,6 +18,8 @@ import com.family.talkly.worker.MediaUploadWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
 
 object MediaUploadManager {
@@ -51,6 +55,27 @@ object MediaUploadManager {
             val db = TalklyDatabase.getInstance(appContext)
             val dao = db.chatMessageDao()
 
+            // If localMediaUrl is a content:// URI, stage it immediately to app cache
+            // so background WorkManager never suffers from SecurityException / URI expiration
+            var stagingPath = localMediaUrl
+            if (localMediaUrl.startsWith("content://")) {
+                try {
+                    val uri = Uri.parse(localMediaUrl)
+                    val ext = if (messageType == MessageType.VIDEO) "mp4" else "jpg"
+                    val stagedFile = File(appContext.cacheDir, "staged_${messageId}.${ext}")
+                    appContext.contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(stagedFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    if (stagedFile.exists() && stagedFile.length() > 0) {
+                        stagingPath = stagedFile.absolutePath
+                    }
+                } catch (e: Exception) {
+                    Log.w("MediaUploadManager", "Could not stage content URI, passing original: ${e.localizedMessage}")
+                }
+            }
+
             val existing = dao.getMessageById(messageId)
             if (existing == null) {
                 val entity = ChatMessageEntity(
@@ -61,7 +86,7 @@ object MediaUploadManager {
                     receiverId = recipientId,
                     messageType = messageType.name,
                     textContent = textContent,
-                    mediaUrl = localMediaUrl,
+                    mediaUrl = stagingPath,
                     timestamp = System.currentTimeMillis(),
                     isPending = true,
                     isUploading = true,
@@ -79,7 +104,7 @@ object MediaUploadManager {
                     isUploading = true,
                     isFailed = false,
                     uploadProgress = 0,
-                    mediaUrl = localMediaUrl
+                    mediaUrl = stagingPath
                 )
             }
 
@@ -90,7 +115,7 @@ object MediaUploadManager {
                 .putString("sender_uid", effectiveSenderUid)
                 .putString("sender_name", effectiveSenderName)
                 .putString("message_type", messageType.name)
-                .putString("local_media_url", localMediaUrl)
+                .putString("local_media_url", stagingPath)
                 .putString("text_content", textContent)
                 .putString("reply_to_id", replyToId ?: "")
                 .putString("reply_to_name", replyToName ?: "")

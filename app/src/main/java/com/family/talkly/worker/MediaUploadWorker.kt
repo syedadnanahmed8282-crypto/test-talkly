@@ -44,6 +44,8 @@ class MediaUploadWorker(
         val replyToName = inputData.getString("reply_to_name")
         val replyToText = inputData.getString("reply_to_text")
 
+        Log.e(TAG, "MediaUploadWorker START doWork() messageId=$messageId type=$typeStr chatKey=$chatKey recipientId=$recipientId senderUid=$senderUid senderName=$senderName localMediaUrl=$localMediaUrl")
+
         val notificationId = NOTIFICATION_ID_BASE + (messageId.hashCode() and 0x7FFFFFFF) % 10000
         createNotificationChannel()
 
@@ -72,8 +74,8 @@ class MediaUploadWorker(
                 val entity = ChatMessageEntity(
                     id = messageId,
                     chatKey = chatKey,
-                    senderId = "self",
-                    senderName = "You",
+                    senderId = senderUid.ifBlank { "self" },
+                    senderName = senderName.ifBlank { "You" },
                     receiverId = recipientId,
                     messageType = messageType.name,
                     textContent = textContent,
@@ -141,9 +143,14 @@ class MediaUploadWorker(
                 )
 
                 val remotePath = "chats/media/${System.currentTimeMillis()}_img.jpg"
-                finalRemoteUrl = uploader.uploadMediaFile(compressedFile, remotePath) { progress, statusText ->
-                    val overallProgress = (30 + ((progress / 100.0) * 70)).toInt().coerceIn(30, 100)
-                    updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
+                finalRemoteUrl = try {
+                    uploader.uploadMediaFile(compressedFile, remotePath) { progress, statusText ->
+                        val overallProgress = (30 + ((progress / 100.0) * 70)).toInt().coerceIn(30, 100)
+                        updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Cloudinary upload failed for image, using fallback: ${e.localizedMessage}")
+                    if (compressedFile.exists() && compressedFile.length() > 0) uploader.encodeFileToBase64(compressedFile) else localMediaUrl
                 }
             } else if (messageType == MessageType.VOICE_NOTE) {
                 val filePath = if (localMediaUrl.startsWith("file://")) Uri.parse(localMediaUrl).path ?: "" else localMediaUrl
