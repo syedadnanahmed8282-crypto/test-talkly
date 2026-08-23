@@ -154,15 +154,10 @@ object SupabaseMessagingService {
     }
 
     suspend fun sendMessage(message: SupabaseMessage): Boolean = withContext(Dispatchers.IO) {
-        try {
             SupabaseClientProvider.client.postgrest["messages"]
                 .insert(message)
             true
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to send message to Supabase: ${e.localizedMessage}", e)
-            false
         }
-    }
 
     suspend fun fetchMessagesForConversation(
         conversationId: String?,
