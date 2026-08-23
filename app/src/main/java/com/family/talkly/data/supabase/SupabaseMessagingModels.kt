@@ -244,8 +244,14 @@ fun ChatMessage.toSupabaseMessage(
     resolvedSenderId: String? = null,
     resolvedReceiverId: String? = null
 ): SupabaseMessage {
+    val validSupabaseId = try {
+        java.util.UUID.fromString(id)
+        id
+    } catch (e: Exception) {
+        java.util.UUID.nameUUIDFromBytes(id.toByteArray()).toString()
+    }
     return SupabaseMessage(
-        id = id,
+        id = validSupabaseId,
         conversationId = conversationId,
         senderId = resolvedSenderId ?: senderId,
         receiverId = resolvedReceiverId ?: receiverId,
