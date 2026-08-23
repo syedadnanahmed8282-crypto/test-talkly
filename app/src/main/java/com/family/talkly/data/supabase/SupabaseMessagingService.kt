@@ -529,6 +529,8 @@ object SupabaseMessagingService {
         onRequestAction: (PostgresAction) -> Unit
     ): RealtimeChannel? = withContext(Dispatchers.IO) {
         try {
+            SupabaseClientProvider.client.realtime.connect()
+
             val channelName = "messages-user-$currentUserId"
             val channel = SupabaseClientProvider.client.realtime.channel(channelName)
 
@@ -548,8 +550,8 @@ object SupabaseMessagingService {
                 onRequestAction(action)
             }.launchIn(coroutineScope)
 
-            channel.subscribe()
-            Log.i(TAG, "Subscribed to Supabase Realtime channel: $channelName")
+            channel.subscribe(blockUntilSubscribed = true)
+            Log.i(TAG, "Subscribed to Supabase Realtime channel: $channelName, status=${channel.status.value}")
             channel
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create Supabase Realtime channel: ${e.localizedMessage}", e)
