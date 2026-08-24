@@ -1,6 +1,19 @@
 package com.family.talkly.ui.components
 
-import android.app.DownloadManager
+import android.content.ContentValues
+import android.media.MediaScannerConnection
+import android.os.Build
+import android.provider.MediaStore
+import android.util.Base64
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import android.content.Context
 import android.media.MediaPlayer
 import android.net.Uri
@@ -79,11 +92,6 @@ import com.family.talkly.data.models.MessageType
 import com.family.talkly.ui.theme.WhatsappGreen
 import com.family.talkly.util.PhoneUtils
 import com.family.talkly.util.VideoCacheManager
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 
@@ -720,34 +728,118 @@ private fun formatTime(millis: Int): String {
 }
 
 private fun downloadMediaToGallery(context: Context, message: ChatMessage) {
-    val url = message.mediaUrl ?: return
-    try {
-        if (url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true)) {
-            val request = DownloadManager.Request(Uri.parse(url))
-                .setTitle("Talkly Family Media")
-                .setDescription("Saving media to gallery...")
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setDestinationInExternalPublicDir(
-                    Environment.DIRECTORY_DOWNLOADS,
-                    "Talkly_${System.currentTimeMillis()}.${if (message.messageType == MessageType.VIDEO) "mp4" else "jpg"}"
-                )
+    val rawUrl = message.mediaUrl ?: return
+    val isVideo = message.messageType == MessageType.VIDEO
+    val extension = if (isVideo) "mp4" else "jpg"
+    val mimeType = if (isVideo) "video/mp4" else "image/jpeg"
+    val filename = "Talkly_${System.currentTimeMillis()}.$extension"
 
-            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
-            downloadManager?.enqueue(request)
-            Toast.makeText(context, "Downloading media to gallery...", Toast.LENGTH_SHORT).show()
-        } else {
-            // Local Uri or cached file
-            val cached = VideoCacheManager.getCachedVideoFile(context, url)
-            if (cached != null && cached.exists()) {
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val target = File(downloadsDir, "Talkly_${System.currentTimeMillis()}.mp4")
-                cached.copyTo(target, overwrite = true)
-                Toast.makeText(context, "Video saved to Downloads", Toast.LENGTH_SHORT).show()
+    Toast.makeText(context, "Saving ${if (isVideo) "video" else "photo"} to Gallery...", Toast.LENGTH_SHORT).show()
+
+    CoroutineScope(Dispatchers.IO).launch {
+        var success = false
+        var errorMessage: String? = null
+        try {
+            val inputStream: InputStream? = when {
+                rawUrl.startsWith("http://", ignoreCase = true) || rawUrl.startsWith("https://", ignoreCase = true) -> {
+                    val conn = URL(rawUrl).openConnection() as HttpURLConnection
+                    conn.connectTimeout = 15000
+                    conn.readTimeout = 30000
+                    conn.doInput = true
+                    conn.connect()
+                    if (conn.responseCode in 200..299) {
+                        conn.inputStream
+                    } else {
+                        throw java.io.IOException("Server returned HTTP ${conn.responseCode}")
+                    }
+                }
+                rawUrl.startsWith("data:", ignoreCase = true) -> {
+                    val base64Data = rawUrl.substringAfter("base64,", "")
+                    if (base64Data.isNotBlank()) {
+                        val bytes = Base64.decode(base64Data, Base64.DEFAULT)
+                        java.io.ByteArrayInputStream(bytes)
+                    } else {
+                        null
+                    }
+                }
+                rawUrl.startsWith("content://", ignoreCase = true) || rawUrl.startsWith("file://", ignoreCase = true) -> {
+                    context.contentResolver.openInputStream(Uri.parse(rawUrl))
+                }
+                else -> {
+                    val cached = VideoCacheManager.getCachedVideoFile(context, rawUrl)
+                    if (cached != null && cached.exists()) {
+                        cached.inputStream()
+                    } else {
+                        val file = File(rawUrl)
+                        if (file.exists()) file.inputStream() else null
+                    }
+                }
+            }
+
+            if (inputStream == null) {
+                throw java.io.IOException("Unable to open media stream")
+            }
+
+            inputStream.use { input ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                        put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                        put(
+                            MediaStore.MediaColumns.RELATIVE_PATH,
+                            if (isVideo) Environment.DIRECTORY_MOVIES + "/Talkly" else Environment.DIRECTORY_PICTURES + "/Talkly"
+                        )
+                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                    }
+
+                    val collection = if (isVideo) {
+                        MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                    } else {
+                        MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                    }
+
+                    val itemUri = context.contentResolver.insert(collection, values)
+                    if (itemUri != null) {
+                        context.contentResolver.openOutputStream(itemUri)?.use { output ->
+                            input.copyTo(output)
+                        }
+                        values.clear()
+                        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                        context.contentResolver.update(itemUri, values, null, null)
+                        success = true
+                    }
+                } else {
+                    val targetDir = File(
+                        Environment.getExternalStoragePublicDirectory(
+                            if (isVideo) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES
+                        ),
+                        "Talkly"
+                    )
+                    if (!targetDir.exists()) targetDir.mkdirs()
+                    val targetFile = File(targetDir, filename)
+                    java.io.FileOutputStream(targetFile).use { output ->
+                        input.copyTo(output)
+                    }
+                    MediaScannerConnection.scanFile(
+                        context,
+                        arrayOf(targetFile.absolutePath),
+                        arrayOf(mimeType),
+                        null
+                    )
+                    success = true
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("FullMediaViewer", "Failed to download media to gallery: ${e.message}", e)
+            errorMessage = e.localizedMessage ?: "Unknown error"
+        }
+
+        withContext(Dispatchers.Main) {
+            if (success) {
+                Toast.makeText(context, "Saved to Gallery (Talkly album)", Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(context, "Media saved to gallery", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Save failed: ${errorMessage ?: "Could not write file"}", Toast.LENGTH_LONG).show()
             }
         }
-    } catch (e: Exception) {
-        Toast.makeText(context, "Saved to Gallery / Downloads", Toast.LENGTH_SHORT).show()
     }
 }

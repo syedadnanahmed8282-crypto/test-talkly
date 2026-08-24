@@ -331,7 +331,10 @@ fun MainScreen(
                 chatRepository.deleteChatHistory(currentMember.id)
             },
             currentUserProfile = currentUserProfile,
-            isNetworkConnected = isNetworkConnected
+            isNetworkConnected = isNetworkConnected,
+            onRefreshMemberProfile = {
+                chatRepository.refreshContactProfile(currentMember.id)
+            }
         )
         return
     }

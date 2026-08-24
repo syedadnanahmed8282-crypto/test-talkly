@@ -471,6 +471,11 @@ class AuthManager(private val context: Context) {
         }
     }
 
+    private fun getProfileAvatarFile(key: String): File {
+        val avatarDir = File(context.filesDir, "profile_avatars").apply { mkdirs() }
+        return File(avatarDir, "avatar_${key}.jpg")
+    }
+
     private fun processProfileAvatarImage(uid: String, rawProfilePicUrl: String): Pair<String, String> {
         if (rawProfilePicUrl.isBlank()) {
             return Pair("", "")
@@ -482,8 +487,7 @@ class AuthManager(private val context: Context) {
         if (rawProfilePicUrl.startsWith("content://") || rawProfilePicUrl.startsWith("file://")) {
             try {
                 val uri = Uri.parse(rawProfilePicUrl)
-                val avatarDir = File(context.filesDir, "profile_avatars").apply { mkdirs() }
-                val destFile = File(avatarDir, "avatar_${uid}.jpg")
+                val destFile = getProfileAvatarFile(uid)
 
                 val inputStream = context.contentResolver.openInputStream(uri)
                 if (inputStream != null) {
@@ -560,13 +564,31 @@ class AuthManager(private val context: Context) {
         )
 
         CoroutineScope(Dispatchers.IO).launch {
+            var remoteAvatarUrl = if (!profilePicUrl.startsWith("content://") && !profilePicUrl.startsWith("file://")) profilePicUrl else ""
+            val localPicFile = getProfileAvatarFile(uid)
+            if (localPicFile.exists()) {
+                try {
+                    val uploader = MediaCompressorAndUploader(context)
+                    val uploadedUrl = uploader.uploadMediaFile(localPicFile, "avatars/${uid}_avatar.jpg") { _, _ -> }
+                    if (uploadedUrl.startsWith("http://") || uploadedUrl.startsWith("https://")) {
+                        remoteAvatarUrl = uploadedUrl
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed uploading registration avatar to Cloudinary: ${e.localizedMessage}")
+                }
+            }
+
             try {
                 val profileJson = buildJsonObject {
                     put("id", uid)
                     put("name", name)
                     put("phone", phoneNumber)
                     put("phone_suffix", phoneSuffix)
-                    put("avatar_url", cloudPicUrl.ifBlank { localPicUrl })
+                    if (remoteAvatarUrl.isNotBlank()) {
+                        put("avatar_url", remoteAvatarUrl)
+                    } else if (cloudPicUrl.isNotBlank()) {
+                        put("avatar_url", cloudPicUrl)
+                    }
                     put("bio", bio)
                 }
                 postgrest.from("profiles").upsert(profileJson)
@@ -614,20 +636,24 @@ class AuthManager(private val context: Context) {
         val phoneSuffix = PhoneUtils.extractPhoneSuffix(phone)
 
         CoroutineScope(Dispatchers.IO).launch {
-            var finalPicUrl = profilePicUrl
-            var finalCoverUrl = coverPhotoUrl
+            var localPicUrl = profilePicUrl
+            var localCoverUrl = coverPhotoUrl
+            var localPicFile: File? = null
+            var localCoverFile: File? = null
 
             if (profilePicUrl.startsWith("content://") || profilePicUrl.startsWith("file://")) {
                 val (localPic, processedPic) = processProfileAvatarImage(uid, profilePicUrl)
-                finalPicUrl = if (localPic.isNotBlank()) localPic else processedPic
+                localPicUrl = if (localPic.isNotBlank()) localPic else processedPic
+                localPicFile = getProfileAvatarFile(uid)
             }
 
             if (coverPhotoUrl.startsWith("content://") || coverPhotoUrl.startsWith("file://")) {
                 val (localCover, processedCover) = processProfileAvatarImage("${uid}_cover", coverPhotoUrl)
-                finalCoverUrl = if (localCover.isNotBlank()) localCover else processedCover
+                localCoverUrl = if (localCover.isNotBlank()) localCover else processedCover
+                localCoverFile = getProfileAvatarFile("${uid}_cover")
             }
 
-            saveLocalSession(uid, name, phone, finalPicUrl, bio, finalCoverUrl)
+            saveLocalSession(uid, name, phone, localPicUrl, bio, localCoverUrl)
 
             // Force clear Coil image memory & disk caches to prevent stale image rendering
             try {
@@ -643,10 +669,42 @@ class AuthManager(private val context: Context) {
                 name = name,
                 phoneNumber = phone,
                 phoneSuffix = phoneSuffix,
-                profilePicUrl = finalPicUrl,
-                coverPhotoUrl = finalCoverUrl,
+                profilePicUrl = localPicUrl,
+                coverPhotoUrl = localCoverUrl,
                 bio = bio
             )
+
+            withContext(Dispatchers.Main) {
+                _authState.value = AuthState.Authenticated(profile)
+                onSuccess()
+            }
+
+            // Asynchronously upload to Cloudinary so remote users get valid web URLs
+            var remoteAvatarUrl = if (!profilePicUrl.startsWith("content://") && !profilePicUrl.startsWith("file://")) profilePicUrl else ""
+            var remoteCoverUrl = if (!coverPhotoUrl.startsWith("content://") && !coverPhotoUrl.startsWith("file://")) coverPhotoUrl else ""
+
+            val uploader = MediaCompressorAndUploader(context)
+            if (localPicFile != null && localPicFile.exists()) {
+                try {
+                    val uploadedUrl = uploader.uploadMediaFile(localPicFile, "avatars/${uid}_avatar.jpg") { _, _ -> }
+                    if (uploadedUrl.startsWith("http://") || uploadedUrl.startsWith("https://")) {
+                        remoteAvatarUrl = uploadedUrl
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed uploading avatar to Cloudinary: ${e.localizedMessage}")
+                }
+            }
+
+            if (localCoverFile != null && localCoverFile.exists()) {
+                try {
+                    val uploadedUrl = uploader.uploadMediaFile(localCoverFile, "covers/${uid}_cover.jpg") { _, _ -> }
+                    if (uploadedUrl.startsWith("http://") || uploadedUrl.startsWith("https://")) {
+                        remoteCoverUrl = uploadedUrl
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed uploading cover to Cloudinary: ${e.localizedMessage}")
+                }
+            }
 
             try {
                 val updateJson = buildJsonObject {
@@ -654,18 +712,17 @@ class AuthManager(private val context: Context) {
                     put("name", name)
                     put("phone", phone)
                     put("phone_suffix", phoneSuffix)
-                    put("avatar_url", finalPicUrl)
-                    put("cover_photo_url", finalCoverUrl)
+                    if (remoteAvatarUrl.isNotBlank()) {
+                        put("avatar_url", remoteAvatarUrl)
+                    }
+                    if (remoteCoverUrl.isNotBlank()) {
+                        put("cover_photo_url", remoteCoverUrl)
+                    }
                     put("bio", bio)
                 }
                 postgrest.from("profiles").upsert(updateJson)
             } catch (e: Exception) {
                 Log.w(TAG, "Error updating Supabase profile: ${e.localizedMessage}")
-            }
-
-            withContext(Dispatchers.Main) {
-                _authState.value = AuthState.Authenticated(profile)
-                onSuccess()
             }
         }
     }

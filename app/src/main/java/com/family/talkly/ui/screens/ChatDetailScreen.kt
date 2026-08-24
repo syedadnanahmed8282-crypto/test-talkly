@@ -231,8 +231,13 @@ fun ChatDetailScreen(
     onDeclineMessageRequest: (requestId: String) -> Unit = {},
     onClearChatHistory: () -> Unit = {},
     currentUserProfile: UserProfile? = null,
-    isNetworkConnected: Boolean = true
+    isNetworkConnected: Boolean = true,
+    onRefreshMemberProfile: (() -> Unit)? = null
 ) {
+    LaunchedEffect(member.id) {
+        onRefreshMemberProfile?.invoke()
+    }
+
     var textInput by remember { mutableStateOf("") }
     var showAttachmentDialog by remember { mutableStateOf(false) }
     var fullMediaViewerMessage by remember { mutableStateOf<ChatMessage?>(null) }

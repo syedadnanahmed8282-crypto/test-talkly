@@ -621,17 +621,38 @@ class FirebaseChatRepository(private val context: Context) {
                     val currentMap = _familyMembers.value.associateBy { it.phone }.toMutableMap()
                     val deletedSet = _deletedContactIds.value
 
+                    // Batch fetch fresh profiles for all contact user IDs
+                    val contactUserIds = contacts.mapNotNull { it.contactUserId }.filter { it.isNotBlank() }
+                    val profilesMap = if (contactUserIds.isNotEmpty()) {
+                        try {
+                            SupabaseClientProvider.client.postgrest["profiles"]
+                                .select {
+                                    filter {
+                                        isIn("id", contactUserIds)
+                                    }
+                                }
+                                .decodeList<SupabaseProfile>()
+                                .associateBy { it.id }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed batch fetching profiles: ${e.localizedMessage}")
+                            emptyMap()
+                        }
+                    } else emptyMap()
+
                     val updatedList = contacts.mapNotNull { c ->
                         val suffix = c.contactPhoneSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(c.contactPhone) }
                         if (c.contactPhone in deletedSet || suffix in deletedSet) return@mapNotNull null
 
                         val existing = currentMap[c.contactPhone]
+                        val profile = if (!c.contactUserId.isNullOrBlank()) profilesMap[c.contactUserId] else null
+
                         FamilyMember(
                             id = if (!c.contactUserId.isNullOrBlank()) c.contactUserId else "contact_${suffix}",
-                            name = c.contactName,
+                            name = profile?.name?.ifBlank { c.contactName } ?: c.contactName,
                             relation = c.relation,
-                            avatarUrl = existing?.avatarUrl,
-                            status = existing?.status ?: "Available on Talkly 💬",
+                            avatarUrl = profile?.avatarUrl?.ifBlank { existing?.avatarUrl } ?: existing?.avatarUrl,
+                            coverPhotoUrl = profile?.coverPhotoUrl?.ifBlank { existing?.coverPhotoUrl } ?: existing?.coverPhotoUrl,
+                            status = profile?.bio?.ifBlank { existing?.status ?: "Available on Talkly 💬" } ?: existing?.status ?: "Available on Talkly 💬",
                             phone = c.contactPhone,
                             isOnline = existing?.isOnline ?: false,
                             isTyping = false,
@@ -651,6 +672,45 @@ class FirebaseChatRepository(private val context: Context) {
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Error syncing contacts from Supabase: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    fun refreshContactProfile(targetMemberId: String) {
+        if (targetMemberId.isBlank() || targetMemberId == "self") return
+        val canonicalId = getCanonicalMemberId(targetMemberId)
+        repositoryScope.launch(Dispatchers.IO) {
+            try {
+                val profiles = SupabaseClientProvider.client.postgrest["profiles"]
+                    .select {
+                        filter {
+                            or {
+                                eq("id", canonicalId)
+                                eq("phone", canonicalId)
+                            }
+                        }
+                    }
+                    .decodeList<SupabaseProfile>()
+
+                val profile = profiles.firstOrNull()
+                if (profile != null) {
+                    withContext(Dispatchers.Main) {
+                        val currentList = _familyMembers.value.map { m ->
+                            if (m.id == canonicalId || m.firebaseUid == profile.id || m.phone == profile.phone) {
+                                m.copy(
+                                    name = profile.name.ifBlank { m.name },
+                                    avatarUrl = profile.avatarUrl.ifBlank { m.avatarUrl },
+                                    coverPhotoUrl = profile.coverPhotoUrl.ifBlank { m.coverPhotoUrl },
+                                    status = profile.bio.ifBlank { m.status }
+                                )
+                            } else m
+                        }
+                        _familyMembers.value = currentList
+                        saveContactsToPrefs()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error refreshing single contact profile: ${e.localizedMessage}")
             }
         }
     }
@@ -1602,19 +1662,40 @@ class FirebaseChatRepository(private val context: Context) {
         val currentMap = _messagesMap.value.toMutableMap()
         val existingMsgs = (currentMap[canonicalOtherPartyId] ?: currentMap[rawOtherPartyId] ?: emptyList()).toMutableList()
         val existingIndex = existingMsgs.indexOfFirst { it.id == message.id }
+        
+        var isIdenticalSelfEcho = false
+
         if (existingIndex >= 0) {
             val existing = existingMsgs[existingIndex]
             val preservedDelivered = existing.isDelivered || finalMessage.isDelivered
             val preservedRead = existing.isRead || finalMessage.isRead
             val preservedReadAt = finalMessage.readAtTimestamp ?: existing.readAtTimestamp
             val preservedDeletedForUsers = (finalMessage.deletedForUsers + existing.deletedForUsers).distinct()
-            existingMsgs[existingIndex] = finalMessage.copy(
+            val preservedReaction = finalMessage.reaction ?: existing.reaction
+            val preservedTimestamp = existing.timestamp // Retain local client timestamp to prevent scroll order jumps
+
+            val updatedMsg = finalMessage.copy(
+                timestamp = preservedTimestamp,
                 isDelivered = preservedDelivered,
                 isRead = preservedRead,
                 readAtTimestamp = preservedReadAt,
                 deletedForUsers = preservedDeletedForUsers,
+                reaction = preservedReaction,
                 isPending = false
             )
+
+            if (isSelf &&
+                existing.isPending == updatedMsg.isPending &&
+                existing.isDelivered == updatedMsg.isDelivered &&
+                existing.isRead == updatedMsg.isRead &&
+                existing.mediaUrl == updatedMsg.mediaUrl &&
+                existing.reaction == updatedMsg.reaction &&
+                existing.deletedForUsers == updatedMsg.deletedForUsers
+            ) {
+                isIdenticalSelfEcho = true
+            }
+
+            existingMsgs[existingIndex] = updatedMsg
         } else {
             existingMsgs.add(finalMessage)
         }
@@ -1639,6 +1720,11 @@ class FirebaseChatRepository(private val context: Context) {
                 chatMemberId = canonicalOtherPartyId,
                 messageId = finalMessage.id
             )
+        }
+
+        // If it was an identical self echo where all state fields are already matching in memory, skip recomposition
+        if (isIdenticalSelfEcho) {
+            return
         }
 
         val filteredMsgs = existingMsgs.filterNot { msg ->
