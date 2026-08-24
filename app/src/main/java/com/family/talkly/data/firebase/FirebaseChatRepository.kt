@@ -1945,8 +1945,19 @@ class FirebaseChatRepository(private val context: Context) {
 
         val isOnline = _isNetworkConnected.value
 
+        val canonicalMessageId = if (!explicitMessageId.isNullOrBlank()) {
+            try {
+                java.util.UUID.fromString(explicitMessageId)
+                explicitMessageId
+            } catch (e: Exception) {
+                java.util.UUID.nameUUIDFromBytes(explicitMessageId.toByteArray()).toString()
+            }
+        } else {
+            java.util.UUID.randomUUID().toString()
+        }
+
         val newMessage = ChatMessage(
-            id = explicitMessageId?.takeIf { it.isNotBlank() } ?: java.util.UUID.randomUUID().toString(),
+            id = canonicalMessageId,
             senderId = senderUid,
             senderName = senderName,
             receiverId = canonicalId,

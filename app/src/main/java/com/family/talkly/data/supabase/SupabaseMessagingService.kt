@@ -162,6 +162,7 @@ object SupabaseMessagingService {
     }
 
     suspend fun sendMessage(message: SupabaseMessage): Boolean = withContext(Dispatchers.IO) {
+            Log.e(TAG, "DEBUG_ACTUAL_INSERT_PAYLOAD: id='${message.id}', senderId='${message.senderId}', receiverId='${message.receiverId}', conversationId='${message.conversationId}', replyToId='${message.replyToMessageId}', type='${message.messageType}'")
             SupabaseClientProvider.client.postgrest["messages"]
                 .insert(message)
             true

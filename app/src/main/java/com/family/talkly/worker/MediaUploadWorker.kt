@@ -32,7 +32,13 @@ class MediaUploadWorker(
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        val messageId = inputData.getString("message_id") ?: return@withContext Result.failure()
+        val rawMessageId = inputData.getString("message_id") ?: return@withContext Result.failure()
+        val messageId = try {
+            java.util.UUID.fromString(rawMessageId)
+            rawMessageId
+        } catch (e: Exception) {
+            java.util.UUID.nameUUIDFromBytes(rawMessageId.toByteArray()).toString()
+        }
         val chatKey = inputData.getString("chat_key") ?: return@withContext Result.failure()
         val recipientId = inputData.getString("recipient_id") ?: ""
         val senderUid = inputData.getString("sender_uid") ?: ""

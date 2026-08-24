@@ -244,12 +244,26 @@ fun ChatMessage.toSupabaseMessage(
     resolvedSenderId: String? = null,
     resolvedReceiverId: String? = null
 ): SupabaseMessage {
-    val validSupabaseId = try {
-        java.util.UUID.fromString(id)
-        id
-    } catch (e: Exception) {
-        java.util.UUID.nameUUIDFromBytes(id.toByteArray()).toString()
+    val validSupabaseId = if (id.isBlank()) {
+        java.util.UUID.randomUUID().toString()
+    } else {
+        try {
+            java.util.UUID.fromString(id)
+            id
+        } catch (e: Exception) {
+            java.util.UUID.nameUUIDFromBytes(id.toByteArray()).toString()
+        }
     }
+
+    val validReplyToId = replyToMessageId?.takeIf { it.isNotBlank() }?.let { raw ->
+        try {
+            java.util.UUID.fromString(raw)
+            raw
+        } catch (e: Exception) {
+            java.util.UUID.nameUUIDFromBytes(raw.toByteArray()).toString()
+        }
+    }
+
     return SupabaseMessage(
         id = validSupabaseId,
         conversationId = conversationId,
@@ -267,7 +281,7 @@ fun ChatMessage.toSupabaseMessage(
         isStarred = isStarred,
         isPinned = isPinned,
         pinnedBy = pinnedBy,
-        replyToMessageId = replyToMessageId,
+        replyToMessageId = validReplyToId,
         replyToSenderName = replyToSenderName,
         replyToText = replyToText,
         isEdited = isEdited,

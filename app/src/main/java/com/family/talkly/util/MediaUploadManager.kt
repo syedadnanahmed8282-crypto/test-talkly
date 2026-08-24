@@ -41,6 +41,13 @@ object MediaUploadManager {
         val appContext = context.applicationContext
 
         CoroutineScope(Dispatchers.IO).launch {
+            val canonicalMessageId = try {
+                java.util.UUID.fromString(messageId)
+                messageId
+            } catch (e: Exception) {
+                java.util.UUID.nameUUIDFromBytes(messageId.toByteArray()).toString()
+            }
+
             val sessionPrefs = appContext.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
             val fallbackPrefs = appContext.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
             val effectiveSenderUid = senderUid
@@ -62,7 +69,7 @@ object MediaUploadManager {
                 try {
                     val uri = Uri.parse(localMediaUrl)
                     val ext = if (messageType == MessageType.VIDEO) "mp4" else "jpg"
-                    val stagedFile = File(appContext.cacheDir, "staged_${messageId}.${ext}")
+                    val stagedFile = File(appContext.cacheDir, "staged_${canonicalMessageId}.${ext}")
                     appContext.contentResolver.openInputStream(uri)?.use { input ->
                         FileOutputStream(stagedFile).use { output ->
                             input.copyTo(output)
@@ -76,10 +83,10 @@ object MediaUploadManager {
                 }
             }
 
-            val existing = dao.getMessageById(messageId)
+            val existing = dao.getMessageById(canonicalMessageId)
             if (existing == null) {
                 val entity = ChatMessageEntity(
-                    id = messageId,
+                    id = canonicalMessageId,
                     chatKey = chatKey,
                     senderId = effectiveSenderUid,
                     senderName = effectiveSenderName,
@@ -99,7 +106,7 @@ object MediaUploadManager {
                 dao.insertMessage(entity)
             } else {
                 dao.updateUploadState(
-                    messageId = messageId,
+                    messageId = canonicalMessageId,
                     isPending = true,
                     isUploading = true,
                     isFailed = false,
@@ -109,7 +116,7 @@ object MediaUploadManager {
             }
 
             val inputData = Data.Builder()
-                .putString("message_id", messageId)
+                .putString("message_id", canonicalMessageId)
                 .putString("chat_key", chatKey)
                 .putString("recipient_id", recipientId)
                 .putString("sender_uid", effectiveSenderUid)
