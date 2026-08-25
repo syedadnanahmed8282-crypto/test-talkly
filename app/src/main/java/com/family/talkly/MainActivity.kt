@@ -318,7 +318,7 @@ class MainActivity : ComponentActivity() {
 
             if (roomId.isNotBlank()) {
                 val callType = try {
-                    com.family.talkly.data.models.CallType.valueOf(callTypeStr)
+                    com.family.talkly.data.models.CallType.valueOf(callTypeStr.uppercase())
                 } catch (e: Exception) {
                     com.family.talkly.data.models.CallType.VIDEO
                 }

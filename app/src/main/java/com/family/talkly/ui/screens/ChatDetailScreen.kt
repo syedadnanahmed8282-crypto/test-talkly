@@ -476,8 +476,9 @@ fun ChatDetailScreen(
         }
     }
 
-    // Mark messages as read when opening or receiving new messages in chat screen
+    // Mark messages as read when opening or receiving new messages in chat screen (debounced to avoid fighting scroll animations)
     LaunchedEffect(member.id, messages.size) {
+        kotlinx.coroutines.delay(300)
         onReadMessages()
     }
 
@@ -493,9 +494,17 @@ fun ChatDetailScreen(
                     listState.scrollToItem(targetIndex)
                     isInitialScrollDone = true
                 } else if (displayedMessages.size > previousMessageCount || member.isTyping) {
-                    listState.animateScrollToItem(targetIndex)
-                } else {
-                    listState.scrollToItem(targetIndex)
+                    // Only animate if not already at the bottom item
+                    val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                    if (lastVisible < targetIndex) {
+                        listState.animateScrollToItem(targetIndex)
+                    }
+                } else if (displayedMessages.size < previousMessageCount) {
+                    // Only snap on message deletion/clear if view is out of bounds
+                    val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                    if (lastVisible > targetIndex) {
+                        listState.scrollToItem(targetIndex)
+                    }
                 }
             }
         }

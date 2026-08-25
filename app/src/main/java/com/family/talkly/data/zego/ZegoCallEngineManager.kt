@@ -2,7 +2,9 @@ package com.family.talkly.data.zego
 
 import android.app.Application
 import android.content.Context
+import android.graphics.SurfaceTexture
 import android.util.Log
+import android.view.TextureView
 import android.view.View
 import com.family.talkly.data.firebase.FirebaseChatRepository
 import com.family.talkly.data.models.CallDirection
@@ -136,26 +138,9 @@ class ZegoCallEngineManager(private val context: Context) {
 
     private var timerJob: Job? = null
     private var ringingTimeoutJob: Job? = null
-    private var lastMissedCallSessionId: String? = null
     private val scope = CoroutineScope(Dispatchers.Main)
     private val callScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     var onCallLogAdded: ((CallLog) -> Unit)? = null
-
-    private fun sendMissedCallMessageOnce(targetMember: FamilyMember?, callType: CallType, roomId: String) {
-        if (targetMember == null || roomId.isBlank()) return
-        if (lastMissedCallSessionId == roomId) {
-            Log.d(TAG, "Missed call message already sent for session $roomId, ignoring duplicate attempt.")
-            return
-        }
-        lastMissedCallSessionId = roomId
-        val msgText = if (callType == CallType.VIDEO) "Missed video call 📹" else "Missed audio call 📞"
-        Log.d(TAG, "Sending single missed call message for session $roomId to ${targetMember.name}")
-        chatRepository?.sendMessage(
-            memberId = targetMember.id,
-            textContent = msgText,
-            type = com.family.talkly.data.models.MessageType.TEXT
-        )
-    }
 
     init {
         Log.i(TAG, "ZEGOCloud Express Engine initialized with AppID: $ZEGO_APP_ID")
@@ -377,10 +362,34 @@ class ZegoCallEngineManager(private val context: Context) {
         localViewRef = view
         val isVideo = (_callState.value.callType == CallType.VIDEO)
         if (view != null && isVideo) {
+            expressEngine?.enableCamera(true)
             enableBeautyFilter(true)
-            val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
-            expressEngine?.startPreview(canvas)
-            Log.d(TAG, "Attached local video preview view with beauty filter")
+            if (view is TextureView) {
+                if (view.isAvailable) {
+                    val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
+                    expressEngine?.startPreview(canvas)
+                    Log.d(TAG, "Attached local video preview (TextureView available)")
+                } else {
+                    view.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+                            enableBeautyFilter(true)
+                            val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
+                            expressEngine?.startPreview(canvas)
+                            Log.d(TAG, "Attached local video preview in onSurfaceTextureAvailable")
+                        }
+                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                            expressEngine?.stopPreview()
+                            return true
+                        }
+                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                    }
+                }
+            } else {
+                val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
+                expressEngine?.startPreview(canvas)
+                Log.d(TAG, "Attached local video preview view with beauty filter")
+            }
         } else if (view == null) {
             expressEngine?.stopPreview()
         }
@@ -419,13 +428,38 @@ class ZegoCallEngineManager(private val context: Context) {
 
     private fun bindRemoteStream(streamID: String) {
         if (streamID.isBlank()) return
-        remoteViewRef?.let { view ->
-            val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
-            expressEngine?.startPlayingStream(streamID, canvas)
-            Log.d(TAG, "Playing remote stream $streamID on remote view")
-        } ?: run {
+        val view = remoteViewRef
+        if (view != null) {
+            if (view is TextureView) {
+                if (view.isAvailable) {
+                    val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
+                    expressEngine?.startPlayingStream(streamID, canvas)
+                    _callState.value = _callState.value.copy(isRemoteStreamPlaying = true)
+                    Log.d(TAG, "Playing remote stream $streamID on available remote TextureView")
+                } else {
+                    view.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+                            val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
+                            expressEngine?.startPlayingStream(streamID, canvas)
+                            _callState.value = _callState.value.copy(isRemoteStreamPlaying = true)
+                            Log.d(TAG, "Playing remote stream $streamID in onSurfaceTextureAvailable")
+                        }
+                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                            return true
+                        }
+                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                    }
+                }
+            } else {
+                val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
+                expressEngine?.startPlayingStream(streamID, canvas)
+                _callState.value = _callState.value.copy(isRemoteStreamPlaying = true)
+                Log.d(TAG, "Playing remote stream $streamID on remote view")
+            }
+        } else {
             expressEngine?.startPlayingStream(streamID, ZegoCanvas(null))
-            Log.d(TAG, "Playing remote stream $streamID as audio-only / background canvas")
+            Log.d(TAG, "Playing remote stream $streamID as audio-only / background canvas (awaiting remote view)")
         }
     }
 
@@ -569,8 +603,8 @@ class ZegoCallEngineManager(private val context: Context) {
             is PostgresAction.Delete -> {
                 scope.launch(Dispatchers.Main) {
                     val currentState = _callState.value.state
-                    if (currentState == CallState.INCOMING_RINGING || currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) {
-                        endCallInternal("Call Cancelled")
+                    if (currentState != CallState.IDLE && currentState != CallState.ENDED) {
+                        endCallInternal("Call Ended")
                     }
                 }
             }
@@ -683,7 +717,6 @@ class ZegoCallEngineManager(private val context: Context) {
                 if (isMeCaller) {
                     val currentState = _callState.value.state
                     if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) {
-                        lastMissedCallSessionId = roomID
                         ringingTimeoutJob?.cancel()
                         try {
                             com.family.talkly.service.CallForegroundService.stopCallService(context)
@@ -841,8 +874,6 @@ class ZegoCallEngineManager(private val context: Context) {
                     SupabaseCallService.updateActiveCallStatus(roomID, "TIMEOUT")
                 }
 
-                sendMissedCallMessageOnce(member, callType, roomID)
-
                 val callLog = CallLog(
                     id = "call_${System.currentTimeMillis()}",
                     memberId = member.id,
@@ -923,7 +954,6 @@ class ZegoCallEngineManager(private val context: Context) {
             SupabaseCallService.updateActiveCallStatus(current.roomID, "ACCEPTED")
         }
 
-        lastMissedCallSessionId = current.roomID
         _callState.value = current.copy(state = CallState.ACTIVE, isSpeakerOn = isVideo, isOutgoing = false)
         com.family.talkly.service.CallForegroundService.startActiveCallService(
             context = context,
@@ -951,7 +981,6 @@ class ZegoCallEngineManager(private val context: Context) {
         }
 
         if (member != null) {
-            sendMissedCallMessageOnce(member, current.callType, current.roomID)
             val callLog = CallLog(
                 id = "call_${System.currentTimeMillis()}",
                 memberId = member.id,
@@ -980,7 +1009,6 @@ class ZegoCallEngineManager(private val context: Context) {
         scope.launch(Dispatchers.IO) {
             SupabaseCallService.updateActiveCallStatus(current.roomID, "ENDED")
         }
-        lastMissedCallSessionId = current.roomID
 
         if (member != null) {
             val isOutgoing = current.isOutgoing || current.state == CallState.OUTGOING_RINGING || current.state == CallState.OUTGOING_CALLING

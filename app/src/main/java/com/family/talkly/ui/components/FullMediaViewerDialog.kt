@@ -734,6 +734,15 @@ private fun downloadMediaToGallery(context: Context, message: ChatMessage) {
     val mimeType = if (isVideo) "video/mp4" else "image/jpeg"
     val filename = "Talkly_${System.currentTimeMillis()}.$extension"
 
+    val urlType = when {
+        rawUrl.startsWith("http://", ignoreCase = true) || rawUrl.startsWith("https://", ignoreCase = true) -> "HTTP/HTTPS"
+        rawUrl.startsWith("data:", ignoreCase = true) -> "DATA_URI"
+        rawUrl.startsWith("content://", ignoreCase = true) -> "CONTENT_URI"
+        rawUrl.startsWith("file://", ignoreCase = true) -> "FILE_URI"
+        else -> "LOCAL_PATH_OR_OTHER"
+    }
+    Log.e(TAG, "downloadMediaToGallery initiated: urlType=$urlType, isVideo=$isVideo, rawUrl=$rawUrl")
+
     Toast.makeText(context, "Saving ${if (isVideo) "video" else "photo"} to Gallery...", Toast.LENGTH_SHORT).show()
 
     CoroutineScope(Dispatchers.IO).launch {
@@ -777,7 +786,7 @@ private fun downloadMediaToGallery(context: Context, message: ChatMessage) {
             }
 
             if (inputStream == null) {
-                throw java.io.IOException("Unable to open media stream")
+                throw java.io.IOException("Unable to open media stream for source: $rawUrl")
             }
 
             inputStream.use { input ->
@@ -830,8 +839,8 @@ private fun downloadMediaToGallery(context: Context, message: ChatMessage) {
                 }
             }
         } catch (e: Exception) {
-            Log.e("FullMediaViewer", "Failed to download media to gallery: ${e.message}", e)
-            errorMessage = e.localizedMessage ?: "Unknown error"
+            Log.e(TAG, "Failed to download media to gallery [${e.javaClass.name}]: ${e.message}", e)
+            errorMessage = "${e.javaClass.simpleName}: ${e.message ?: "Unknown error"}"
         }
 
         withContext(Dispatchers.Main) {

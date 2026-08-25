@@ -1061,7 +1061,19 @@ class FirebaseChatRepository(private val context: Context) {
             member.phone == memberOrUidOrPhone ||
             (suffix.isNotBlank() && com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone) == suffix)
         }
-        return existing?.id ?: memberOrUidOrPhone
+        if (existing != null) {
+            val candidates = listOfNotNull(existing.firebaseUid, existing.id)
+            val validUuid = candidates.firstOrNull { candidate ->
+                candidate.isNotBlank() && try {
+                    java.util.UUID.fromString(candidate)
+                    true
+                } catch (e: Exception) {
+                    false
+                }
+            }
+            return validUuid ?: existing.id
+        }
+        return memberOrUidOrPhone
     }
 
     fun getMessagesForMember(memberId: String): List<ChatMessage> {
@@ -2059,7 +2071,13 @@ class FirebaseChatRepository(private val context: Context) {
             replyToText = replyToText
         )
 
-        val currentList = (getMessagesForMember(canonicalId)).toMutableList()
+        val existingUnderCanonical = _messagesMap.value[canonicalId] ?: emptyList()
+        val existingUnderRawMemberId = _messagesMap.value[memberId] ?: emptyList()
+        val existingFromHelper = getMessagesForMember(canonicalId)
+        val mergedExisting = (existingUnderCanonical + existingUnderRawMemberId + existingFromHelper)
+            .distinctBy { it.id }
+            .sortedBy { it.timestamp }
+        val currentList = mergedExisting.toMutableList()
         currentList.add(newMessage)
 
         val updatedMap = _messagesMap.value.toMutableMap()
