@@ -301,6 +301,10 @@ fun CallScreen(
     onBindLocalView: (android.view.View?) -> Unit = {},
     onBindRemoteView: (android.view.View?) -> Unit = {}
 ) {
+    val TAG = "CallScreen"
+    val isVideo = callInfo.callType == CallType.VIDEO
+    android.util.Log.e(TAG, "CallScreen recomposing: isVideo=$isVideo, state=${callInfo.state}, isCameraOff=${callInfo.isCameraOff}")
+
     val context = LocalContext.current
     DisposableEffect(Unit) {
         val activity = context as? Activity
@@ -321,7 +325,6 @@ fun CallScreen(
     }
 
     val member = callInfo.targetMember
-    val isVideo = callInfo.callType == CallType.VIDEO
     val isOutgoing = callInfo.state == CallState.OUTGOING_CALLING || callInfo.state == CallState.OUTGOING_RINGING
 
     val minutes = callInfo.durationSeconds / 60

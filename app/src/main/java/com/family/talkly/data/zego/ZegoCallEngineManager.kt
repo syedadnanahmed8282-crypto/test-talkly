@@ -963,6 +963,7 @@ class ZegoCallEngineManager(private val context: Context) {
         }
 
         _callState.value = current.copy(state = CallState.ACTIVE, isSpeakerOn = isVideo, isOutgoing = false)
+        Log.e(TAG, "[DIAGNOSTIC] _callState emitted (acceptCall): state=${_callState.value.state}, callType=${_callState.value.callType}, isCameraOff=${_callState.value.isCameraOff}")
         com.family.talkly.service.CallForegroundService.startActiveCallService(
             context = context,
             callerName = member?.name ?: "Talkly User",
@@ -1078,6 +1079,7 @@ class ZegoCallEngineManager(private val context: Context) {
         val current = _callState.value
         val newCameraOff = !current.isCameraOff
         _callState.value = current.copy(isCameraOff = newCameraOff)
+        Log.e(TAG, "[DIAGNOSTIC] _callState emitted (toggleCamera): state=${_callState.value.state}, callType=${_callState.value.callType}, isCameraOff=${_callState.value.isCameraOff}")
         expressEngine?.enableCamera(!newCameraOff)
     }
 
