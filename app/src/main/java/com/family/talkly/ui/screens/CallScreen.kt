@@ -380,7 +380,7 @@ fun CallScreen(
                     }
                 }
         ) {
-            if (isVideo && !callInfo.isCameraOff && callInfo.state == CallState.ACTIVE) {
+            if (isVideo && callInfo.state == CallState.ACTIVE) {
                 // ==========================================
                 // ACTIVE VIDEO CALL VIEW
                 // ==========================================
@@ -425,11 +425,27 @@ fun CallScreen(
                                 .weight(1f)
                                 .border(1.dp, BorderElevated)
                         ) {
-                            CameraPreviewView(
-                                onBindLocalView = onBindLocalView,
-                                beautyFilterMode = beautyFilterMode,
-                                modifier = Modifier.fillMaxSize()
-                            )
+                            if (!callInfo.isCameraOff) {
+                                CameraPreviewView(
+                                    onBindLocalView = onBindLocalView,
+                                    beautyFilterMode = beautyFilterMode,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(BackgroundDark),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.VideocamOff,
+                                        contentDescription = "Camera Off",
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(48.dp)
+                                    )
+                                }
+                            }
                             Surface(
                                 color = SurfaceCard.copy(alpha = 0.85f),
                                 shape = RoundedCornerShape(10.dp),
@@ -479,11 +495,27 @@ fun CallScreen(
                                 modifier = Modifier.fillMaxSize()
                             )
                         } else {
-                            CameraPreviewView(
-                                onBindLocalView = onBindLocalView,
-                                beautyFilterMode = beautyFilterMode,
-                                modifier = Modifier.fillMaxSize()
-                            )
+                            if (!callInfo.isCameraOff) {
+                                CameraPreviewView(
+                                    onBindLocalView = onBindLocalView,
+                                    beautyFilterMode = beautyFilterMode,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(BackgroundDark),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.VideocamOff,
+                                        contentDescription = "Camera Off",
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(64.dp)
+                                    )
+                                }
+                            }
                         }
 
                         // Top Gradient Scrim
@@ -535,11 +567,27 @@ fun CallScreen(
                         ) {
                             Box(modifier = Modifier.fillMaxSize()) {
                                 if (!isSwapped) {
-                                    CameraPreviewView(
-                                        onBindLocalView = onBindLocalView,
-                                        beautyFilterMode = beautyFilterMode,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
+                                    if (!callInfo.isCameraOff) {
+                                        CameraPreviewView(
+                                            onBindLocalView = onBindLocalView,
+                                            beautyFilterMode = beautyFilterMode,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(BackgroundDark),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.VideocamOff,
+                                                contentDescription = "Camera Off",
+                                                tint = TextSecondary,
+                                                modifier = Modifier.size(32.dp)
+                                            )
+                                        }
+                                    }
                                 } else {
                                     RemoteVideoView(
                                         member = member,
