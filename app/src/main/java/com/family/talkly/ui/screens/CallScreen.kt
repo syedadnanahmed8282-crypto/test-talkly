@@ -158,7 +158,6 @@ fun CameraPreviewView(
     beautyFilterMode: BeautyFilterMode = BeautyFilterMode.FAIR_AND_BRIGHT,
     modifier: Modifier = Modifier
 ) {
-    val matrix = remember(beautyFilterMode) { getBeautyColorMatrix(beautyFilterMode) }
     AndroidView(
         factory = { ctx ->
             TextureView(ctx).apply {
@@ -175,7 +174,7 @@ fun CameraPreviewView(
                 }
             }
         },
-        modifier = modifier.applyBeautyColorFilter(beautyFilterMode, matrix)
+        modifier = modifier
     )
 }
 
@@ -187,7 +186,6 @@ fun RemoteVideoView(
     beautyFilterMode: BeautyFilterMode = BeautyFilterMode.FAIR_AND_BRIGHT,
     modifier: Modifier = Modifier
 ) {
-    val matrix = remember(beautyFilterMode) { getBeautyColorMatrix(beautyFilterMode) }
     Box(
         modifier = modifier.background(BackgroundDark),
         contentAlignment = Alignment.Center
@@ -208,9 +206,7 @@ fun RemoteVideoView(
                     }
                 }
             },
-            modifier = Modifier
-                .fillMaxSize()
-                .applyBeautyColorFilter(beautyFilterMode, matrix)
+            modifier = Modifier.fillMaxSize()
         )
 
         if (!isRemotePlaying) {

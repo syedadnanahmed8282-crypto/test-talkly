@@ -171,13 +171,14 @@ class ZegoCallEngineManager(private val context: Context) {
                 application = app
             }
 
+            Log.e(TAG, "[DIAGNOSTIC] Calling ZegoExpressEngine.createEngine with AppID=$ZEGO_APP_ID")
             expressEngine = ZegoExpressEngine.createEngine(profile, object : IZegoEventHandler() {
                 override fun onRoomUserUpdate(
                     roomID: String?,
                     updateType: ZegoUpdateType?,
                     userList: ArrayList<ZegoUser>?
                 ) {
-                    Log.d(TAG, "onRoomUserUpdate: roomID=$roomID, updateType=$updateType, users=${userList?.size}")
+                    Log.e(TAG, "[DIAGNOSTIC] onRoomUserUpdate: roomID=$roomID, updateType=$updateType, users=${userList?.size}")
                     if (updateType == ZegoUpdateType.ADD && !userList.isNullOrEmpty()) {
                         val currentState = _callState.value.state
                         if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) {
@@ -199,7 +200,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     extendedData: JSONObject?
                 ) {
                     if (streamList.isNullOrEmpty() || updateType == null) return
-                    Log.d(TAG, "onRoomStreamUpdate: roomID=$roomID, updateType=$updateType, streams=${streamList.size}")
+                    Log.e(TAG, "[DIAGNOSTIC] onRoomStreamUpdate: roomID=$roomID, updateType=$updateType, streams=${streamList.size}")
 
                     if (updateType == ZegoUpdateType.ADD) {
                         Log.d(TAG, "Remote stream ADDED: stopping outgoing ringtone and configuring active audio")
@@ -214,7 +215,7 @@ class ZegoCallEngineManager(private val context: Context) {
 
                         for (stream in streamList) {
                             val streamID = stream.streamID
-                            Log.d(TAG, "Remote stream ADDED: streamID=$streamID by user=${stream.user?.userID}")
+                            Log.e(TAG, "[DIAGNOSTIC] Remote stream ADDED: streamID=$streamID by user=${stream.user?.userID}")
                             _callState.value = _callState.value.copy(
                                 remoteStreamId = streamID,
                                 isRemoteStreamPlaying = true
@@ -224,7 +225,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     } else if (updateType == ZegoUpdateType.DELETE) {
                         for (stream in streamList) {
                             val streamID = stream.streamID
-                            Log.d(TAG, "Remote stream DELETED: streamID=$streamID")
+                            Log.e(TAG, "[DIAGNOSTIC] Remote stream DELETED: streamID=$streamID")
                             expressEngine?.stopPlayingStream(streamID)
                             if (_callState.value.remoteStreamId == streamID) {
                                 _callState.value = _callState.value.copy(
@@ -242,7 +243,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     errorCode: Int,
                     extendedData: JSONObject?
                 ) {
-                    Log.d(TAG, "onRoomStateChanged: roomID=$roomID, reason=$reason, errorCode=$errorCode")
+                    Log.e(TAG, "[DIAGNOSTIC] onRoomStateChanged: roomID=$roomID, reason=$reason, errorCode=$errorCode (${getZegoErrorMessage(errorCode)})")
                 }
 
                 override fun onPublisherStateUpdate(
@@ -251,7 +252,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     errorCode: Int,
                     extendedData: JSONObject?
                 ) {
-                    Log.d(TAG, "onPublisherStateUpdate: streamID=$streamID, state=$state, errorCode=$errorCode")
+                    Log.e(TAG, "[DIAGNOSTIC] onPublisherStateUpdate: streamID=$streamID, state=$state, errorCode=$errorCode (${getZegoErrorMessage(errorCode)})")
                 }
 
                 override fun onPlayerStateUpdate(
@@ -260,7 +261,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     errorCode: Int,
                     extendedData: JSONObject?
                 ) {
-                    Log.d(TAG, "onPlayerStateUpdate: streamID=$streamID, state=$state, errorCode=$errorCode")
+                    Log.e(TAG, "[DIAGNOSTIC] onPlayerStateUpdate: streamID=$streamID, state=$state, errorCode=$errorCode (${getZegoErrorMessage(errorCode)})")
                     if (state == ZegoPlayerState.PLAYING) {
                         Log.d(TAG, "Remote player state PLAYING: stopping ringtone immediately")
                         ringingTimeoutJob?.cancel()
@@ -312,9 +313,13 @@ class ZegoCallEngineManager(private val context: Context) {
         // Login to room
         val user = ZegoUser(myUserId, myUserName)
         val roomConfig = ZegoRoomConfig()
-        expressEngine?.loginRoom(roomID, user, roomConfig)
+        Log.e(TAG, "[DIAGNOSTIC] Attempting loginRoom: roomID=$roomID, userID=$myUserId")
+        expressEngine?.loginRoom(roomID, user, roomConfig) { errorCode, extendedData ->
+            Log.e(TAG, "[DIAGNOSTIC] loginRoom callback: roomID=$roomID, errorCode=$errorCode (${getZegoErrorMessage(errorCode)})")
+        }
 
         // Publish local audio/video stream
+        Log.e(TAG, "[DIAGNOSTIC] Attempting startPublishingStream: $localStreamId")
         expressEngine?.startPublishingStream(localStreamId)
         Log.i(TAG, "Joined room $roomID as $myUserId ($myUserName), publishing stream $localStreamId")
 
@@ -342,7 +347,10 @@ class ZegoCallEngineManager(private val context: Context) {
                 expressEngine?.stopPlayingStream(remoteStreamId)
             }
             if (roomID.isNotBlank()) {
-                expressEngine?.logoutRoom(roomID)
+                Log.e(TAG, "[DIAGNOSTIC] Attempting logoutRoom: $roomID")
+                expressEngine?.logoutRoom(roomID) { errorCode, extendedData ->
+                    Log.e(TAG, "[DIAGNOSTIC] logoutRoom callback: roomID=$roomID, errorCode=$errorCode (${getZegoErrorMessage(errorCode)})")
+                }
             }
             Log.i(TAG, "Left Zego room: $roomID")
         } catch (e: Exception) {
@@ -1137,6 +1145,22 @@ class ZegoCallEngineManager(private val context: Context) {
                     Log.w(TAG, "Error persisting call log in Supabase: ${e.localizedMessage}")
                 }
             }
+        }
+    }
+
+    private fun getZegoErrorMessage(errorCode: Int): String {
+        return when (errorCode) {
+            0 -> "SUCCESS (0)"
+            1000001 -> "PARAM_INVALID (1000001)"
+            1002001 -> "AUTH_FAILED (1002001) - Check AppID/AppSign"
+            1002036 -> "ROOM_ALREADY_IN_ROOM (1002036)"
+            1002050 -> "ROOM_COUNT_LIMIT_EXCEEDED (1002050)"
+            1003001 -> "PUBLISH_STREAM_FAILED (1003001)"
+            1003005 -> "PUBLISH_STREAM_ID_CONFLICT (1003005)"
+            1004001 -> "PLAY_STREAM_FAILED (1004001)"
+            1004002 -> "PLAY_STREAM_NOT_EXIST (1004002)"
+            1009001 -> "TRIAL_LIMIT_EXCEEDED (1009001)"
+            else -> "CODE_$errorCode"
         }
     }
 }
