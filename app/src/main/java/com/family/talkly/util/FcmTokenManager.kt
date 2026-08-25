@@ -61,7 +61,7 @@ object FcmTokenManager {
 
             val fcmInstance = try {
                 FirebaseMessaging.getInstance().apply {
-                    isAutoInitEnabled = true
+                    isAutoInitEnabled = false
                 }
             } catch (e: Throwable) {
                 Log.i(TAG, "FirebaseMessaging initialization note: ${e.localizedMessage}")

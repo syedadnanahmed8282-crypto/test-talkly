@@ -171,7 +171,7 @@ class ZegoCallEngineManager(private val context: Context) {
                 application = app
             }
 
-            Log.e(TAG, "[DIAGNOSTIC] Calling ZegoExpressEngine.createEngine with AppID=$ZEGO_APP_ID")
+            Log.i(TAG, "[DIAGNOSTIC] Calling ZegoExpressEngine.createEngine with AppID=$ZEGO_APP_ID")
             expressEngine = ZegoExpressEngine.createEngine(profile, object : IZegoEventHandler() {
                 override fun onRoomUserUpdate(
                     roomID: String?,
@@ -650,7 +650,7 @@ class ZegoCallEngineManager(private val context: Context) {
                 (myPhone.isNotBlank() && receiverPhone.isNotBlank() && receiverPhone == myPhone)
         )
 
-        Log.d(TAG, "handleActiveCallSignal: id=${call.id}, status=$status, isMeCaller=$isMeCaller, isMeReceiver=$isMeReceiver")
+        Log.e(TAG, "[DIAGNOSTIC] handleActiveCallSignal: raw call.callType='${call.callType}', parsed callType=$callType, status=$status, isMeCaller=$isMeCaller, isMeReceiver=$isMeReceiver")
 
         when (status) {
             "CALLING" -> {
@@ -699,6 +699,7 @@ class ZegoCallEngineManager(private val context: Context) {
                             roomID = roomID,
                             durationSeconds = 0
                         )
+                        Log.e(TAG, "[DIAGNOSTIC] _callState emitted (INCOMING_RINGING): callType=${_callState.value.callType}, caller=${incomingCaller.name}, roomID=$roomID")
 
                         com.family.talkly.service.CallForegroundService.startIncomingCallService(
                             context = context,
@@ -912,6 +913,7 @@ class ZegoCallEngineManager(private val context: Context) {
             roomID = roomID,
             durationSeconds = 0
         )
+        Log.e(TAG, "[DIAGNOSTIC] _callState emitted (setIncomingCallFromKilledState): callType=${_callState.value.callType}, caller=${member.name}, roomID=$roomID")
     }
 
     fun triggerIncomingCall(member: FamilyMember, callType: CallType) {
@@ -945,6 +947,7 @@ class ZegoCallEngineManager(private val context: Context) {
     }
 
     fun acceptCall() {
+        Log.e(TAG, "[DIAGNOSTIC] acceptCall() CALLED: _callState.value.callType=${_callState.value.callType}, roomID=${_callState.value.roomID}, state=${_callState.value.state}")
         ringingTimeoutJob?.cancel()
         try {
             com.family.talkly.service.CallForegroundService.stopRingtoneImmediately()
