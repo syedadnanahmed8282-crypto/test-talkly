@@ -1538,6 +1538,7 @@ fun ChatDetailScreen(
                                     if (!isMutualContact) {
                                         Toast.makeText(context, "Cannot call: Message request must be accepted first", Toast.LENGTH_SHORT).show()
                                     } else if (member.isRegisteredOnTalkly) {
+                                        android.util.Log.e("Talkly_ZegoEngine", "[CALLER_DIAGNOSTIC] Video call button tapped, passing CallType.VIDEO")
                                         onStartCall(CallType.VIDEO)
                                     } else {
                                         Toast.makeText(context, "User not registered on Talkly", Toast.LENGTH_SHORT).show()

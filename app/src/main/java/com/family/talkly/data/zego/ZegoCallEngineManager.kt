@@ -785,6 +785,7 @@ class ZegoCallEngineManager(private val context: Context) {
         callType: CallType,
         isBlocked: Boolean = false
     ) {
+        Log.e("Talkly_ZegoEngine", "[CALLER_DIAGNOSTIC] startOutgoingCall() received callType=$callType")
         if (isBlocked) {
             Log.w(TAG, "Cannot start call: ${member.name} is blocked")
             android.widget.Toast.makeText(context, "Call failed: User is blocked", android.widget.Toast.LENGTH_SHORT).show()
@@ -849,6 +850,7 @@ class ZegoCallEngineManager(private val context: Context) {
                 status = "CALLING"
             )
 
+            Log.e("Talkly_ZegoEngine", "[CALLER_DIAGNOSTIC] About to insert into Supabase: activeCall.callType='${activeCall.callType}', roomId=${activeCall.roomId}")
             SupabaseCallService.createActiveCall(activeCall)
 
             // Send high priority FCM push for incoming calls (for killed/background recipient)

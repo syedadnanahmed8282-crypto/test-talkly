@@ -2561,7 +2561,10 @@ private fun CallsTab(
                                                 .size(28.dp)
                                                 .clip(CircleShape)
                                                 .background(MintAccent.copy(alpha = 0.15f))
-                                                .clickable { onStartCall(member, CallType.VIDEO) },
+                                                .clickable {
+                                                    android.util.Log.e("Talkly_ZegoEngine", "[CALLER_DIAGNOSTIC] Video call button tapped, passing CallType.VIDEO")
+                                                    onStartCall(member, CallType.VIDEO)
+                                                },
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Icon(
