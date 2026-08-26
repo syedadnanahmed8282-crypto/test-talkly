@@ -119,6 +119,11 @@ class FirebaseChatRepository(private val context: Context) {
                     Log.d(TAG, "NetworkCallback: onAvailable -> network connected")
                     _isNetworkConnected.value = true
                     forceReconnectListeners("network_online")
+                    try {
+                        com.family.talkly.data.zego.ZegoCallEngineManager.getInstance(context).reconnectCallSync()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error triggering call sync on network available: ${e.localizedMessage}")
+                    }
                 }
 
                 override fun onLost(network: Network) {
@@ -1459,8 +1464,19 @@ class FirebaseChatRepository(private val context: Context) {
     }
 
     private var isInitialMessageSyncDone = false
+    private var lastForceReconnectTimestamp = 0L
+    private var lastMessageSubscribedTimestamp = 0L
+    @Volatile
+    private var isReconnectingMessages = false
 
     fun forceReconnectListeners(reason: String = "manual") {
+        val now = System.currentTimeMillis()
+        if (now - lastForceReconnectTimestamp < 2500L && isReconnectingMessages) {
+            Log.d(TAG, "forceReconnectListeners debounced: skipped duplicate call within 2.5s (reason: $reason)")
+            return
+        }
+        lastForceReconnectTimestamp = now
+
         val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
         val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
         val uid = currentSyncedUserId
@@ -1475,7 +1491,15 @@ class FirebaseChatRepository(private val context: Context) {
         }
 
         try {
+            val isChannelActive = supabaseRealtimeChannel != null && supabaseRealtimeChannel?.status?.value == RealtimeChannel.Status.SUBSCRIBED
+            // If the channel is already connected and was established recently (within last 10s), skip tearing it down for non-manual triggers
+            if (isChannelActive && currentSyncedUserId == uid && (now - lastMessageSubscribedTimestamp < 10_000L) && reason != "manual") {
+                Log.d(TAG, "forceReconnectListeners: Messaging channel is already SUBSCRIBED recently for uid=$uid, skipping redundant teardown (trigger: $reason)")
+                return
+            }
+
             currentSyncedUserId = null // Reset so startRealtimeMessageSync bypasses the guard
+            isReconnectingMessages = true
 
             startRealtimeMessageSync(uid)
             syncContactsFromSupabase(uid)
@@ -1483,6 +1507,11 @@ class FirebaseChatRepository(private val context: Context) {
             Log.d(TAG, "forceReconnectListeners: Successfully attached message listeners for uid=$uid (trigger: $reason)")
         } catch (e: Exception) {
             Log.e(TAG, "forceReconnectListeners encountered error: ${e.localizedMessage}")
+        } finally {
+            repositoryScope.launch {
+                delay(3000)
+                isReconnectingMessages = false
+            }
         }
     }
 
@@ -1551,7 +1580,10 @@ class FirebaseChatRepository(private val context: Context) {
                         handleIncomingSupabaseRequestAction(action, currentUserId)
                     },
                     onStatusChange = { status ->
-                        if (status == RealtimeChannel.Status.UNSUBSCRIBED) {
+                        if (status == RealtimeChannel.Status.SUBSCRIBED) {
+                            Log.d(TAG, "Messaging Realtime channel successfully SUBSCRIBED for $currentUserId")
+                            lastMessageSubscribedTimestamp = System.currentTimeMillis()
+                        } else if (status == RealtimeChannel.Status.UNSUBSCRIBED) {
                             Log.w(TAG, "Messaging channel disconnected (status=$status). Reconnecting in 3s...")
                             repositoryScope.launch(Dispatchers.IO) {
                                 delay(3000)

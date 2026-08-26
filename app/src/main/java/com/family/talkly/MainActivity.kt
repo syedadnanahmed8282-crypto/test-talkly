@@ -393,33 +393,8 @@ class MainActivity : ComponentActivity() {
             Log.w("MainActivity", "Failed to register ProcessLifecycleOwner observer: ${e.localizedMessage}")
         }
 
-        // 2. ConnectivityManager.NetworkCallback to detect network change / reconnect
-        try {
-            val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            if (connectivityManager != null) {
-                val request = NetworkRequest.Builder()
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                    .build()
-
-                networkCallback = object : ConnectivityManager.NetworkCallback() {
-                    override fun onAvailable(network: Network) {
-                        super.onAvailable(network)
-                        Log.d("MainActivity", "Network available/reconnected (NetworkCallback.onAvailable) -> triggering chatRepository.forceReconnectListeners and zegoManager.reconnectCallSync")
-                        chatRepository.forceReconnectListeners("network_available")
-                        zegoManager.reconnectCallSync()
-                    }
-
-                    override fun onLost(network: Network) {
-                        super.onLost(network)
-                        Log.d("MainActivity", "Network connection lost (NetworkCallback.onLost)")
-                    }
-                }
-                connectivityManager.registerNetworkCallback(request, networkCallback!!)
-                Log.d("MainActivity", "NetworkCallback registered successfully")
-            }
-        } catch (e: Exception) {
-            Log.w("MainActivity", "Failed to register NetworkCallback: ${e.localizedMessage}")
-        }
+        // 2. Network connectivity monitoring is centralized in FirebaseChatRepository.
+        // ProcessLifecycleOwner foreground observer (above) handles app foreground transitions.
     }
 
     override fun onDestroy() {

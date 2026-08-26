@@ -126,6 +126,10 @@ class ZegoCallEngineManager(private val context: Context) {
     private var callsRealtimeChannel: RealtimeChannel? = null
     private var callSyncJob: Job? = null
     private var currentSyncedUserId: String? = null
+    private var lastCallReconnectTimestamp = 0L
+    private var lastCallSubscribedTimestamp = 0L
+    @Volatile
+    private var isSubscribingCalls = false
 
     var currentUserProfile: UserProfile? = null
     var chatRepository: FirebaseChatRepository? = null
@@ -514,20 +518,31 @@ class ZegoCallEngineManager(private val context: Context) {
         }
     }
 
-    fun startRealtimeCallSync(userProfile: UserProfile, repository: FirebaseChatRepository) {
+    fun startRealtimeCallSync(userProfile: UserProfile, repository: FirebaseChatRepository, force: Boolean = false) {
         this.currentUserProfile = userProfile
         this.chatRepository = repository
 
         val uid = userProfile.uid
         if (uid.isBlank() || uid == "self") return
+
+        val now = System.currentTimeMillis()
         val isChannelActive = callsRealtimeChannel != null && callsRealtimeChannel?.status?.value == RealtimeChannel.Status.SUBSCRIBED
-        if (currentSyncedUserId == uid && isChannelActive) {
-            Log.d(TAG, "startRealtimeCallSync: Calls channel already active for $uid")
+
+        // 1. If already SUBSCRIBED for the same user, never tear down a healthy channel unless force requested
+        if (currentSyncedUserId == uid && isChannelActive && !force) {
+            Log.d(TAG, "startRealtimeCallSync: Calls channel already SUBSCRIBED for $uid, skipping redundant connection")
             return
         }
 
-        callSyncJob?.cancel()
+        // 2. Debounce: if a connection is already in flight within the last 2.5s, don't interrupt it
+        if (now - lastCallReconnectTimestamp < 2500L && isSubscribingCalls && !force) {
+            Log.d(TAG, "startRealtimeCallSync debounced: connection already in flight for $uid")
+            return
+        }
+        lastCallReconnectTimestamp = now
+
         currentSyncedUserId = uid
+        isSubscribingCalls = true
 
         // 1. Fetch persistent call history logs from Supabase
         callScope.launch {
@@ -545,6 +560,7 @@ class ZegoCallEngineManager(private val context: Context) {
         }
 
         // 2. Subscribe to Supabase Realtime channel for active_calls
+        callSyncJob?.cancel()
         callSyncJob = callScope.launch {
             try {
                 callsRealtimeChannel?.let { SupabaseCallService.unsubscribeChannel(it) }
@@ -555,15 +571,20 @@ class ZegoCallEngineManager(private val context: Context) {
                         handleRealtimeCallAction(action)
                     },
                     onStatusChange = { status ->
-                        if (status == RealtimeChannel.Status.UNSUBSCRIBED) {
+                        if (status == RealtimeChannel.Status.SUBSCRIBED) {
+                            Log.d(TAG, "Calls Realtime channel successfully SUBSCRIBED for $uid")
+                            lastCallSubscribedTimestamp = System.currentTimeMillis()
+                            isSubscribingCalls = false
+                        } else if (status == RealtimeChannel.Status.UNSUBSCRIBED) {
                             Log.w(TAG, "Calls channel disconnected (status=$status). Reconnecting in 3s...")
+                            isSubscribingCalls = false
                             callScope.launch {
                                 delay(3000)
                                 if (currentSyncedUserId == uid &&
                                     callsRealtimeChannel?.status?.value != RealtimeChannel.Status.SUBSCRIBED) {
                                     currentUserProfile?.let { prof ->
                                         chatRepository?.let { repo ->
-                                            startRealtimeCallSync(prof, repo)
+                                            startRealtimeCallSync(prof, repo, force = true)
                                         }
                                     }
                                 }
@@ -573,14 +594,32 @@ class ZegoCallEngineManager(private val context: Context) {
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Error starting Supabase Realtime calls sync: ${e.localizedMessage}")
+            } finally {
+                callScope.launch {
+                    delay(3000)
+                    isSubscribingCalls = false
+                }
             }
         }
     }
 
     fun reconnectCallSync() {
+        val now = System.currentTimeMillis()
+        if (now - lastCallReconnectTimestamp < 2500L && isSubscribingCalls) {
+            Log.d(TAG, "reconnectCallSync debounced: skipped duplicate reconnect within 2.5s")
+            return
+        }
+
         val profile = currentUserProfile ?: getLocalUserProfile()
         val repo = chatRepository ?: FirebaseChatRepository.getInstance(context)
-        if (profile.uid.isNotBlank() && profile.uid != "self") {
+        val uid = profile.uid
+        if (uid.isNotBlank() && uid != "self") {
+            val isChannelActive = callsRealtimeChannel != null && callsRealtimeChannel?.status?.value == RealtimeChannel.Status.SUBSCRIBED
+            // If the calls channel is already connected and was established recently (within last 10s), skip tearing it down
+            if (isChannelActive && currentSyncedUserId == uid && (now - lastCallSubscribedTimestamp < 10_000L)) {
+                Log.d(TAG, "reconnectCallSync: Calls channel already active and healthy for $uid, skipping teardown")
+                return
+            }
             currentSyncedUserId = null
             startRealtimeCallSync(profile, repo)
         }
