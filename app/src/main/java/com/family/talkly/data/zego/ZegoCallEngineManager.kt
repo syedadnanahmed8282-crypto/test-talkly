@@ -481,7 +481,20 @@ class ZegoCallEngineManager(private val context: Context) {
         val prefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
         val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
 
-        val uid = prefs.getString("user_uid", null) ?: fallbackPrefs.getString("user_uid", "self") ?: "self"
+        val authUid = try {
+            SupabaseClientProvider.auth.currentUserOrNull()?.id
+        } catch (e: Exception) {
+            null
+        }
+
+        var uid = prefs.getString("user_uid", null)
+            ?: fallbackPrefs.getString("user_uid", null)
+            ?: authUid
+            ?: "self"
+        if (uid == "self" && !authUid.isNullOrBlank()) {
+            uid = authUid
+        }
+
         val name = prefs.getString("user_name", null) ?: fallbackPrefs.getString("user_name", "Me") ?: "Me"
         val phone = prefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", "") ?: ""
         val pic = prefs.getString("user_profile_pic", null) ?: fallbackPrefs.getString("user_profile_pic", "") ?: ""
@@ -621,33 +634,45 @@ class ZegoCallEngineManager(private val context: Context) {
 
     fun reconnectCallSync() {
         val now = System.currentTimeMillis()
-        val profile = currentUserProfile ?: getLocalUserProfile()
+        var profile = currentUserProfile ?: getLocalUserProfile()
+        val authUid = try {
+            SupabaseClientProvider.auth.currentUserOrNull()?.id
+        } catch (e: Exception) {
+            null
+        }
+        val effectiveUid = if (!authUid.isNullOrBlank()) authUid else profile.uid
+        if (effectiveUid.isNotBlank() && effectiveUid != "self" && profile.uid != effectiveUid) {
+            profile = profile.copy(uid = effectiveUid)
+            currentUserProfile = profile
+        }
+
         val repo = chatRepository ?: FirebaseChatRepository.getInstance(context)
         val uid = profile.uid
         val channelStatusStr = callsRealtimeChannel?.status?.value?.name ?: "null"
 
-        Log.e(
+        Log.d(
             TAG,
-            "DIAGNOSTIC reconnectCallSync ENTRY -> uid='$uid', currentSyncedUserId='$currentSyncedUserId', channelStatus=$channelStatusStr, isSubscribingCalls=$isSubscribingCalls, timeSinceLastReconnect=${now - lastCallReconnectTimestamp}ms"
+            "reconnectCallSync ENTRY -> uid='$uid', currentSyncedUserId='$currentSyncedUserId', channelStatus=$channelStatusStr, isSubscribingCalls=$isSubscribingCalls"
         )
 
-        if (now - lastCallReconnectTimestamp < 2500L && isSubscribingCalls) {
-            Log.e(TAG, "DIAGNOSTIC reconnectCallSync GUARD EXIT: debounced within 2.5s while isSubscribingCalls=true")
+        if (uid.isBlank() || uid == "self") {
+            Log.d(TAG, "reconnectCallSync: User not logged in yet (uid='$uid'), skipping call sync")
             return
         }
 
-        if (uid.isNotBlank() && uid != "self") {
-            val isChannelActive = callsRealtimeChannel != null && callsRealtimeChannel?.status?.value == RealtimeChannel.Status.SUBSCRIBED
-            // If the calls channel is already connected and healthy for the current user, always skip tearing it down
-            if (isChannelActive && currentSyncedUserId == uid) {
-                Log.e(TAG, "DIAGNOSTIC reconnectCallSync GUARD EXIT: Calls channel already active and healthy for $uid, skipping teardown")
-                return
-            }
-            currentSyncedUserId = null
-            startRealtimeCallSync(profile, repo)
-        } else {
-            Log.e(TAG, "DIAGNOSTIC reconnectCallSync GUARD EXIT: uid is blank or 'self' (uid='$uid')")
+        if (now - lastCallReconnectTimestamp < 2500L && isSubscribingCalls) {
+            Log.d(TAG, "reconnectCallSync: debounced within 2.5s while isSubscribingCalls=true")
+            return
         }
+
+        val isChannelActive = callsRealtimeChannel != null && callsRealtimeChannel?.status?.value == RealtimeChannel.Status.SUBSCRIBED
+        // If the calls channel is already connected and healthy for the current user, always skip tearing it down
+        if (isChannelActive && currentSyncedUserId == uid) {
+            Log.d(TAG, "reconnectCallSync: Calls channel already active and healthy for $uid, skipping teardown")
+            return
+        }
+        currentSyncedUserId = null
+        startRealtimeCallSync(profile, repo)
     }
 
     private fun handleRealtimeCallAction(action: PostgresAction) {

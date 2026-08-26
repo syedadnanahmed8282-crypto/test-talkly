@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.withContext
@@ -433,7 +434,7 @@ object SupabaseMessagingService {
         currentUserId: String,
         targetUserId: String,
         conversationId: String?
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): Boolean = withContext(Dispatchers.IO + NonCancellable) {
         try {
             if (!conversationId.isNullOrBlank()) {
                 SupabaseClientProvider.client.postgrest["messages"]
@@ -516,7 +517,7 @@ object SupabaseMessagingService {
         }
     }
 
-    suspend fun deleteMessageRequest(requestId: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun deleteMessageRequest(requestId: String): Boolean = withContext(Dispatchers.IO + NonCancellable) {
         try {
             SupabaseClientProvider.client.postgrest["message_requests"]
                 .delete {

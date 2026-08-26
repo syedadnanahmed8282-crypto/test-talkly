@@ -360,11 +360,11 @@ class MainActivity : ComponentActivity() {
             ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
                 override fun onStart(owner: LifecycleOwner) {
                     super.onStart(owner)
-                    Log.d("MainActivity", "App entered FOREGROUND (ProcessLifecycleOwner.onStart) -> triggering chatRepository.forceReconnectListeners and zegoManager.reconnectCallSync")
-                    chatRepository.forceReconnectListeners("app_foreground")
-                    zegoManager.reconnectCallSync()
                     val profile = zegoManager.getLocalUserProfile()
                     if (profile.uid.isNotBlank() && profile.uid != "self") {
+                        Log.d("MainActivity", "App entered FOREGROUND -> triggering chatRepository.forceReconnectListeners and zegoManager.reconnectCallSync for ${profile.uid}")
+                        chatRepository.forceReconnectListeners("app_foreground")
+                        zegoManager.reconnectCallSync()
                         chatRepository.setMemberPresence(
                             memberId = profile.uid,
                             isOnline = true,
