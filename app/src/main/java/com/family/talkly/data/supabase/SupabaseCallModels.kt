@@ -28,7 +28,7 @@ data class SupabaseActiveCall(
     @SerialName("receiver_suffix")
     val receiverSuffix: String,
     @SerialName("call_type")
-    val callType: String = "VIDEO",
+    val callType: String,
     val status: String = "CALLING",
     @SerialName("created_at")
     val createdAt: String? = null,

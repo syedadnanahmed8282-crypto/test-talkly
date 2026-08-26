@@ -10,6 +10,8 @@ import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.realtime.realtime
+import io.github.jan.supabase.serializer.KotlinXSerializer
+import kotlinx.serialization.json.Json
 
 /**
  * Provides a singleton instance of the configured Supabase client.
@@ -41,6 +43,14 @@ object SupabaseClientProvider {
             supabaseUrl = supabaseUrl,
             supabaseKey = supabasePublishableKey
         ) {
+            defaultSerializer = KotlinXSerializer(
+                Json {
+                    ignoreUnknownKeys = true
+                    coerceInputValues = true
+                    isLenient = true
+                    encodeDefaults = true
+                }
+            )
             install(Auth)
             install(Postgrest)
             install(Realtime)

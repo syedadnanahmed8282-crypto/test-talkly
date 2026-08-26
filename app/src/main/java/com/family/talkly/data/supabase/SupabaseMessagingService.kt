@@ -29,6 +29,7 @@ object SupabaseMessagingService {
         ignoreUnknownKeys = true
         coerceInputValues = true
         isLenient = true
+        encodeDefaults = true
     }
 
     private val conversationCache = ConcurrentHashMap<String, String>()
