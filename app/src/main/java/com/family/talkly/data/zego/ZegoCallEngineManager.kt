@@ -635,8 +635,8 @@ class ZegoCallEngineManager(private val context: Context) {
 
         if (uid.isNotBlank() && uid != "self") {
             val isChannelActive = callsRealtimeChannel != null && callsRealtimeChannel?.status?.value == RealtimeChannel.Status.SUBSCRIBED
-            // If the calls channel is already connected and was established recently (within last 10s), skip tearing it down
-            if (isChannelActive && currentSyncedUserId == uid && (now - lastCallSubscribedTimestamp < 10_000L)) {
+            // If the calls channel is already connected and healthy for the current user, always skip tearing it down
+            if (isChannelActive && currentSyncedUserId == uid) {
                 Log.e(TAG, "DIAGNOSTIC reconnectCallSync GUARD EXIT: Calls channel already active and healthy for $uid, skipping teardown")
                 return
             }

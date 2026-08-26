@@ -2,8 +2,10 @@ package com.family.talkly.ui.screens.auth
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -14,6 +16,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,6 +64,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -69,13 +73,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -87,24 +91,34 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 
 // ==========================================
-// TALKLY PREMIUM COLOR PALETTE
+// TALKLY REFINED BRAND PALETTE
 // ==========================================
-private val BackgroundDark = Color(0xFF080B10)
-private val SurfaceMain = Color(0xFF11161D)
-private val SurfaceCard = Color(0xFF18212B)
-private val SurfaceElevated = Color(0xFF202B36)
-private val ElectricCyan = Color(0xFF22D3EE)
-private val DeepAqua = Color(0xFF0EA5A4)
-private val MintAccent = Color(0xFF5EEAD4)
+private val CanvasBackground = Color(0xFF090D14)
+private val CardBackground = Color(0xFF111722)
+private val CardInnerBackground = Color(0xFF0E131C)
+private val FieldBackground = Color(0xFF0B0F17)
+private val FieldBackgroundFocused = Color(0xFF0F1520)
+
+private val BrandCyan = Color(0xFF22D3EE)
+private val BrandAqua = Color(0xFF0EA5E9)
+private val BrandMint = Color(0xFF5EEAD4)
+private val BrandDeepBlue = Color(0xFF0284C7)
+
 private val TextPrimary = Color(0xFFF8FAFC)
-private val TextSecondary = Color(0xFFA7B0BA)
-private val TextMuted = Color(0xFF64748B)
+private val TextSecondary = Color(0xFF94A3B8)
+private val TextMuted = Color(0xFF475569)
+private val BorderMuted = Color(0xFF1E293B)
+private val BorderElevated = Color(0xFF2A374A)
+
 private val ErrorColor = Color(0xFFF43F5E)
-private val SuccessColor = Color(0xFF22C55E)
+private val ErrorBackground = Color(0x1EF43F5E)
+private val SuccessColor = Color(0xFF10B981)
 
 data class CountryCode(val country: String, val code: String, val flag: String)
 
@@ -147,22 +161,66 @@ fun PhonePasswordAuthScreen(
     val focusManager = LocalFocusManager.current
     val scrollState = rememberScrollState()
 
+    // ----------------------------------------------------
+    // SHAKE ANIMATION FOR ERRORS
+    // ----------------------------------------------------
+    val shakeOffset = remember { Animatable(0f) }
+    val displayError = localValidationMessage ?: errorMessage
+
+    LaunchedEffect(displayError) {
+        if (!displayError.isNullOrEmpty()) {
+            shakeOffset.animateTo(
+                targetValue = 0f,
+                animationSpec = keyframes {
+                    durationMillis = 400
+                    0f at 0
+                    (-12f) at 50
+                    12f at 100
+                    (-8f) at 150
+                    8f at 200
+                    (-4f) at 250
+                    4f at 300
+                    0f at 400
+                }
+            )
+        }
+    }
+
+    // ----------------------------------------------------
+    // ENTRANCE FLOATING ANIMATION
+    // ----------------------------------------------------
+    var isCardEntered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        isCardEntered = true
+    }
+
+    val cardAlpha by animateFloatAsState(
+        targetValue = if (isCardEntered) 1f else 0f,
+        animationSpec = tween(durationMillis = 600, easing = FastOutSlowInEasing),
+        label = "cardAlpha"
+    )
+    val cardTranslateY by animateFloatAsState(
+        targetValue = if (isCardEntered) 0f else 40f,
+        animationSpec = tween(durationMillis = 600, easing = FastOutSlowInEasing),
+        label = "cardTranslateY"
+    )
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(BackgroundDark)
+            .background(CanvasBackground)
     ) {
-        // Decorative ambient glow spots in background
+        // Decorative ambient glow spots
         Box(
             modifier = Modifier
-                .size(320.dp)
-                .offset(x = (-80).dp, y = (-60).dp)
+                .size(340.dp)
+                .offset(x = (-80).dp, y = (-70).dp)
                 .clip(CircleShape)
                 .background(
                     Brush.radialGradient(
                         colors = listOf(
-                            ElectricCyan.copy(alpha = 0.12f),
-                            DeepAqua.copy(alpha = 0.04f),
+                            BrandCyan.copy(alpha = 0.12f),
+                            BrandDeepBlue.copy(alpha = 0.04f),
                             Color.Transparent
                         )
                     )
@@ -171,14 +229,14 @@ fun PhonePasswordAuthScreen(
         Box(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .size(280.dp)
-                .offset(x = 80.dp, y = 60.dp)
+                .size(320.dp)
+                .offset(x = 90.dp, y = 70.dp)
                 .clip(CircleShape)
                 .background(
                     Brush.radialGradient(
                         colors = listOf(
-                            DeepAqua.copy(alpha = 0.10f),
-                            MintAccent.copy(alpha = 0.03f),
+                            BrandAqua.copy(alpha = 0.10f),
+                            BrandMint.copy(alpha = 0.03f),
                             Color.Transparent
                         )
                     )
@@ -192,91 +250,103 @@ fun PhonePasswordAuthScreen(
                 .navigationBarsPadding()
                 .imePadding()
                 .verticalScroll(scrollState)
-                .padding(horizontal = 24.dp, vertical = 20.dp),
+                .padding(horizontal = 20.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // ==========================================
-            // 1. BRAND HEADER
+            // 1. BRAND LOGO WITH NEUMORPHIC GLOW
             // ==========================================
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(68.dp)
+                    .size(72.dp)
+                    .graphicsLayer {
+                        alpha = cardAlpha
+                        scaleX = if (isCardEntered) 1f else 0.85f
+                        scaleY = if (isCardEntered) 1f else 0.85f
+                    }
                     .shadow(
-                        elevation = 16.dp,
-                        shape = RoundedCornerShape(20.dp),
-                        ambientColor = ElectricCyan,
-                        spotColor = ElectricCyan
+                        elevation = 18.dp,
+                        shape = RoundedCornerShape(22.dp),
+                        ambientColor = BrandCyan,
+                        spotColor = BrandCyan
                     )
-                    .clip(RoundedCornerShape(20.dp))
+                    .clip(RoundedCornerShape(22.dp))
                     .background(
                         Brush.linearGradient(
-                            colors = listOf(ElectricCyan, DeepAqua)
+                            colors = listOf(
+                                Color(0xFF16202E),
+                                Color(0xFF0F1722)
+                            )
                         )
                     )
                     .border(
-                        width = 1.dp,
+                        width = 1.5.dp,
                         brush = Brush.linearGradient(
-                            colors = listOf(MintAccent, ElectricCyan.copy(alpha = 0.6f))
+                            colors = listOf(
+                                BrandCyan.copy(alpha = 0.8f),
+                                BrandAqua.copy(alpha = 0.3f),
+                                Color.Transparent
+                            )
                         ),
-                        shape = RoundedCornerShape(20.dp)
+                        shape = RoundedCornerShape(22.dp)
                     )
             ) {
                 Icon(
                     imageVector = Icons.Default.ChatBubble,
                     contentDescription = "Talkly Logo",
-                    tint = BackgroundDark,
+                    tint = BrandCyan,
                     modifier = Modifier.size(34.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             Text(
                 text = "Talkly",
-                fontSize = 30.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = 0.5.sp,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 0.8.sp,
                 color = TextPrimary
             )
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "Connect. Talk. Stay close.",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Normal,
+                text = if (selectedTab == 0) "Sign in to continue to Talkly" else "Join Talkly and stay connected",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
                 color = TextSecondary,
                 textAlign = TextAlign.Center
             )
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
             // ==========================================
-            // 2. LOGIN / REGISTER SEGMENTED CONTROL
+            // 2. SEGMENTED TAB SELECTOR (LOGIN ↔ REGISTER)
             // ==========================================
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp)
+                    .height(50.dp)
                     .clip(RoundedCornerShape(16.dp))
-                    .background(SurfaceMain)
-                    .border(1.dp, SurfaceElevated, RoundedCornerShape(16.dp))
+                    .background(CardBackground)
+                    .border(1.dp, BorderMuted, RoundedCornerShape(16.dp))
                     .padding(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Login Tab
                 val isLoginSelected = selectedTab == 0
                 val loginBgColor by animateColorAsState(
-                    targetValue = if (isLoginSelected) SurfaceCard else Color.Transparent,
-                    animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                    targetValue = if (isLoginSelected) CardInnerBackground else Color.Transparent,
+                    animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                     label = "loginTabBg"
                 )
                 val loginTextColor by animateColorAsState(
-                    targetValue = if (isLoginSelected) ElectricCyan else TextSecondary,
-                    animationSpec = tween(durationMillis = 200),
+                    targetValue = if (isLoginSelected) BrandCyan else TextSecondary,
+                    animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                     label = "loginTabText"
                 )
 
@@ -287,11 +357,11 @@ fun PhonePasswordAuthScreen(
                         .clip(RoundedCornerShape(12.dp))
                         .background(loginBgColor)
                         .then(
-                            if (isLoginSelected) Modifier.border(
-                                1.dp,
-                                ElectricCyan.copy(alpha = 0.4f),
-                                RoundedCornerShape(12.dp)
-                            ) else Modifier
+                            if (isLoginSelected) {
+                                Modifier.border(1.dp, BorderElevated, RoundedCornerShape(12.dp))
+                            } else {
+                                Modifier
+                            }
                         )
                         .clickable {
                             if (selectedTab != 0) {
@@ -300,7 +370,7 @@ fun PhonePasswordAuthScreen(
                                 onClearError()
                             }
                         }
-                        .testTag("auth_tab_login"),
+                        .testTag("tab_login"),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -311,18 +381,16 @@ fun PhonePasswordAuthScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.width(4.dp))
-
                 // Register Tab
                 val isRegisterSelected = selectedTab == 1
                 val registerBgColor by animateColorAsState(
-                    targetValue = if (isRegisterSelected) SurfaceCard else Color.Transparent,
-                    animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                    targetValue = if (isRegisterSelected) CardInnerBackground else Color.Transparent,
+                    animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                     label = "registerTabBg"
                 )
                 val registerTextColor by animateColorAsState(
-                    targetValue = if (isRegisterSelected) ElectricCyan else TextSecondary,
-                    animationSpec = tween(durationMillis = 200),
+                    targetValue = if (isRegisterSelected) BrandCyan else TextSecondary,
+                    animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                     label = "registerTabText"
                 )
 
@@ -333,11 +401,11 @@ fun PhonePasswordAuthScreen(
                         .clip(RoundedCornerShape(12.dp))
                         .background(registerBgColor)
                         .then(
-                            if (isRegisterSelected) Modifier.border(
-                                1.dp,
-                                ElectricCyan.copy(alpha = 0.4f),
-                                RoundedCornerShape(12.dp)
-                            ) else Modifier
+                            if (isRegisterSelected) {
+                                Modifier.border(1.dp, BorderElevated, RoundedCornerShape(12.dp))
+                            } else {
+                                Modifier
+                            }
                         )
                         .clickable {
                             if (selectedTab != 1) {
@@ -346,11 +414,11 @@ fun PhonePasswordAuthScreen(
                                 onClearError()
                             }
                         }
-                        .testTag("auth_tab_register"),
+                        .testTag("tab_register"),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "Create account",
+                        text = "Register",
                         fontSize = 14.sp,
                         fontWeight = if (isRegisterSelected) FontWeight.Bold else FontWeight.Medium,
                         color = registerTextColor
@@ -358,347 +426,389 @@ fun PhonePasswordAuthScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             // ==========================================
-            // 3 & 4. AUTH FORM FIELDS
+            // 3. ELECTRIC NEUMORPHIC CARD CONTAINER
             // ==========================================
-            Surface(
-                color = SurfaceMain,
-                shape = RoundedCornerShape(24.dp),
-                border = BorderStroke(1.dp, SurfaceElevated),
-                modifier = Modifier.fillMaxWidth()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .offset { IntOffset(x = shakeOffset.value.roundToInt(), y = cardTranslateY.roundToInt()) }
+                    .graphicsLayer { alpha = cardAlpha }
             ) {
-                Column(
+                // Inner Main Card Body
+                Surface(
+                    color = CardBackground,
+                    shape = RoundedCornerShape(24.dp),
+                    border = BorderStroke(1.dp, BorderElevated),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(20.dp)
+                        .shadow(
+                            elevation = 16.dp,
+                            shape = RoundedCornerShape(24.dp),
+                            ambientColor = Color.Black,
+                            spotColor = Color(0x33000000)
+                        )
                 ) {
-                    // Full Name Field (Register Mode Only)
-                    AnimatedVisibility(
-                        visible = selectedTab == 1,
-                        enter = fadeIn(tween(250)) + expandVertically(tween(250)),
-                        exit = fadeOut(tween(200)) + shrinkVertically(tween(200))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp)
                     ) {
-                        Column {
-                            AuthInputField(
-                                label = "Full name",
-                                value = nameInput,
-                                onValueChange = {
-                                    nameInput = it
-                                    localValidationMessage = null
-                                },
-                                placeholder = "e.g. John Doe",
-                                leadingIcon = Icons.Default.Person,
-                                imeAction = ImeAction.Next,
-                                testTag = "input_fullname"
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                        }
-                    }
+                        // Dynamic Title inside the Card
+                        Text(
+                            text = if (selectedTab == 0) "Welcome Back" else "Create your account",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
 
-                    // Email Field (Register Mode Only)
-                    AnimatedVisibility(
-                        visible = selectedTab == 1,
-                        enter = fadeIn(tween(250)) + expandVertically(tween(250)),
-                        exit = fadeOut(tween(200)) + shrinkVertically(tween(200))
-                    ) {
-                        Column {
-                            AuthInputField(
-                                label = "Email address",
-                                value = emailInput,
-                                onValueChange = {
-                                    emailInput = it
-                                    localValidationMessage = null
-                                },
-                                placeholder = "name@example.com",
-                                leadingIcon = Icons.Default.Email,
-                                keyboardType = KeyboardType.Email,
-                                imeAction = ImeAction.Next,
-                                testTag = "input_email"
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                        }
-                    }
+                        Spacer(modifier = Modifier.height(16.dp))
 
-                    // Mobile Phone Field with Country Code Selector
-                    Text(
-                        text = "Mobile number",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = TextSecondary,
-                        modifier = Modifier.padding(start = 2.dp, bottom = 6.dp)
-                    )
-
-                    var isPhoneFocused by remember { mutableStateOf(false) }
-                    val phoneBorderColor by animateColorAsState(
-                        targetValue = if (isPhoneFocused) ElectricCyan else SurfaceElevated,
-                        label = "phoneBorder"
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Country Code Selector Pill
-                        Box {
-                            Surface(
-                                color = SurfaceCard,
-                                shape = RoundedCornerShape(14.dp),
-                                border = BorderStroke(1.dp, SurfaceElevated),
-                                modifier = Modifier
-                                    .height(52.dp)
-                                    .clickable { dropdownExpanded = true }
-                                    .testTag("country_code_selector")
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "${selectedCountry.flag} ${selectedCountry.code}",
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Icon(
-                                        imageVector = Icons.Default.ArrowDropDown,
-                                        contentDescription = "Select country code",
-                                        tint = TextSecondary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
-
-                            DropdownMenu(
-                                expanded = dropdownExpanded,
-                                onDismissRequest = { dropdownExpanded = false },
-                                modifier = Modifier
-                                    .background(SurfaceCard)
-                                    .border(1.dp, SurfaceElevated, RoundedCornerShape(12.dp))
-                            ) {
-                                COUNTRY_CODES.forEach { item ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Text(text = item.flag, fontSize = 16.sp)
-                                                Spacer(modifier = Modifier.width(10.dp))
-                                                Text(
-                                                    text = item.country,
-                                                    fontSize = 13.sp,
-                                                    color = TextPrimary,
-                                                    modifier = Modifier.weight(1f)
-                                                )
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Text(
-                                                    text = item.code,
-                                                    fontSize = 13.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = ElectricCyan
-                                                )
-                                            }
-                                        },
-                                        onClick = {
-                                            selectedCountry = item
-                                            dropdownExpanded = false
-                                        },
-                                        colors = MenuDefaults.itemColors(
-                                            textColor = TextPrimary
-                                        )
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.width(10.dp))
-
-                        // Phone Input Box
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(52.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(SurfaceCard)
-                                .border(1.dp, phoneBorderColor, RoundedCornerShape(14.dp))
-                                .padding(horizontal = 14.dp),
-                            contentAlignment = Alignment.CenterStart
+                        // Full Name Field (Register Only)
+                        AnimatedVisibility(
+                            visible = selectedTab == 1,
+                            enter = fadeIn(tween(250)) + expandVertically(tween(250)),
+                            exit = fadeOut(tween(200)) + shrinkVertically(tween(200))
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Phone,
-                                    contentDescription = null,
-                                    tint = if (isPhoneFocused) ElectricCyan else TextMuted,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                BasicTextField(
-                                    value = phoneNumberInput,
-                                    onValueChange = { input ->
-                                        if (input.length <= 12 && input.all { it.isDigit() }) {
-                                            phoneNumberInput = input
-                                            localValidationMessage = null
-                                        }
+                            Column {
+                                NeumorphicAuthInputField(
+                                    label = "Full name",
+                                    value = nameInput,
+                                    onValueChange = {
+                                        nameInput = it
+                                        localValidationMessage = null
                                     },
-                                    textStyle = TextStyle(
-                                        color = TextPrimary,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    ),
-                                    singleLine = true,
-                                    keyboardOptions = KeyboardOptions(
-                                        keyboardType = KeyboardType.Number,
-                                        imeAction = ImeAction.Next
-                                    ),
-                                    cursorBrush = SolidColor(ElectricCyan),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .onFocusChanged { isPhoneFocused = it.isFocused }
-                                        .testTag("input_phone_number"),
-                                    decorationBox = { innerTextField ->
-                                        if (phoneNumberInput.isEmpty()) {
-                                            Text(
-                                                text = "1712345678",
-                                                color = TextMuted,
-                                                fontSize = 14.sp
-                                            )
-                                        }
-                                        innerTextField()
-                                    }
+                                    placeholder = "e.g. John Doe",
+                                    leadingIcon = Icons.Default.Person,
+                                    imeAction = ImeAction.Next,
+                                    testTag = "input_fullname"
                                 )
+                                Spacer(modifier = Modifier.height(16.dp))
                             }
                         }
-                    }
 
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Password Field
-                    AuthInputField(
-                        label = "Password",
-                        value = passwordInput,
-                        onValueChange = {
-                            passwordInput = it
-                            localValidationMessage = null
-                        },
-                        placeholder = "••••••••••••",
-                        leadingIcon = Icons.Default.Lock,
-                        isPassword = true,
-                        isPasswordVisible = isPasswordVisible,
-                        onTogglePasswordVisibility = { isPasswordVisible = !isPasswordVisible },
-                        keyboardType = KeyboardType.Password,
-                        imeAction = if (selectedTab == 0) ImeAction.Done else ImeAction.Next,
-                        onImeAction = {
-                            if (selectedTab == 0) {
-                                keyboardController?.hide()
-                                focusManager.clearFocus()
+                        // Email Field (Register Only)
+                        AnimatedVisibility(
+                            visible = selectedTab == 1,
+                            enter = fadeIn(tween(250)) + expandVertically(tween(250)),
+                            exit = fadeOut(tween(200)) + shrinkVertically(tween(200))
+                        ) {
+                            Column {
+                                NeumorphicAuthInputField(
+                                    label = "Email address",
+                                    value = emailInput,
+                                    onValueChange = {
+                                        emailInput = it
+                                        localValidationMessage = null
+                                    },
+                                    placeholder = "name@example.com",
+                                    leadingIcon = Icons.Default.Email,
+                                    keyboardType = KeyboardType.Email,
+                                    imeAction = ImeAction.Next,
+                                    testTag = "input_email"
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
                             }
-                        },
-                        testTag = "input_password"
-                    )
+                        }
 
-                    // Confirm Password (Register Mode Only)
-                    AnimatedVisibility(
-                        visible = selectedTab == 1,
-                        enter = fadeIn(tween(250)) + expandVertically(tween(250)),
-                        exit = fadeOut(tween(200)) + shrinkVertically(tween(200))
-                    ) {
-                        Column {
-                            Spacer(modifier = Modifier.height(16.dp))
-                            AuthInputField(
-                                label = "Confirm password",
-                                value = confirmPasswordInput,
-                                onValueChange = {
-                                    confirmPasswordInput = it
-                                    localValidationMessage = null
-                                },
-                                placeholder = "••••••••••••",
-                                leadingIcon = Icons.Default.Lock,
-                                isPassword = true,
-                                isPasswordVisible = isConfirmPasswordVisible,
-                                onTogglePasswordVisibility = { isConfirmPasswordVisible = !isConfirmPasswordVisible },
-                                keyboardType = KeyboardType.Password,
-                                imeAction = ImeAction.Done,
-                                onImeAction = {
-                                    keyboardController?.hide()
-                                    focusManager.clearFocus()
-                                },
-                                testTag = "input_confirm_password"
+                        // Mobile Phone Number Field with Country Picker
+                        Text(
+                            text = "Mobile number",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextSecondary,
+                            modifier = Modifier.padding(start = 2.dp, bottom = 6.dp)
+                        )
+
+                        var isPhoneFocused by remember { mutableStateOf(false) }
+                        val phoneBorderBrush = if (isPhoneFocused) {
+                            Brush.horizontalGradient(
+                                listOf(
+                                    BrandCyan,
+                                    BrandAqua
+                                )
                             )
+                        } else {
+                            SolidColor(BorderMuted)
                         }
-                    }
 
-                    // Forgot Password Link (Login Mode Only)
-                    if (selectedTab == 0) {
-                        Spacer(modifier = Modifier.height(6.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            TextButton(
-                                onClick = {
-                                    localValidationMessage = null
-                                    showForgotPasswordDialog = true
-                                },
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
-                                modifier = Modifier.testTag("btn_forgot_password")
+                            // Country Code Dropdown Pill
+                            Box {
+                                Surface(
+                                    color = FieldBackground,
+                                    shape = RoundedCornerShape(14.dp),
+                                    border = BorderStroke(1.dp, BorderMuted),
+                                    modifier = Modifier
+                                        .height(52.dp)
+                                        .clickable { dropdownExpanded = true }
+                                        .testTag("country_code_selector")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "${selectedCountry.flag} ${selectedCountry.code}",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = TextPrimary
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.ArrowDropDown,
+                                            contentDescription = "Select country code",
+                                            tint = TextSecondary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+
+                                DropdownMenu(
+                                    expanded = dropdownExpanded,
+                                    onDismissRequest = { dropdownExpanded = false },
+                                    modifier = Modifier
+                                        .background(CardBackground)
+                                        .border(1.dp, BorderElevated, RoundedCornerShape(12.dp))
+                                ) {
+                                    COUNTRY_CODES.forEach { item ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(text = item.flag, fontSize = 16.sp)
+                                                    Spacer(modifier = Modifier.width(10.dp))
+                                                    Text(
+                                                        text = item.country,
+                                                        fontSize = 13.sp,
+                                                        color = TextPrimary,
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Text(
+                                                        text = item.code,
+                                                        fontSize = 13.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = BrandCyan
+                                                    )
+                                                }
+                                            },
+                                            onClick = {
+                                                selectedCountry = item
+                                                dropdownExpanded = false
+                                            },
+                                            colors = MenuDefaults.itemColors(
+                                                textColor = TextPrimary
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(10.dp))
+
+                            // Phone Input Box with Inset Neumorphic Styling
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(52.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(if (isPhoneFocused) FieldBackgroundFocused else FieldBackground)
+                                    .border(
+                                        width = if (isPhoneFocused) 1.5.dp else 1.dp,
+                                        brush = phoneBorderBrush,
+                                        shape = RoundedCornerShape(14.dp)
+                                    )
+                                    .padding(horizontal = 14.dp),
+                                contentAlignment = Alignment.CenterStart
                             ) {
-                                Text(
-                                    text = "Forgot password?",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = ElectricCyan
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Phone,
+                                        contentDescription = null,
+                                        tint = if (isPhoneFocused) BrandCyan else TextMuted,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    BasicTextField(
+                                        value = phoneNumberInput,
+                                        onValueChange = { input ->
+                                            if (input.length <= 12 && input.all { it.isDigit() }) {
+                                                phoneNumberInput = input
+                                                localValidationMessage = null
+                                            }
+                                        },
+                                        textStyle = TextStyle(
+                                            color = TextPrimary,
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        ),
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(
+                                            keyboardType = KeyboardType.Number,
+                                            imeAction = ImeAction.Next
+                                        ),
+                                        cursorBrush = SolidColor(BrandCyan),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .onFocusChanged { isPhoneFocused = it.isFocused }
+                                            .testTag("input_phone_number"),
+                                        decorationBox = { innerTextField ->
+                                            if (phoneNumberInput.isEmpty()) {
+                                                Text(
+                                                    text = "1712345678",
+                                                    color = TextMuted,
+                                                    fontSize = 14.sp
+                                                )
+                                            }
+                                            innerTextField()
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Password Field
+                        NeumorphicAuthInputField(
+                            label = "Password",
+                            value = passwordInput,
+                            onValueChange = {
+                                passwordInput = it
+                                localValidationMessage = null
+                            },
+                            placeholder = "••••••••••••",
+                            leadingIcon = Icons.Default.Lock,
+                            isPassword = true,
+                            isPasswordVisible = isPasswordVisible,
+                            onTogglePasswordVisibility = { isPasswordVisible = !isPasswordVisible },
+                            keyboardType = KeyboardType.Password,
+                            imeAction = if (selectedTab == 0) ImeAction.Done else ImeAction.Next,
+                            onImeAction = {
+                                if (selectedTab == 0) {
+                                    keyboardController?.hide()
+                                    focusManager.clearFocus()
+                                }
+                            },
+                            testTag = "input_password"
+                        )
+
+                        // Confirm Password (Register Only)
+                        AnimatedVisibility(
+                            visible = selectedTab == 1,
+                            enter = fadeIn(tween(250)) + expandVertically(tween(250)),
+                            exit = fadeOut(tween(200)) + shrinkVertically(tween(200))
+                        ) {
+                            Column {
+                                Spacer(modifier = Modifier.height(16.dp))
+                                NeumorphicAuthInputField(
+                                    label = "Confirm password",
+                                    value = confirmPasswordInput,
+                                    onValueChange = {
+                                        confirmPasswordInput = it
+                                        localValidationMessage = null
+                                    },
+                                    placeholder = "••••••••••••",
+                                    leadingIcon = Icons.Default.Lock,
+                                    isPassword = true,
+                                    isPasswordVisible = isConfirmPasswordVisible,
+                                    onTogglePasswordVisibility = { isConfirmPasswordVisible = !isConfirmPasswordVisible },
+                                    keyboardType = KeyboardType.Password,
+                                    imeAction = ImeAction.Done,
+                                    onImeAction = {
+                                        keyboardController?.hide()
+                                        focusManager.clearFocus()
+                                    },
+                                    testTag = "input_confirm_password"
                                 )
                             }
                         }
-                    }
 
-                    // Validation & Error Banner
-                    val displayError = localValidationMessage ?: errorMessage
-                    AnimatedVisibility(
-                        visible = !displayError.isNullOrEmpty(),
-                        enter = fadeIn(tween(200)) + expandVertically(tween(200)),
-                        exit = fadeOut(tween(150)) + shrinkVertically(tween(150))
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 14.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(ErrorColor.copy(alpha = 0.12f))
-                                .border(1.dp, ErrorColor.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        // Forgot Password Link (Login Only)
+                        if (selectedTab == 0) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        localValidationMessage = null
+                                        showForgotPasswordDialog = true
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                                    modifier = Modifier.testTag("btn_forgot_password")
+                                ) {
+                                    Text(
+                                        text = "Forgot password?",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = BrandCyan
+                                    )
+                                }
+                            }
+                        }
+
+                        // Error Banner with Shake & Subtle Glow
+                        AnimatedVisibility(
+                            visible = !displayError.isNullOrEmpty(),
+                            enter = fadeIn(tween(200)) + expandVertically(tween(200)),
+                            exit = fadeOut(tween(150)) + shrinkVertically(tween(150))
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.ErrorOutline,
-                                contentDescription = "Error",
-                                tint = ErrorColor,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = displayError.orEmpty(),
-                                color = ErrorColor,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.weight(1f)
-                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 14.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(ErrorBackground)
+                                    .border(1.dp, ErrorColor.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ErrorOutline,
+                                    contentDescription = "Error",
+                                    tint = ErrorColor,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = displayError.orEmpty(),
+                                    color = ErrorColor,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
             // ==========================================
-            // 5. PRIMARY SUBMISSION BUTTON
+            // 4. PRIMARY NEUMORPHIC ACTION BUTTON
             // ==========================================
             val isButtonEnabled = !isLoading
+            val interactionSource = remember { MutableInteractionSource() }
+            val isPressed by interactionSource.collectIsPressedAsState()
+
             val buttonScale by animateFloatAsState(
-                targetValue = if (isLoading) 0.98f else 1f,
+                targetValue = when {
+                    isLoading -> 0.98f
+                    isPressed -> 0.96f
+                    else -> 1f
+                },
+                animationSpec = tween(durationMillis = 120),
                 label = "buttonScale"
             )
 
@@ -734,6 +844,7 @@ fun PhonePasswordAuthScreen(
                     }
                 },
                 enabled = isButtonEnabled,
+                interactionSource = interactionSource,
                 shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color.Transparent,
@@ -745,22 +856,22 @@ fun PhonePasswordAuthScreen(
                     .height(54.dp)
                     .scale(buttonScale)
                     .shadow(
-                        elevation = if (isButtonEnabled) 12.dp else 0.dp,
+                        elevation = if (isButtonEnabled && !isPressed) 14.dp else 2.dp,
                         shape = RoundedCornerShape(16.dp),
-                        ambientColor = ElectricCyan,
-                        spotColor = ElectricCyan
+                        ambientColor = BrandCyan,
+                        spotColor = BrandCyan
                     )
                     .clip(RoundedCornerShape(16.dp))
                     .background(
                         if (isButtonEnabled) {
                             Brush.horizontalGradient(
-                                colors = listOf(ElectricCyan, DeepAqua)
+                                colors = listOf(BrandCyan, BrandAqua, BrandDeepBlue)
                             )
                         } else {
                             Brush.horizontalGradient(
                                 colors = listOf(
-                                    ElectricCyan.copy(alpha = 0.4f),
-                                    DeepAqua.copy(alpha = 0.4f)
+                                    BrandCyan.copy(alpha = 0.35f),
+                                    BrandAqua.copy(alpha = 0.35f)
                                 )
                             )
                         }
@@ -773,27 +884,54 @@ fun PhonePasswordAuthScreen(
                 ) {
                     if (isLoading) {
                         CircularProgressIndicator(
-                            color = BackgroundDark,
+                            color = CanvasBackground,
                             strokeWidth = 2.5.dp,
                             modifier = Modifier.size(24.dp)
                         )
                     } else {
                         Text(
-                            text = if (selectedTab == 0) "Continue" else "Create account",
+                            text = if (selectedTab == 0) "Sign In" else "Create Account",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
-                            color = BackgroundDark,
-                            letterSpacing = 0.3.sp
+                            color = CanvasBackground,
+                            letterSpacing = 0.4.sp
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(18.dp))
+
+            // Footer Switcher ("Don't have an account? Create account" / "Already have an account? Login")
+            Row(
+                modifier = Modifier.padding(bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = if (selectedTab == 0) "Don't have an account? " else "Already have an account? ",
+                    fontSize = 13.sp,
+                    color = TextSecondary
+                )
+                Text(
+                    text = if (selectedTab == 0) "Create account" else "Login",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = BrandCyan,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable {
+                            selectedTab = if (selectedTab == 0) 1 else 0
+                            localValidationMessage = null
+                            onClearError()
+                        }
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                )
+            }
         }
 
         // ==========================================
-        // 6. FORGOT PASSWORD DIALOG
+        // 5. FORGOT PASSWORD DIALOG
         // ==========================================
         if (showForgotPasswordDialog) {
             var forgotPhoneInput by remember { mutableStateOf(phoneNumberInput) }
@@ -809,7 +947,7 @@ fun PhonePasswordAuthScreen(
                         showForgotPasswordDialog = false
                     }
                 },
-                containerColor = SurfaceMain,
+                containerColor = CardBackground,
                 shape = RoundedCornerShape(24.dp),
                 title = {
                     Text(
@@ -836,9 +974,9 @@ fun PhonePasswordAuthScreen(
                         ) {
                             Box {
                                 Surface(
-                                    color = SurfaceCard,
+                                    color = FieldBackground,
                                     shape = RoundedCornerShape(12.dp),
-                                    border = BorderStroke(1.dp, SurfaceElevated),
+                                    border = BorderStroke(1.dp, BorderMuted),
                                     modifier = Modifier
                                         .height(48.dp)
                                         .clickable { forgotDropdownExpanded = true }
@@ -866,8 +1004,8 @@ fun PhonePasswordAuthScreen(
                                     expanded = forgotDropdownExpanded,
                                     onDismissRequest = { forgotDropdownExpanded = false },
                                     modifier = Modifier
-                                        .background(SurfaceCard)
-                                        .border(1.dp, SurfaceElevated, RoundedCornerShape(12.dp))
+                                        .background(CardBackground)
+                                        .border(1.dp, BorderElevated, RoundedCornerShape(12.dp))
                                 ) {
                                     COUNTRY_CODES.forEach { item ->
                                         DropdownMenuItem(
@@ -894,8 +1032,8 @@ fun PhonePasswordAuthScreen(
                                     .weight(1f)
                                     .height(48.dp)
                                     .clip(RoundedCornerShape(12.dp))
-                                    .background(SurfaceCard)
-                                    .border(1.dp, SurfaceElevated, RoundedCornerShape(12.dp))
+                                    .background(FieldBackground)
+                                    .border(1.dp, BorderMuted, RoundedCornerShape(12.dp))
                                     .padding(horizontal = 12.dp),
                                 contentAlignment = Alignment.CenterStart
                             ) {
@@ -915,7 +1053,7 @@ fun PhonePasswordAuthScreen(
                                     ),
                                     singleLine = true,
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                    cursorBrush = SolidColor(ElectricCyan),
+                                    cursorBrush = SolidColor(BrandCyan),
                                     modifier = Modifier.fillMaxWidth(),
                                     decorationBox = { innerTextField ->
                                         if (forgotPhoneInput.isEmpty()) {
@@ -971,7 +1109,7 @@ fun PhonePasswordAuthScreen(
                                     .fillMaxWidth()
                                     .padding(top = 12.dp)
                                     .clip(RoundedCornerShape(10.dp))
-                                    .background(ErrorColor.copy(alpha = 0.12f))
+                                    .background(ErrorBackground)
                                     .padding(8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -1017,12 +1155,12 @@ fun PhonePasswordAuthScreen(
                         },
                         enabled = !isSendingReset,
                         shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan)
+                        colors = ButtonDefaults.buttonColors(containerColor = BrandCyan)
                     ) {
                         if (isSendingReset) {
-                            CircularProgressIndicator(color = BackgroundDark, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            CircularProgressIndicator(color = CanvasBackground, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         } else {
-                            Text("Send Reset Link", color = BackgroundDark, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text("Send Reset Link", color = CanvasBackground, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
                     }
                 },
@@ -1040,10 +1178,10 @@ fun PhonePasswordAuthScreen(
 }
 
 // ==========================================
-// REUSABLE AUTH INPUT FIELD COMPOSABLE
+// REUSABLE NEUMORPHIC AUTH INPUT FIELD
 // ==========================================
 @Composable
-private fun AuthInputField(
+private fun NeumorphicAuthInputField(
     label: String,
     value: String,
     onValueChange: (String) -> Unit,
@@ -1059,11 +1197,17 @@ private fun AuthInputField(
     testTag: String = ""
 ) {
     var isFocused by remember { mutableStateOf(false) }
-    val borderColor by animateColorAsState(
-        targetValue = if (isFocused) ElectricCyan else SurfaceElevated,
-        animationSpec = tween(durationMillis = 200),
-        label = "fieldBorder"
-    )
+
+    val borderBrush = if (isFocused) {
+        Brush.horizontalGradient(
+            listOf(
+                BrandCyan,
+                BrandAqua
+            )
+        )
+    } else {
+        SolidColor(BorderMuted)
+    }
 
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
@@ -1079,8 +1223,12 @@ private fun AuthInputField(
                 .fillMaxWidth()
                 .height(52.dp)
                 .clip(RoundedCornerShape(14.dp))
-                .background(SurfaceCard)
-                .border(1.dp, borderColor, RoundedCornerShape(14.dp))
+                .background(if (isFocused) FieldBackgroundFocused else FieldBackground)
+                .border(
+                    width = if (isFocused) 1.5.dp else 1.dp,
+                    brush = borderBrush,
+                    shape = RoundedCornerShape(14.dp)
+                )
                 .padding(horizontal = 14.dp),
             contentAlignment = Alignment.CenterStart
         ) {
@@ -1091,7 +1239,7 @@ private fun AuthInputField(
                 Icon(
                     imageVector = leadingIcon,
                     contentDescription = null,
-                    tint = if (isFocused) ElectricCyan else TextMuted,
+                    tint = if (isFocused) BrandCyan else TextMuted,
                     modifier = Modifier.size(18.dp)
                 )
 
@@ -1115,7 +1263,7 @@ private fun AuthInputField(
                         onDone = { onImeAction?.invoke() },
                         onNext = { onImeAction?.invoke() }
                     ),
-                    cursorBrush = SolidColor(ElectricCyan),
+                    cursorBrush = SolidColor(BrandCyan),
                     modifier = Modifier
                         .weight(1f)
                         .onFocusChanged { isFocused = it.isFocused }
@@ -1140,7 +1288,7 @@ private fun AuthInputField(
                         Icon(
                             imageVector = if (isPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
                             contentDescription = if (isPasswordVisible) "Hide password" else "Show password",
-                            tint = if (isPasswordVisible) ElectricCyan else TextMuted,
+                            tint = if (isPasswordVisible) BrandCyan else TextMuted,
                             modifier = Modifier.size(18.dp)
                         )
                     }

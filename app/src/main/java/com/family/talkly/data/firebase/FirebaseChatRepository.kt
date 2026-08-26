@@ -1492,9 +1492,9 @@ class FirebaseChatRepository(private val context: Context) {
 
         try {
             val isChannelActive = supabaseRealtimeChannel != null && supabaseRealtimeChannel?.status?.value == RealtimeChannel.Status.SUBSCRIBED
-            // If the channel is already connected and was established recently (within last 10s), skip tearing it down for non-manual triggers
-            if (isChannelActive && currentSyncedUserId == uid && (now - lastMessageSubscribedTimestamp < 10_000L) && reason != "manual") {
-                Log.d(TAG, "forceReconnectListeners: Messaging channel is already SUBSCRIBED recently for uid=$uid, skipping redundant teardown (trigger: $reason)")
+            // If the channel is already connected and healthy for uid, skip tearing it down for non-manual triggers
+            if (isChannelActive && currentSyncedUserId == uid && reason != "manual") {
+                Log.d(TAG, "forceReconnectListeners: Messaging channel is already SUBSCRIBED and healthy for uid=$uid, skipping redundant teardown (trigger: $reason)")
                 return
             }
 
