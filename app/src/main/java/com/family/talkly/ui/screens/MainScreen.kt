@@ -87,11 +87,15 @@ fun MainScreen(
     val callLogs by zegoManager.callLogs.collectAsState()
 
     androidx.compose.runtime.LaunchedEffect(currentUserProfile) {
+        android.util.Log.e("MainScreen", "DIAGNOSTIC MainScreen LaunchedEffect(currentUserProfile) triggered: profile=${currentUserProfile?.uid}, name=${currentUserProfile?.name}")
         if (currentUserProfile != null && currentUserProfile.uid.isNotBlank()) {
+            android.util.Log.e("MainScreen", "DIAGNOSTIC MainScreen: invoking zegoManager.startRealtimeCallSync for uid=${currentUserProfile.uid}")
             chatRepository.invalidateLocalCacheAndSyncPrimaryProfile(currentUserProfile.uid)
             chatRepository.syncContactsFromSupabase(currentUserProfile.uid)
             chatRepository.syncStatusesFromSupabase(currentUserProfile.uid)
             zegoManager.startRealtimeCallSync(currentUserProfile, chatRepository)
+        } else {
+            android.util.Log.e("MainScreen", "DIAGNOSTIC MainScreen: currentUserProfile is null or blank, skipping startRealtimeCallSync")
         }
     }
 
