@@ -947,6 +947,7 @@ class ZegoCallEngineManager(private val context: Context) {
                 }
             } else null
 
+            val nowIso = SupabaseMessage.millisToIsoTimestamp(System.currentTimeMillis())
             val activeCall = SupabaseActiveCall(
                 id = roomID,
                 roomId = roomID,
@@ -954,12 +955,14 @@ class ZegoCallEngineManager(private val context: Context) {
                 callerName = callerProfile.name,
                 callerPhone = callerProfile.phoneNumber,
                 callerSuffix = callerProfile.phoneSuffix,
-                callerAvatarUrl = callerProfile.profilePicUrl,
+                callerAvatarUrl = callerProfile.profilePicUrl ?: "",
                 receiverId = finalReceiverId,
                 receiverPhone = targetPhone,
                 receiverSuffix = targetSuffix,
                 callType = callType.name,
-                status = "CALLING"
+                status = "CALLING",
+                createdAt = nowIso,
+                updatedAt = nowIso
             )
 
             Log.e("Talkly_ZegoEngine", "[CALLER_DIAGNOSTIC] Inserting into Supabase: callerId=$effectiveCallerUid, receiverId=$finalReceiverId, roomId=$roomID, callType=${callType.name}")
