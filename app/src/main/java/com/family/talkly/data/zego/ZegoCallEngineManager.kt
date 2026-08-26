@@ -15,10 +15,12 @@ import com.family.talkly.data.models.UserProfile
 import com.family.talkly.data.supabase.SupabaseActiveCall
 import com.family.talkly.data.supabase.SupabaseCallLog
 import com.family.talkly.data.supabase.SupabaseCallService
+import com.family.talkly.data.supabase.SupabaseClientProvider
 import com.family.talkly.data.supabase.SupabaseMessage
 import com.family.talkly.data.supabase.SupabaseMessagingService
 import com.family.talkly.util.CallSoundManager
 import com.family.talkly.util.PhoneUtils
+import io.github.jan.supabase.auth.auth
 import im.zego.zegoexpress.ZegoExpressEngine
 import im.zego.zegoexpress.callback.IZegoEventHandler
 import im.zego.zegoexpress.constants.ZegoBeautifyFeature
@@ -522,7 +524,8 @@ class ZegoCallEngineManager(private val context: Context) {
         this.currentUserProfile = userProfile
         this.chatRepository = repository
 
-        val uid = userProfile.uid
+        val authUid = SupabaseClientProvider.auth.currentUserOrNull()?.id
+        val uid = if (!authUid.isNullOrBlank()) authUid else userProfile.uid
         val channelStatusStr = callsRealtimeChannel?.status?.value?.name ?: "null"
         val now = System.currentTimeMillis()
 
@@ -854,11 +857,14 @@ class ZegoCallEngineManager(private val context: Context) {
             return
         }
 
+        val authUid = SupabaseClientProvider.auth.currentUserOrNull()?.id
+        val effectiveCallerUid = if (!authUid.isNullOrBlank()) authUid else callerProfile.uid
+
         val targetUid = member.firebaseUid ?: if (!member.id.startsWith("contact_") && !member.id.contains(" ")) member.id else ""
         val targetPhone = member.phone
         val targetSuffix = PhoneUtils.extractPhoneSuffix(targetPhone)
 
-        val combinedUserIds = listOf(callerProfile.uid, targetUid.ifBlank { targetSuffix }).filter { it.isNotBlank() }.sorted().joinToString("_")
+        val combinedUserIds = listOf(effectiveCallerUid, targetUid.ifBlank { targetSuffix }).filter { it.isNotBlank() }.sorted().joinToString("_")
         val roomID = "call_room_${combinedUserIds}"
 
         val isVideo = (callType == CallType.VIDEO)
@@ -889,45 +895,74 @@ class ZegoCallEngineManager(private val context: Context) {
         // Async resolve receiver UUID if needed and insert active_call row in Supabase
         scope.launch(Dispatchers.IO) {
             var resolvedTargetId = targetUid
-            if (resolvedTargetId.isBlank() || resolvedTargetId.startsWith("contact_")) {
-                val found = SupabaseMessagingService.resolveUserUuid(targetPhone) ?: SupabaseMessagingService.resolveUserUuid(targetSuffix)
+            val isTargetUuid = try {
+                if (resolvedTargetId.isNotBlank()) {
+                    java.util.UUID.fromString(resolvedTargetId)
+                    true
+                } else false
+            } catch (e: Exception) {
+                false
+            }
+
+            if (!isTargetUuid) {
+                val found = SupabaseMessagingService.resolveUserUuid(targetPhone)
+                    ?: SupabaseMessagingService.resolveUserUuid(targetSuffix)
+                    ?: SupabaseMessagingService.resolveUserUuid(member.id)
                 if (!found.isNullOrBlank()) {
                     resolvedTargetId = found
                 }
             }
 
+            val finalReceiverId = if (resolvedTargetId.isNotBlank()) {
+                try {
+                    java.util.UUID.fromString(resolvedTargetId)
+                    resolvedTargetId
+                } catch (e: Exception) {
+                    null
+                }
+            } else null
+
             val activeCall = SupabaseActiveCall(
                 id = roomID,
                 roomId = roomID,
-                callerId = callerProfile.uid,
+                callerId = effectiveCallerUid,
                 callerName = callerProfile.name,
                 callerPhone = callerProfile.phoneNumber,
                 callerSuffix = callerProfile.phoneSuffix,
                 callerAvatarUrl = callerProfile.profilePicUrl,
-                receiverId = resolvedTargetId.ifBlank { null },
+                receiverId = finalReceiverId,
                 receiverPhone = targetPhone,
                 receiverSuffix = targetSuffix,
                 callType = callType.name,
                 status = "CALLING"
             )
 
-            Log.e("Talkly_ZegoEngine", "[CALLER_DIAGNOSTIC] About to insert into Supabase: activeCall.callType='${activeCall.callType}', roomId=${activeCall.roomId}")
-            SupabaseCallService.createActiveCall(activeCall)
+            Log.e("Talkly_ZegoEngine", "[CALLER_DIAGNOSTIC] Inserting into Supabase: callerId=$effectiveCallerUid, receiverId=$finalReceiverId, roomId=$roomID, callType=${callType.name}")
+            val createResult = SupabaseCallService.createActiveCall(activeCall)
+            if (createResult.isFailure) {
+                val errorMsg = createResult.exceptionOrNull()?.localizedMessage ?: "Unknown error"
+                Log.e(TAG, "Failed to create active call in Supabase: $errorMsg")
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "কল সংযোগ স্থাপন করা যায়নি: $errorMsg", android.widget.Toast.LENGTH_LONG).show()
+                    endCallInternal("Call Setup Failed")
+                }
+                return@launch
+            }
 
             // Send high priority FCM push for incoming calls (for killed/background recipient)
             val fcmPayload = mapOf(
                 "type" to "INCOMING_CALL",
                 "callerName" to callerProfile.name,
-                "callerUid" to callerProfile.uid,
-                "caller_id" to callerProfile.uid,
+                "callerUid" to effectiveCallerUid,
+                "caller_id" to effectiveCallerUid,
                 "callerPhone" to callerProfile.phoneNumber,
-                "callerAvatarUrl" to callerProfile.profilePicUrl,
+                "callerAvatarUrl" to (callerProfile.profilePicUrl ?: ""),
                 "roomID" to roomID,
                 "callType" to callType.name,
                 "status" to "RINGING"
             )
             com.family.talkly.util.FcmTokenManager.sendHighPriorityPush(
-                targetUid = resolvedTargetId,
+                targetUid = (finalReceiverId ?: resolvedTargetId).ifBlank { member.id },
                 targetPhoneSuffix = targetSuffix,
                 dataPayload = fcmPayload
             )
