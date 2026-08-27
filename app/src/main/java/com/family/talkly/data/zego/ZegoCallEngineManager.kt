@@ -542,13 +542,13 @@ class ZegoCallEngineManager(private val context: Context) {
         val channelStatusStr = callsRealtimeChannel?.status?.value?.name ?: "null"
         val now = System.currentTimeMillis()
 
-        Log.e(
+        Log.d(
             TAG,
             "DIAGNOSTIC startRealtimeCallSync ENTRY -> uid='$uid', currentSyncedUserId='$currentSyncedUserId', channelStatus=$channelStatusStr, isSubscribingCalls=$isSubscribingCalls, lastCallReconnectTimestamp=$lastCallReconnectTimestamp, lastCallSubscribedTimestamp=$lastCallSubscribedTimestamp, force=$force, timeSinceLastReconnect=${now - lastCallReconnectTimestamp}ms"
         )
 
         if (uid.isBlank() || uid == "self") {
-            Log.e(TAG, "DIAGNOSTIC startRealtimeCallSync GUARD EXIT: uid is blank or 'self' (uid='$uid')")
+            Log.d(TAG, "DIAGNOSTIC startRealtimeCallSync GUARD EXIT: uid is blank or 'self' (uid='$uid')")
             return
         }
 
@@ -556,18 +556,18 @@ class ZegoCallEngineManager(private val context: Context) {
 
         // 1. If already SUBSCRIBED for the same user, never tear down a healthy channel unless force requested
         if (currentSyncedUserId == uid && isChannelActive && !force) {
-            Log.e(TAG, "DIAGNOSTIC startRealtimeCallSync GUARD EXIT: Channel is already active/SUBSCRIBED for uid='$uid' (currentSyncedUserId='$currentSyncedUserId', force=$force)")
+            Log.d(TAG, "DIAGNOSTIC startRealtimeCallSync GUARD EXIT: Channel is already active/SUBSCRIBED for uid='$uid' (currentSyncedUserId='$currentSyncedUserId', force=$force)")
             return
         }
 
         // 2. Debounce: if a connection is already in flight within the last 2.5s, don't interrupt it
         if (now - lastCallReconnectTimestamp < 2500L && isSubscribingCalls && !force) {
-            Log.e(TAG, "DIAGNOSTIC startRealtimeCallSync GUARD EXIT: Debounced because isSubscribingCalls=true and elapsed time is ${now - lastCallReconnectTimestamp}ms < 2500ms for uid='$uid'")
+            Log.d(TAG, "DIAGNOSTIC startRealtimeCallSync GUARD EXIT: Debounced because isSubscribingCalls=true and elapsed time is ${now - lastCallReconnectTimestamp}ms < 2500ms for uid='$uid'")
             return
         }
         lastCallReconnectTimestamp = now
 
-        Log.e(TAG, "DIAGNOSTIC startRealtimeCallSync PROCEEDING: Setting currentSyncedUserId='$uid', isSubscribingCalls=true, and launching realtime subscription")
+        Log.d(TAG, "DIAGNOSTIC startRealtimeCallSync PROCEEDING: Setting currentSyncedUserId='$uid', isSubscribingCalls=true, and launching realtime subscription")
         currentSyncedUserId = uid
         isSubscribingCalls = true
 
@@ -582,6 +582,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.w(TAG, "Error loading initial call logs from Supabase: ${e.localizedMessage}")
             }
         }
@@ -590,7 +591,7 @@ class ZegoCallEngineManager(private val context: Context) {
         callSyncJob?.cancel()
         callSyncJob = callScope.launch {
             try {
-                Log.e(TAG, "DIAGNOSTIC callSyncJob started: unsubscribing previous channel if any, creating new Realtime channel for uid='$uid'")
+                Log.d(TAG, "DIAGNOSTIC callSyncJob started: unsubscribing previous channel if any, creating new Realtime channel for uid='$uid'")
                 callsRealtimeChannel?.let { SupabaseCallService.unsubscribeChannel(it) }
                 callsRealtimeChannel = SupabaseCallService.createCallsRealtimeChannel(
                     currentUserId = uid,
@@ -599,9 +600,9 @@ class ZegoCallEngineManager(private val context: Context) {
                         handleRealtimeCallAction(action)
                     },
                     onStatusChange = { status ->
-                        Log.e(TAG, "DIAGNOSTIC callsRealtimeChannel onStatusChange -> status=$status for uid='$uid'")
+                        Log.d(TAG, "DIAGNOSTIC callsRealtimeChannel onStatusChange -> status=$status for uid='$uid'")
                         if (status == RealtimeChannel.Status.SUBSCRIBED) {
-                            Log.e(TAG, "DIAGNOSTIC Calls Realtime channel successfully SUBSCRIBED for uid='$uid'")
+                            Log.d(TAG, "DIAGNOSTIC Calls Realtime channel successfully SUBSCRIBED for uid='$uid'")
                             lastCallSubscribedTimestamp = System.currentTimeMillis()
                             isSubscribingCalls = false
                         } else if (status == RealtimeChannel.Status.UNSUBSCRIBED) {
@@ -622,6 +623,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     }
                 )
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e(TAG, "DIAGNOSTIC Error starting Supabase Realtime calls sync: ${e.localizedMessage}", e)
             } finally {
                 callScope.launch {

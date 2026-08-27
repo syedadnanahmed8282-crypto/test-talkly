@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.widget.Toast
 import com.family.talkly.data.models.ChatMessage
 import com.family.talkly.data.models.ReactionUtils
 import com.family.talkly.data.models.ReactionEntry
@@ -891,7 +892,11 @@ class FirebaseChatRepository(private val context: Context) {
                         }
                         val resultMap = loadedMap.mapValues { entry -> entry.value.sortedBy { it.timestamp } }
                         if (resultMap.isNotEmpty()) {
-                            _messagesMap.value = resultMap
+                            val mergedMap = _messagesMap.value.toMutableMap()
+                            resultMap.forEach { (key, list) ->
+                                mergedMap[key] = list
+                            }
+                            _messagesMap.value = mergedMap
                         }
                     }
                 }
@@ -1501,7 +1506,7 @@ class FirebaseChatRepository(private val context: Context) {
 
     fun forceReconnectListeners(reason: String = "manual") {
         val now = System.currentTimeMillis()
-        if (now - lastForceReconnectTimestamp < 2500L && isReconnectingMessages) {
+        if (now - lastForceReconnectTimestamp < 2500L && isReconnectingMessages && reason != "manual") {
             Log.d(TAG, "forceReconnectListeners debounced: skipped duplicate call within 2.5s (reason: $reason)")
             return
         }
@@ -1528,13 +1533,11 @@ class FirebaseChatRepository(private val context: Context) {
                 return
             }
 
-            currentSyncedUserId = null // Reset so startRealtimeMessageSync bypasses the guard
             isReconnectingMessages = true
-
-            startRealtimeMessageSync(uid)
+            startRealtimeMessageSync(uid, force = (reason == "manual"))
             syncContactsFromSupabase(uid)
             syncStatusesFromSupabase(uid)
-            Log.d(TAG, "forceReconnectListeners: Successfully attached message listeners for uid=$uid (trigger: $reason)")
+            Log.d(TAG, "forceReconnectListeners: Successfully initiated message sync for uid=$uid (trigger: $reason)")
         } catch (e: Exception) {
             Log.e(TAG, "forceReconnectListeners encountered error: ${e.localizedMessage}")
         } finally {
@@ -1545,11 +1548,16 @@ class FirebaseChatRepository(private val context: Context) {
         }
     }
 
-    fun startRealtimeMessageSync(currentUserId: String?) {
+    fun startRealtimeMessageSync(currentUserId: String?, force: Boolean = false) {
         if (currentUserId.isNullOrBlank()) return
         val isChannelActive = supabaseRealtimeChannel != null && supabaseRealtimeChannel?.status?.value == RealtimeChannel.Status.SUBSCRIBED
-        if (currentSyncedUserId == currentUserId && isChannelActive) {
+        if (currentSyncedUserId == currentUserId && isChannelActive && !force) {
             Log.d(TAG, "startRealtimeMessageSync: Channel already active for $currentUserId")
+            return
+        }
+
+        if (currentSyncedUserId == currentUserId && messageSyncJob?.isActive == true && !force) {
+            Log.d(TAG, "startRealtimeMessageSync: Message sync already in progress for $currentUserId")
             return
         }
 
@@ -1565,6 +1573,7 @@ class FirebaseChatRepository(private val context: Context) {
                     supabaseRealtimeChannel = null
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.w(TAG, "Error cleaning previous realtime channel: ${e.localizedMessage}")
             }
 
@@ -1594,6 +1603,7 @@ class FirebaseChatRepository(private val context: Context) {
                 _lastServerSyncTime.value = System.currentTimeMillis()
                 isInitialMessageSyncDone = true
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.w(TAG, "Error performing initial Supabase message fetch: ${e.localizedMessage}")
                 isInitialMessageSyncDone = true
             }
@@ -1608,6 +1618,10 @@ class FirebaseChatRepository(private val context: Context) {
                     },
                     onRequestAction = { action ->
                         handleIncomingSupabaseRequestAction(action, currentUserId)
+                    },
+                    onStatusAction = { action ->
+                        Log.d(TAG, "Realtime status change event: $action")
+                        syncStatusesFromSupabase(currentUserId)
                     },
                     onTypingAction = { payload ->
                         handleIncomingTyping(payload)
@@ -1629,6 +1643,7 @@ class FirebaseChatRepository(private val context: Context) {
                     }
                 )
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e(TAG, "Error connecting Supabase Realtime messaging channel: ${e.localizedMessage}")
             }
         }
@@ -2379,7 +2394,7 @@ class FirebaseChatRepository(private val context: Context) {
         photoUrl: String? = null,
         backgroundColorHex: String = "#321C3B"
     ) {
-        val statusId = "status_${System.currentTimeMillis()}"
+        val statusId = java.util.UUID.randomUUID().toString()
         var persistentPhotoUrl = photoUrl
         var localPhotoFile: File? = null
 
@@ -2421,7 +2436,14 @@ class FirebaseChatRepository(private val context: Context) {
             }
         }
 
-        val resolvedUserId = if (userId != "self") userId else (currentSyncedUserId ?: "self")
+        val authUser = try { SupabaseClientProvider.client.auth.currentUserOrNull() } catch (_: Exception) { null }
+        val authUid = authUser?.id
+        val resolvedUserId = when {
+            !authUid.isNullOrBlank() -> authUid
+            userId.isNotBlank() && userId != "self" -> userId
+            !currentSyncedUserId.isNullOrBlank() && currentSyncedUserId != "self" -> currentSyncedUserId!!
+            else -> "self"
+        }
         val now = System.currentTimeMillis()
         val expiresAt = now + (24 * 60 * 60 * 1000L)
 
@@ -2447,6 +2469,7 @@ class FirebaseChatRepository(private val context: Context) {
         // Sync status to Supabase
         if (resolvedUserId.isNotBlank() && resolvedUserId != "self") {
             repositoryScope.launch(Dispatchers.IO) {
+                Log.d(TAG, "Starting Supabase story post for user $resolvedUserId (Auth UID: ${authUid ?: "NONE"})")
                 var finalMediaUrl = persistentPhotoUrl
                 val targetUploadFile = localPhotoFile ?: if (!persistentPhotoUrl.isNullOrBlank() && persistentPhotoUrl.startsWith("file://")) {
                     try { File(Uri.parse(persistentPhotoUrl).path ?: "") } catch (e: Exception) { null }
@@ -2454,11 +2477,13 @@ class FirebaseChatRepository(private val context: Context) {
 
                 if (targetUploadFile != null && targetUploadFile.exists()) {
                     try {
+                        Log.d(TAG, "Uploading status image to Cloudinary: ${targetUploadFile.absolutePath}")
                         val uploader = MediaCompressorAndUploader(context)
                         val remotePath = "status_photos/${newStatus.id}.jpg"
                         val downloadUrl = uploader.uploadMediaFile(targetUploadFile, remotePath) { _, _ -> }
                         if (downloadUrl.startsWith("http://") || downloadUrl.startsWith("https://")) {
                             finalMediaUrl = downloadUrl
+                            Log.d(TAG, "Cloudinary upload success: $downloadUrl")
                             withContext(Dispatchers.Main) {
                                 val updatedList = _statuses.value.map { item ->
                                     if (item.id == newStatus.id) item.copy(photoUrl = downloadUrl) else item
@@ -2466,9 +2491,11 @@ class FirebaseChatRepository(private val context: Context) {
                                 _statuses.value = updatedList
                                 saveStatusesToPrefs()
                             }
+                        } else {
+                            Log.w(TAG, "Cloudinary upload did not return a valid HTTP URL: $downloadUrl")
                         }
                     } catch (e: Exception) {
-                        Log.w(TAG, "Status photo Cloudinary upload error: ${e.localizedMessage}")
+                        Log.e(TAG, "Status photo Cloudinary upload error: ${e.localizedMessage}", e)
                     }
                 }
 
@@ -2478,14 +2505,30 @@ class FirebaseChatRepository(private val context: Context) {
                     userName = userName,
                     userAvatarUrl = userAvatarUrl,
                     textContent = textContent,
-                    mediaUrl = finalMediaUrl,
+                    photoUrl = finalMediaUrl,
                     isVideo = newStatus.isVideo,
-                    backgroundColor = backgroundColorHex,
+                    backgroundColorHex = backgroundColorHex,
                     createdAt = SupabaseMessage.millisToIsoTimestamp(now),
                     expiresAt = SupabaseMessage.millisToIsoTimestamp(expiresAt)
                 )
-                socialService.postStatus(supabaseStatus)
+                val postResult = socialService.postStatus(supabaseStatus)
+                if (postResult.isSuccess) {
+                    Log.d(TAG, "Status successfully posted to Supabase: $statusId")
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "স্টোরি সফলভাবে Supabase এ শেয়ার হয়েছে ✅", Toast.LENGTH_SHORT).show()
+                    }
+                    syncStatusesFromSupabase(resolvedUserId)
+                } else {
+                    val err = postResult.exceptionOrNull()?.localizedMessage ?: "Unknown error"
+                    Log.e(TAG, "Failed posting status to Supabase: $err", postResult.exceptionOrNull())
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Supabase এ পোস্ট এরর: $err", Toast.LENGTH_LONG).show()
+                    }
+                }
             }
+        } else {
+            Log.w(TAG, "Status not sent to Supabase: User is not authenticated with Supabase (resolvedUserId: $resolvedUserId)")
+            Toast.makeText(context, "সতর্কতা: Supabase Auth লগইন নেই, স্টোরি শুধু লোকাল সেভ হয়েছে", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -2493,20 +2536,40 @@ class FirebaseChatRepository(private val context: Context) {
         if (currentUserId.isBlank() || currentUserId == "self") return
         repositoryScope.launch(Dispatchers.IO) {
             try {
+                Log.d(TAG, "Syncing active statuses from Supabase for user: $currentUserId")
                 val result = socialService.loadActiveStatuses()
+                if (result.isFailure) {
+                    val err = result.exceptionOrNull()?.localizedMessage ?: "Unknown error"
+                    Log.w(TAG, "loadActiveStatuses failed: $err (preserving local statuses)")
+                    return@launch
+                }
+
                 val activeItems = result.getOrDefault(emptyList())
+                Log.d(TAG, "Fetched ${activeItems.size} active statuses from Supabase")
 
-                if (activeItems.isNotEmpty()) {
-                    val myViewedSet = activeItems.map { status ->
-                        val isSelf = status.userId == currentUserId || status.userId == "self"
-                        val seen = isSelf || status.viewers.any { it.userId == currentUserId }
-                        status.copy(isSeen = seen)
-                    }
+                val now = System.currentTimeMillis()
+                // Preserve active unexpired local self-statuses so they aren't lost before Supabase index syncs
+                val localSelfUnexpired = _statuses.value.filter {
+                    (it.userId == currentUserId || it.userId == "self") &&
+                    (it.timestamp + (24 * 60 * 60 * 1000L) > now)
+                }
 
-                    withContext(Dispatchers.Main) {
-                        _statuses.value = myViewedSet
-                        saveStatusesToPrefs()
+                val myViewedSet = activeItems.map { status ->
+                    val isSelf = status.userId == currentUserId || status.userId == "self"
+                    val seen = isSelf || status.viewers.any { it.userId == currentUserId }
+                    status.copy(isSeen = seen)
+                }.toMutableList()
+
+                val existingIds = myViewedSet.map { it.id }.toSet()
+                for (localItem in localSelfUnexpired) {
+                    if (!existingIds.contains(localItem.id)) {
+                        myViewedSet.add(0, localItem)
                     }
+                }
+
+                withContext(Dispatchers.Main) {
+                    _statuses.value = myViewedSet
+                    saveStatusesToPrefs()
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Error syncing statuses from Supabase: ${e.localizedMessage}")
@@ -2588,7 +2651,15 @@ class FirebaseChatRepository(private val context: Context) {
 
         if (realCurrentUid.isNotBlank() && realCurrentUid != "self") {
             repositoryScope.launch(Dispatchers.IO) {
-                socialService.deleteStatus(statusId, realCurrentUid)
+                try {
+                    val res = socialService.deleteStatus(statusId, realCurrentUid)
+                    if (res.isSuccess) {
+                        Log.d(TAG, "Status $statusId successfully deleted from Supabase")
+                        syncStatusesFromSupabase(realCurrentUid)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error deleting status from Supabase: ${e.localizedMessage}")
+                }
             }
         }
     }
@@ -2901,7 +2972,7 @@ class FirebaseChatRepository(private val context: Context) {
         val userSuffix = PhoneUtils.extractPhoneSuffix(userPhone)
         val realCurrentUid = if (currentUserId != "self") currentUserId else (currentSyncedUserId ?: "self")
 
-        // 1. Filter out statuses from users who are NOT mutual contacts with current user (unless self)
+        // 1. Filter out statuses from users who are NOT mutual contacts or saved in contacts (unless self)
         val privacyFilteredStatuses = activeStatuses.filter { statusItem ->
             val isSelf = statusItem.userId == "self" ||
                     statusItem.userId == realCurrentUid ||
@@ -2924,7 +2995,14 @@ class FirebaseChatRepository(private val context: Context) {
                     relation = "Contact"
                 )
 
-                isMutualContact(realCurrentUid, matchingMember)
+                val isInMyContacts = _familyMembers.value.any { m ->
+                    m.id == statusItem.userId ||
+                    (!m.firebaseUid.isNullOrBlank() && m.firebaseUid == statusItem.userId) ||
+                    (uploaderPhoneSuffix.isNotBlank() && PhoneUtils.extractPhoneSuffix(m.phone) == uploaderPhoneSuffix) ||
+                    (uploaderPhoneSuffix.isNotBlank() && PhoneUtils.extractPhoneSuffix(m.id) == uploaderPhoneSuffix)
+                }
+
+                isInMyContacts || isMutualContact(realCurrentUid, matchingMember)
             }
         }
 

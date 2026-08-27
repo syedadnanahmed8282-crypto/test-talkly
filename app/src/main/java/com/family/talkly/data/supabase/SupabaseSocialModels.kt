@@ -30,12 +30,12 @@ data class SupabaseStatus(
     val userAvatarUrl: String? = null,
     @SerialName("text_content")
     val textContent: String? = null,
-    @SerialName("media_url")
-    val mediaUrl: String? = null,
+    @SerialName("photo_url")
+    val photoUrl: String? = null,
     @SerialName("is_video")
     val isVideo: Boolean = false,
-    @SerialName("background_color")
-    val backgroundColor: String = "#321C3B",
+    @SerialName("background_color_hex")
+    val backgroundColorHex: String = "#321C3B",
     @SerialName("created_at")
     val createdAt: String? = null,
     @SerialName("expires_at")
@@ -49,9 +49,9 @@ data class SupabaseStatus(
             userName = userName,
             userAvatarUrl = userAvatarUrl,
             textContent = textContent,
-            photoUrl = mediaUrl,
+            photoUrl = photoUrl,
             isVideo = isVideo,
-            backgroundColorHex = backgroundColor,
+            backgroundColorHex = backgroundColorHex,
             timestamp = timestampMillis,
             isSeen = false,
             viewers = viewers,
@@ -65,8 +65,8 @@ data class SupabaseStatusViewer(
     val id: String? = null,
     @SerialName("status_id")
     val statusId: String,
-    @SerialName("viewer_user_id")
-    val viewerUserId: String,
+    @SerialName("viewer_id")
+    val viewerId: String,
     @SerialName("viewer_name")
     val viewerName: String,
     @SerialName("viewer_avatar_url")
@@ -76,7 +76,7 @@ data class SupabaseStatusViewer(
 ) {
     fun toStatusViewer(): StatusViewer {
         return StatusViewer(
-            userId = viewerUserId,
+            userId = viewerId,
             userName = viewerName,
             userAvatarUrl = viewerAvatarUrl,
             timeAgo = "Recently"

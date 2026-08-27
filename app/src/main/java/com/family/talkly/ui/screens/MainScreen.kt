@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import android.os.Build
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -87,15 +88,15 @@ fun MainScreen(
     val callLogs by zegoManager.callLogs.collectAsState()
 
     androidx.compose.runtime.LaunchedEffect(currentUserProfile) {
-        android.util.Log.e("MainScreen", "DIAGNOSTIC MainScreen LaunchedEffect(currentUserProfile) triggered: profile=${currentUserProfile?.uid}, name=${currentUserProfile?.name}")
+        android.util.Log.d("MainScreen", "DIAGNOSTIC MainScreen LaunchedEffect(currentUserProfile) triggered: profile=${currentUserProfile?.uid}, name=${currentUserProfile?.name}")
         if (currentUserProfile != null && currentUserProfile.uid.isNotBlank()) {
-            android.util.Log.e("MainScreen", "DIAGNOSTIC MainScreen: invoking zegoManager.startRealtimeCallSync for uid=${currentUserProfile.uid}")
+            android.util.Log.d("MainScreen", "DIAGNOSTIC MainScreen: invoking zegoManager.startRealtimeCallSync for uid=${currentUserProfile.uid}")
             chatRepository.invalidateLocalCacheAndSyncPrimaryProfile(currentUserProfile.uid)
             chatRepository.syncContactsFromSupabase(currentUserProfile.uid)
             chatRepository.syncStatusesFromSupabase(currentUserProfile.uid)
             zegoManager.startRealtimeCallSync(currentUserProfile, chatRepository)
         } else {
-            android.util.Log.e("MainScreen", "DIAGNOSTIC MainScreen: currentUserProfile is null or blank, skipping startRealtimeCallSync")
+            android.util.Log.d("MainScreen", "DIAGNOSTIC MainScreen: currentUserProfile is null or blank, skipping startRealtimeCallSync")
         }
     }
 
@@ -151,6 +152,55 @@ fun MainScreen(
 
     var pendingCallMember by remember { mutableStateOf<FamilyMember?>(null) }
     var pendingCallType by remember { mutableStateOf<CallType?>(null) }
+
+    // Unified launcher for initial app permissions (Camera, Mic, Storage/Media, Notifications)
+    val appInitialPermissionsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { grantedMap ->
+        android.util.Log.d("MainScreen", "Initial permissions result: $grantedMap")
+    }
+
+    // Auto-request all essential permissions on login/startup
+    androidx.compose.runtime.LaunchedEffect(currentUserProfile?.uid) {
+        val permissionsToRequest = mutableListOf<String>()
+
+        // 1. Camera & Microphone for audio/video calling and voice notes
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            permissionsToRequest.add(Manifest.permission.CAMERA)
+        }
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            permissionsToRequest.add(Manifest.permission.RECORD_AUDIO)
+        }
+
+        // 2. Storage & Media permissions for photos, videos, and media saving
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(Manifest.permission.READ_MEDIA_IMAGES)
+            }
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(Manifest.permission.READ_MEDIA_VIDEO)
+            }
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(Manifest.permission.READ_MEDIA_AUDIO)
+            }
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        } else {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+            }
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                    permissionsToRequest.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                }
+            }
+        }
+
+        if (permissionsToRequest.isNotEmpty()) {
+            appInitialPermissionsLauncher.launch(permissionsToRequest.toTypedArray())
+        }
+    }
 
     val callPermissionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -229,7 +279,11 @@ fun MainScreen(
     if (activeChatMember != null) {
         val memberId = activeChatMember!!.id
         val currentMember = familyMembers.firstOrNull { it.id == memberId } ?: activeChatMember!!
-        val currentMessages = messagesMap[currentMember.id] ?: emptyList()
+        val currentMessages = remember(messagesMap, currentMember.id, currentMember.firebaseUid, currentMember.phone) {
+            chatRepository.getMessagesForMember(currentMember.id)
+                .ifEmpty { if (!currentMember.firebaseUid.isNullOrBlank()) chatRepository.getMessagesForMember(currentMember.firebaseUid!!) else emptyList() }
+                .ifEmpty { messagesMap[currentMember.id] ?: emptyList() }
+        }
 
         val isMutual = chatRepository.isMutualContact(currentUid, currentMember)
         val targetSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(currentMember.phone)
@@ -392,6 +446,10 @@ fun MainScreen(
                 photoUrl = photoUrl,
                 backgroundColorHex = bgHex
             )
+        },
+        onDeleteStatus = { statusId ->
+            val currentUid = currentUserProfile?.uid?.ifBlank { "self" } ?: "self"
+            chatRepository.deleteStatus(statusId, currentUid)
         },
         onMarkStatusSeen = { statusId ->
             val currentUid = currentUserProfile?.uid?.ifBlank { "self" } ?: "self"

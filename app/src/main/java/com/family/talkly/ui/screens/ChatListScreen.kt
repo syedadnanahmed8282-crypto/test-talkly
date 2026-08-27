@@ -176,6 +176,7 @@ fun ChatListScreen(
     onClearDemoContacts: (() -> Unit)? = null,
     statusGroups: List<UserStatusGroup> = emptyList(),
     onPostStatus: ((textContent: String?, photoUrl: String?, backgroundColorHex: String) -> Unit)? = null,
+    onDeleteStatus: ((statusId: String) -> Unit)? = null,
     onMarkStatusSeen: ((statusId: String) -> Unit)? = null,
     onToggleLikeStatus: ((statusId: String) -> Unit)? = null,
     onSendStatusReply: ((targetUserId: String, replyText: String) -> Unit)? = null,
@@ -481,6 +482,7 @@ fun ChatListScreen(
             onDismiss = { activeViewerGroupIndex = null },
             onMarkStatusSeen = { statusId -> onMarkStatusSeen?.invoke(statusId) },
             onAddStatusClick = { showPostStatusDialog = true },
+            onDeleteStatus = onDeleteStatus,
             onToggleLikeStatus = { statusId -> onToggleLikeStatus?.invoke(statusId) },
             onSendStatusReply = { targetUserId, replyText -> onSendStatusReply?.invoke(targetUserId, replyText) },
             onSelectMemberProfile = { member ->

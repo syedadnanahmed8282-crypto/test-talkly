@@ -799,7 +799,7 @@ private fun downloadMediaToGallery(context: Context, message: ChatMessage) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         put(
                             MediaStore.MediaColumns.RELATIVE_PATH,
-                            if (isVideo) Environment.DIRECTORY_MOVIES + "/Talkly" else Environment.DIRECTORY_PICTURES + "/Talkly"
+                            if (isVideo) Environment.DIRECTORY_MOVIES + "/Talkly Media/Talkly Video" else Environment.DIRECTORY_PICTURES + "/Talkly Media/Talkly Images"
                         )
                         put(MediaStore.MediaColumns.IS_PENDING, 1)
                     }
@@ -827,12 +827,13 @@ private fun downloadMediaToGallery(context: Context, message: ChatMessage) {
                 val primaryBase = Environment.getExternalStoragePublicDirectory(
                     if (isVideo) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES
                 )
-                val targetDir = File(primaryBase, "Talkly")
+                val targetSubFolder = if (isVideo) "Talkly Media/Talkly Video" else "Talkly Media/Talkly Images"
+                val targetDir = File(primaryBase, targetSubFolder)
                 val dirToUse: File = when {
                     targetDir.exists() || targetDir.mkdirs() -> targetDir
                     primaryBase.exists() || primaryBase.mkdirs() -> primaryBase
                     else -> {
-                        val dlDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                        val dlDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Talkly Media")
                         if (!dlDir.exists()) dlDir.mkdirs()
                         dlDir
                     }
@@ -859,7 +860,8 @@ private fun downloadMediaToGallery(context: Context, message: ChatMessage) {
 
         withContext(Dispatchers.Main) {
             if (success) {
-                Toast.makeText(context, "Saved to Gallery (Talkly album)", Toast.LENGTH_SHORT).show()
+                val folderName = if (isVideo) "Talkly Media > Talkly Video" else "Talkly Media > Talkly Images"
+                Toast.makeText(context, "Saved to $folderName", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(context, "Save failed: ${errorMessage ?: "Could not write file"}", Toast.LENGTH_LONG).show()
             }

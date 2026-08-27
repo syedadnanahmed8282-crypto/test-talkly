@@ -356,6 +356,40 @@ fun ChatDetailScreen(
         }
     }
 
+    val prefs = remember(context) { context.getSharedPreferences("talkly_prefs", Context.MODE_PRIVATE) }
+    var wallpaperValue by remember(member.id) {
+        mutableStateOf(
+            prefs.getString("wallpaper_${member.id}", null)
+                ?: prefs.getString("wallpaper_global", "#080B10")
+                ?: "#080B10"
+        )
+    }
+
+    val activeMessages = if (localClearedMessages) emptyList() else messages
+
+    val combinedMessages = remember(activeMessages, localPendingMessages) {
+        val serverIds = activeMessages.map { it.id }.toSet()
+        activeMessages + localPendingMessages.filter { it.id !in serverIds }
+    }
+
+    val displayedMessages = remember(combinedMessages, isSearchActive, searchQuery) {
+        if (isSearchActive && searchQuery.isNotBlank()) {
+            combinedMessages.filter {
+                it.textContent.contains(searchQuery, ignoreCase = true)
+            }
+        } else {
+            combinedMessages
+        }
+    }
+
+    val pinnedMessage = remember(combinedMessages) {
+        combinedMessages.lastOrNull { it.isPinned }
+    }
+
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val listState = rememberLazyListState()
+
     fun sendPendingMediaMessage(
         textContent: String,
         messageType: MessageType,
@@ -390,6 +424,12 @@ fun ChatDetailScreen(
             replyToName = replyName,
             replyToText = replyText
         )
+
+        scope.launch {
+            delay(50)
+            val targetIndex = (displayedMessages.size + 1).coerceAtLeast(0)
+            listState.scrollToItem(targetIndex)
+        }
     }
 
     fun stopAndPreparePreview() {
@@ -431,40 +471,6 @@ fun ChatDetailScreen(
         recordingDurationSec = 0
         Toast.makeText(context, "Recording cancelled", Toast.LENGTH_SHORT).show()
     }
-
-    val prefs = remember(context) { context.getSharedPreferences("talkly_prefs", Context.MODE_PRIVATE) }
-    var wallpaperValue by remember(member.id) {
-        mutableStateOf(
-            prefs.getString("wallpaper_${member.id}", null)
-                ?: prefs.getString("wallpaper_global", "#080B10")
-                ?: "#080B10"
-        )
-    }
-
-    val activeMessages = if (localClearedMessages) emptyList() else messages
-
-    val combinedMessages = remember(activeMessages, localPendingMessages) {
-        val serverIds = activeMessages.map { it.id }.toSet()
-        activeMessages + localPendingMessages.filter { it.id !in serverIds }
-    }
-
-    val displayedMessages = remember(combinedMessages, isSearchActive, searchQuery) {
-        if (isSearchActive && searchQuery.isNotBlank()) {
-            combinedMessages.filter {
-                it.textContent.contains(searchQuery, ignoreCase = true)
-            }
-        } else {
-            combinedMessages
-        }
-    }
-
-    val pinnedMessage = remember(combinedMessages) {
-        combinedMessages.lastOrNull { it.isPinned }
-    }
-
-    val keyboardController = LocalSoftwareKeyboardController.current
-    val focusManager = LocalFocusManager.current
-    val listState = rememberLazyListState()
 
     // Mark active chat in notification helper & clear notifications on enter/exit
     androidx.compose.runtime.DisposableEffect(member.id) {
@@ -528,9 +534,9 @@ fun ChatDetailScreen(
                     lastSeenBottomMessageCount = displayedMessages.size
                 } else if (displayedMessages.size > previousMessageCount || member.isTyping) {
                     val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-                    // If user was near bottom or sent a message, smoothly bring to latest message
-                    if (lastVisible >= (displayedMessages.size - 3).coerceAtLeast(0) || lastVisible < targetIndex) {
-                        listState.animateScrollToItem(targetIndex)
+                    // Only scroll down instantly if user was already at or near bottom, avoiding jump/flicker
+                    if (isNearBottom || lastVisible >= (displayedMessages.size - 2).coerceAtLeast(0)) {
+                        listState.scrollToItem(targetIndex)
                     }
                 } else if (displayedMessages.size < previousMessageCount) {
                     val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0

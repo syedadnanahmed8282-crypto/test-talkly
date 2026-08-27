@@ -540,6 +540,7 @@ object SupabaseMessagingService {
         coroutineScope: CoroutineScope,
         onMessageAction: (PostgresAction) -> Unit,
         onRequestAction: (PostgresAction) -> Unit,
+        onStatusAction: ((PostgresAction) -> Unit)? = null,
         onTypingAction: ((SupabaseTypingPayload) -> Unit)? = null,
         onStatusChange: ((RealtimeChannel.Status) -> Unit)? = null
     ): RealtimeChannel? = withContext(Dispatchers.IO) {
@@ -547,6 +548,18 @@ object SupabaseMessagingService {
             SupabaseClientProvider.client.realtime.connect()
 
             val channelName = "messages-user-$currentUserId"
+            
+            // Cleanly remove any existing joined channel with this name to avoid "cannot call postgresChangeFlow after joining"
+            try {
+                val existingChannel = SupabaseClientProvider.client.realtime.subscriptions[channelName]
+                if (existingChannel != null) {
+                    try { existingChannel.unsubscribe() } catch (_: Exception) {}
+                    SupabaseClientProvider.client.realtime.removeChannel(existingChannel)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error cleaning previous channel instance: ${e.localizedMessage}")
+            }
+
             val channel = SupabaseClientProvider.client.realtime.channel(channelName)
 
             val messagesFlow = channel.postgresChangeFlow<PostgresAction>(schema = "public") {
@@ -564,6 +577,19 @@ object SupabaseMessagingService {
             requestsFlow.onEach { action ->
                 onRequestAction(action)
             }.launchIn(coroutineScope)
+
+            if (onStatusAction != null) {
+                try {
+                    val statusesFlow = channel.postgresChangeFlow<PostgresAction>(schema = "public") {
+                        table = "statuses"
+                    }
+                    statusesFlow.onEach { action ->
+                        onStatusAction(action)
+                    }.launchIn(coroutineScope)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Optional statuses realtime change flow not attached: ${e.localizedMessage}")
+                }
+            }
 
             if (onTypingAction != null) {
                 try {
@@ -599,9 +625,11 @@ object SupabaseMessagingService {
     ): Boolean = withContext(Dispatchers.IO) {
         try {
             if (senderId.isBlank() || receiverId.isBlank()) return@withContext false
-            val channelName = "messages-user-$receiverId"
+            val channelName = "typing-channel-$receiverId"
             val channel = SupabaseClientProvider.client.realtime.channel(channelName)
-            channel.subscribe(blockUntilSubscribed = false)
+            if (channel.status.value != RealtimeChannel.Status.SUBSCRIBED && channel.status.value != RealtimeChannel.Status.SUBSCRIBING) {
+                channel.subscribe(blockUntilSubscribed = false)
+            }
             channel.broadcast(
                 event = "typing",
                 message = SupabaseTypingPayload(
@@ -620,7 +648,10 @@ object SupabaseMessagingService {
 
     suspend fun unsubscribeChannel(channel: RealtimeChannel?) = withContext(Dispatchers.IO) {
         try {
-            channel?.unsubscribe()
+            if (channel != null) {
+                channel.unsubscribe()
+                SupabaseClientProvider.client.realtime.removeChannel(channel)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Error unsubscribing realtime channel: ${e.localizedMessage}")
         }

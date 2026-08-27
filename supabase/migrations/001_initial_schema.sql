@@ -627,13 +627,14 @@ CREATE POLICY "Users can delete their own call logs"
 -- ============================================================================
 -- 12. SUPABASE REALTIME PUBLICATION ENABLEMENT
 -- ============================================================================
--- Only enable Realtime on tables that strictly require instant push events.
+-- Enable Realtime on tables that require instant push events.
 -- Realtime Presence (in-memory WebSocket) handles online/offline status.
 DO $$
 BEGIN
     EXECUTE 'ALTER PUBLICATION supabase_realtime ADD TABLE public.messages';
     EXECUTE 'ALTER PUBLICATION supabase_realtime ADD TABLE public.message_requests';
     EXECUTE 'ALTER PUBLICATION supabase_realtime ADD TABLE public.active_calls';
+    EXECUTE 'ALTER PUBLICATION supabase_realtime ADD TABLE public.statuses';
 EXCEPTION WHEN duplicate_object THEN
     NULL;
 END $$;

@@ -18,7 +18,12 @@ object LogcatHelper {
             // Prioritize error/warning lines and anything from our own tags
             val relevant = allLines.filter {
                 it.contains("Talkly", ignoreCase = true) ||
-                it.contains("Firestore", ignoreCase = true) ||
+                it.contains("Supabase", ignoreCase = true) ||
+                it.contains("PostgREST", ignoreCase = true) ||
+                it.contains("SocialService", ignoreCase = true) ||
+                it.contains("Status", ignoreCase = true) ||
+                it.contains("Cloudinary", ignoreCase = true) ||
+                it.contains("FirebaseChat", ignoreCase = true) ||
                 it.contains("AndroidRuntime", ignoreCase = true) ||
                 it.contains(" E ") || it.contains(" W ") || it.contains("FATAL")
             }

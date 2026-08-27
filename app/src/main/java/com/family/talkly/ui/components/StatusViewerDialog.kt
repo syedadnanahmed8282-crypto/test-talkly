@@ -34,9 +34,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -51,6 +53,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -110,6 +113,7 @@ fun StatusViewerDialog(
     onDismiss: () -> Unit,
     onMarkStatusSeen: (statusId: String) -> Unit,
     onAddStatusClick: (() -> Unit)? = null,
+    onDeleteStatus: ((statusId: String) -> Unit)? = null,
     onToggleLikeStatus: ((statusId: String) -> Unit)? = null,
     onSendStatusReply: ((targetUserId: String, replyText: String) -> Unit)? = null,
     onSelectMemberProfile: ((FamilyMember) -> Unit)? = null
@@ -137,6 +141,7 @@ fun StatusViewerDialog(
     var isPaused by remember { mutableStateOf(false) }
 
     var showAnalyticsDialog by remember { mutableStateOf(false) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     var replyText by remember { mutableStateOf("") }
     var isLikedByMe by remember(currentStatus.id, currentStatus.likes) {
         mutableStateOf(currentStatus.likes.any { it.userId == currentUserId || it.userId == "self" })
@@ -433,34 +438,57 @@ fun StatusViewerDialog(
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (isOwnStatus && onAddStatusClick != null) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(ViewerCyan)
-                                    .clickable {
-                                        onDismiss()
-                                        onAddStatusClick()
-                                    }
-                                    .padding(horizontal = 10.dp, vertical = 5.dp)
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (isOwnStatus) {
+                            if (onDeleteStatus != null) {
+                                IconButton(
+                                    onClick = {
+                                        isPaused = true
+                                        showDeleteConfirmDialog = true
+                                    },
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.Black.copy(alpha = 0.4f))
+                                ) {
                                     Icon(
-                                        imageVector = Icons.Default.Add,
-                                        contentDescription = "Add status",
-                                        tint = Color(0xFF040E14),
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "Add Story",
-                                        color = Color(0xFF040E14),
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 12.sp
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Delete Story",
+                                        tint = ViewerHeart,
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
+                                Spacer(modifier = Modifier.width(8.dp))
                             }
-                            Spacer(modifier = Modifier.width(8.dp))
+
+                            if (onAddStatusClick != null) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(ViewerCyan)
+                                        .clickable {
+                                            onDismiss()
+                                            onAddStatusClick()
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.Add,
+                                            contentDescription = "Add status",
+                                            tint = Color(0xFF040E14),
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "Add Story",
+                                            color = Color(0xFF040E14),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
                         }
 
                         IconButton(
@@ -622,11 +650,85 @@ fun StatusViewerDialog(
                     status = currentStatus,
                     familyMembers = familyMembers,
                     onDismiss = { showAnalyticsDialog = false },
+                    onDeleteStatusClick = if (onDeleteStatus != null) {
+                        {
+                            isPaused = true
+                            showAnalyticsDialog = false
+                            showDeleteConfirmDialog = true
+                        }
+                    } else null,
                     onSelectMemberProfile = { member ->
                         showAnalyticsDialog = false
                         onDismiss()
                         onSelectMemberProfile?.invoke(member)
                     }
+                )
+            }
+
+            // ==========================================
+            // 5. DELETE CONFIRMATION DIALOG
+            // ==========================================
+            if (showDeleteConfirmDialog) {
+                AlertDialog(
+                    onDismissRequest = {
+                        showDeleteConfirmDialog = false
+                        isPaused = false
+                    },
+                    title = {
+                        Text(
+                            text = "Delete Story?",
+                            color = ViewerTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp
+                        )
+                    },
+                    text = {
+                        Text(
+                            text = "Are you sure you want to delete this story? It will be removed immediately for you and all your contacts.",
+                            color = ViewerTextSecondary,
+                            fontSize = 14.sp
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                showDeleteConfirmDialog = false
+                                isPaused = false
+                                val idToDelete = currentStatus.id
+                                onDeleteStatus?.invoke(idToDelete)
+                                Toast.makeText(context, "Story deleted", Toast.LENGTH_SHORT).show()
+                                if (currentGroup.statuses.size <= 1) {
+                                    onDismiss()
+                                } else {
+                                    if (statusIndex >= currentGroup.statuses.lastIndex) {
+                                        statusIndex = (statusIndex - 1).coerceAtLeast(0)
+                                    }
+                                    progress = 0f
+                                }
+                            }
+                        ) {
+                            Text(
+                                text = "Delete",
+                                color = ViewerHeart,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = {
+                                showDeleteConfirmDialog = false
+                                isPaused = false
+                            }
+                        ) {
+                            Text(
+                                text = "Cancel",
+                                color = ViewerTextSecondary
+                            )
+                        }
+                    },
+                    containerColor = ViewerSurface,
+                    shape = RoundedCornerShape(18.dp)
                 )
             }
         }
@@ -638,6 +740,7 @@ private fun StatusAnalyticsModal(
     status: StatusItem,
     familyMembers: List<FamilyMember> = emptyList(),
     onDismiss: () -> Unit,
+    onDeleteStatusClick: (() -> Unit)? = null,
     onSelectMemberProfile: ((FamilyMember) -> Unit)? = null
 ) {
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Viewers, 1: Likes
@@ -668,19 +771,39 @@ private fun StatusAnalyticsModal(
                         fontSize = 17.sp,
                         color = ViewerTextPrimary
                     )
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier
-                            .size(30.dp)
-                            .clip(CircleShape)
-                            .background(ViewerCard)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Close",
-                            tint = ViewerTextSecondary,
-                            modifier = Modifier.size(16.dp)
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (onDeleteStatusClick != null) {
+                            IconButton(
+                                onClick = onDeleteStatusClick,
+                                modifier = Modifier
+                                    .size(30.dp)
+                                    .clip(CircleShape)
+                                    .background(ViewerHeart.copy(alpha = 0.15f))
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Delete Story",
+                                    tint = ViewerHeart,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .background(ViewerCard)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close",
+                                tint = ViewerTextSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                 }
 

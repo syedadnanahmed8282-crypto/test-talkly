@@ -439,7 +439,7 @@ class SupabaseSocialService(private val context: Context) {
 
             val viewer = SupabaseStatusViewer(
                 statusId = statusId,
-                viewerUserId = viewerUserId,
+                viewerId = viewerUserId,
                 viewerName = viewerName,
                 viewerAvatarUrl = viewerAvatarUrl,
                 viewedAt = SupabaseMessage.millisToIsoTimestamp(System.currentTimeMillis())
@@ -513,6 +513,22 @@ class SupabaseSocialService(private val context: Context) {
      */
     suspend fun deleteStatus(statusId: String, userId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            try {
+                postgrest.from(TABLE_STATUS_VIEWERS).delete {
+                    filter {
+                        eq("status_id", statusId)
+                    }
+                }
+            } catch (_: Exception) {}
+
+            try {
+                postgrest.from(TABLE_STATUS_LIKES).delete {
+                    filter {
+                        eq("status_id", statusId)
+                    }
+                }
+            } catch (_: Exception) {}
+
             postgrest.from(TABLE_STATUSES)
                 .delete {
                     filter {
@@ -520,6 +536,7 @@ class SupabaseSocialService(private val context: Context) {
                         eq("user_id", userId)
                     }
                 }
+            Log.d(TAG, "Status $statusId deleted successfully from Supabase by $userId")
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "deleteStatus failed: ${e.localizedMessage}")
