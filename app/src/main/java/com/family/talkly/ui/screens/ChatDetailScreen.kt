@@ -77,6 +77,7 @@ import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.HourglassTop
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
@@ -117,6 +118,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -485,22 +487,52 @@ fun ChatDetailScreen(
     // Auto-scroll to latest message whenever new message arrives or user is typing
     var isInitialScrollDone by remember(member.id) { mutableStateOf(false) }
     var previousMessageCount by remember(member.id) { mutableStateOf(0) }
+    var lastSeenBottomMessageCount by remember(member.id) { mutableStateOf(0) }
+
+    // Check if the user is currently scrolled up away from bottom
+    val isNearBottom by remember(displayedMessages.size, member.isTyping) {
+        derivedStateOf {
+            if (displayedMessages.isEmpty()) return@derivedStateOf true
+            val totalItems = listState.layoutInfo.totalItemsCount
+            if (totalItems <= 1) return@derivedStateOf true
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            lastVisible >= totalItems - 3
+        }
+    }
+
+    // Number of new messages arrived while scrolled away from bottom
+    val unreadScrolledCount by remember(displayedMessages.size, isNearBottom) {
+        derivedStateOf {
+            if (isNearBottom) {
+                0
+            } else {
+                (displayedMessages.size - lastSeenBottomMessageCount).coerceAtLeast(0)
+            }
+        }
+    }
+
+    LaunchedEffect(isNearBottom, displayedMessages.size) {
+        if (isNearBottom) {
+            lastSeenBottomMessageCount = displayedMessages.size
+        }
+    }
 
     LaunchedEffect(displayedMessages.size, member.isTyping) {
         if (displayedMessages.isNotEmpty()) {
-            val targetIndex = displayedMessages.size - 1 + (if (member.isTyping) 1 else 0)
+            // Index 0 is the top Spacer, so index displayedMessages.size is the last message item
+            val targetIndex = displayedMessages.size + (if (member.isTyping) 1 else 0)
             if (targetIndex >= 0) {
                 if (!isInitialScrollDone) {
                     listState.scrollToItem(targetIndex)
                     isInitialScrollDone = true
+                    lastSeenBottomMessageCount = displayedMessages.size
                 } else if (displayedMessages.size > previousMessageCount || member.isTyping) {
-                    // Only animate if not already at the bottom item
                     val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-                    if (lastVisible < targetIndex) {
+                    // If user was near bottom or sent a message, smoothly bring to latest message
+                    if (lastVisible >= (displayedMessages.size - 3).coerceAtLeast(0) || lastVisible < targetIndex) {
                         listState.animateScrollToItem(targetIndex)
                     }
                 } else if (displayedMessages.size < previousMessageCount) {
-                    // Only snap on message deletion/clear if view is out of bounds
                     val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
                     if (lastVisible > targetIndex) {
                         listState.scrollToItem(targetIndex)
@@ -1940,14 +1972,18 @@ fun ChatDetailScreen(
                         }
                     }
                 } else {
-                    LazyColumn(
-                        state = listState,
+                    Box(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                         item { Spacer(modifier = Modifier.height(8.dp)) }
 
                         items(displayedMessages, key = { it.id }) { msg ->
@@ -2350,32 +2386,29 @@ fun ChatDetailScreen(
                             }
                         }
 
-                        // LIVE TYPING INDICATOR BUBBLE
+                        // LIVE TYPING INDICATOR BUBBLE (Small compact bubble with 3 animated dots)
                         if (member.isTyping) {
                             item {
                                 Row(
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 6.dp, top = 2.dp, bottom = 4.dp),
                                     horizontalArrangement = Arrangement.Start
                                 ) {
                                     Surface(
-                                        shape = RoundedCornerShape(18.dp),
+                                        shape = RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp),
                                         color = TalklyCard,
-                                        border = BorderStroke(0.5.dp, TalklyCyan.copy(alpha = 0.3f)),
-                                        shadowElevation = 2.dp,
-                                        modifier = Modifier.padding(vertical = 4.dp, horizontal = 4.dp)
+                                        border = BorderStroke(0.5.dp, TalklyCyan.copy(alpha = 0.35f)),
+                                        shadowElevation = 2.dp
                                     ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                                            verticalAlignment = Alignment.CenterVertically
+                                        Box(
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                            contentAlignment = Alignment.Center
                                         ) {
-                                            Text(
-                                                text = "${member.name} is typing",
-                                                fontSize = 13.sp,
-                                                color = TalklyMint,
-                                                fontWeight = FontWeight.Bold
+                                            AnimatedTypingDotsIndicator(
+                                                dotColor = TalklyCyan,
+                                                dotSize = 5.dp
                                             )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            AnimatedTypingDotsIndicator(dotColor = TalklyCyan)
                                         }
                                     }
                                 }
@@ -2384,9 +2417,76 @@ fun ChatDetailScreen(
 
                         item { Spacer(modifier = Modifier.height(8.dp)) }
                     }
-                }
 
-                // EDITING BANNER BAR
+                    // FLOATING SCROLL TO BOTTOM BUTTON WITH BADGE & GLOW
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = !isNearBottom && displayedMessages.isNotEmpty(),
+                        enter = scaleIn(animationSpec = tween(220, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(200)),
+                        exit = scaleOut(animationSpec = tween(180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(150)),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 16.dp, bottom = 12.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.TopEnd) {
+                            Surface(
+                                shape = CircleShape,
+                                color = TalklyCard,
+                                border = BorderStroke(1.dp, TalklyCyan.copy(alpha = 0.6f)),
+                                shadowElevation = 8.dp,
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clickable {
+                                        scope.launch {
+                                            val target = displayedMessages.size + (if (member.isTyping) 1 else 0)
+                                            listState.animateScrollToItem(target)
+                                        }
+                                    }
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(
+                                            Brush.radialGradient(
+                                                listOf(TalklyCyan.copy(alpha = 0.2f), Color.Transparent)
+                                            )
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowDown,
+                                        contentDescription = "Scroll to bottom",
+                                        tint = TalklyCyan,
+                                        modifier = Modifier.size(26.dp)
+                                    )
+                                }
+                            }
+
+                            // Unread messages counter badge if new messages arrived while scrolled up
+                            if (unreadScrolledCount > 0) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = TalklyMint,
+                                    border = BorderStroke(1.dp, TalklySurface),
+                                    shadowElevation = 4.dp,
+                                    modifier = Modifier
+                                        .offset(x = 4.dp, y = (-4).dp)
+                                        .wrapContentHeight()
+                                ) {
+                                    Text(
+                                        text = if (unreadScrolledCount > 99) "99+" else "$unreadScrolledCount",
+                                        color = Color(0xFF080B10),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // EDITING BANNER BAR
                 AnimatedVisibility(
                     visible = editingMessage != null,
                     enter = slideInVertically() + fadeIn(),

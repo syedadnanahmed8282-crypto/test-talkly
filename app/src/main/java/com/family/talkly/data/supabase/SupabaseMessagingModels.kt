@@ -12,6 +12,18 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
+data class SupabaseTypingPayload(
+    @SerialName("sender_id")
+    val senderId: String,
+    @SerialName("receiver_id")
+    val receiverId: String = "",
+    @SerialName("is_typing")
+    val isTyping: Boolean = false,
+    @SerialName("timestamp")
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+@Serializable
 data class SupabaseConversation(
     val id: String,
     @SerialName("participant1_id")

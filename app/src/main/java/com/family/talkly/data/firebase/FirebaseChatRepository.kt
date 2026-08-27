@@ -720,6 +720,36 @@ class FirebaseChatRepository(private val context: Context) {
         }
     }
 
+    private val typingTimeoutJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+
+    fun sendTypingStatus(targetMemberId: String, isTyping: Boolean) {
+        val myId = currentSyncedUserId ?: "self"
+        if (myId.isBlank() || myId == "self" || targetMemberId.isBlank()) return
+        repositoryScope.launch(Dispatchers.IO) {
+            val targetUuid = SupabaseMessagingService.resolveUserUuid(targetMemberId) ?: targetMemberId
+            SupabaseMessagingService.sendTypingBroadcast(
+                senderId = myId,
+                receiverId = targetUuid,
+                isTyping = isTyping
+            )
+        }
+    }
+
+    fun handleIncomingTyping(payload: com.family.talkly.data.supabase.SupabaseTypingPayload) {
+        val senderId = payload.senderId
+        if (senderId.isBlank() || senderId == currentSyncedUserId) return
+        val canonicalSender = getCanonicalMemberId(senderId)
+        setTypingStatus(canonicalSender, payload.isTyping)
+
+        typingTimeoutJobs[canonicalSender]?.cancel()
+        if (payload.isTyping) {
+            typingTimeoutJobs[canonicalSender] = repositoryScope.launch(Dispatchers.Main) {
+                delay(3500)
+                setTypingStatus(canonicalSender, false)
+            }
+        }
+    }
+
     fun setTypingStatus(targetMemberId: String, isTyping: Boolean) {
         val currentList = _familyMembers.value.map { member ->
             if (member.id == targetMemberId || member.firebaseUid == targetMemberId) {
@@ -1578,6 +1608,9 @@ class FirebaseChatRepository(private val context: Context) {
                     },
                     onRequestAction = { action ->
                         handleIncomingSupabaseRequestAction(action, currentUserId)
+                    },
+                    onTypingAction = { payload ->
+                        handleIncomingTyping(payload)
                     },
                     onStatusChange = { status ->
                         if (status == RealtimeChannel.Status.SUBSCRIBED) {

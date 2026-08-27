@@ -294,7 +294,7 @@ fun MainScreen(
                 chatRepository.togglePinMember(currentMember.id)
             },
             onTypingStateChanged = { isTyping ->
-                chatRepository.setTypingStatus(currentMember.id, isTyping)
+                chatRepository.sendTypingStatus(currentMember.id, isTyping)
             },
             onToggleFastForward = { chatRepository.toggle48HourFastForward() },
             onAddExpiredDemo = { chatRepository.addExpiredMediaDemo(currentMember.id) },

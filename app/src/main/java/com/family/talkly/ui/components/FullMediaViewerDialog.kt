@@ -741,7 +741,7 @@ private fun downloadMediaToGallery(context: Context, message: ChatMessage) {
         rawUrl.startsWith("file://", ignoreCase = true) -> "FILE_URI"
         else -> "LOCAL_PATH_OR_OTHER"
     }
-    Log.e(TAG, "downloadMediaToGallery initiated: urlType=$urlType, isVideo=$isVideo, rawUrl=$rawUrl")
+    Log.d(TAG, "downloadMediaToGallery initiated: urlType=$urlType, isVideo=$isVideo, rawUrl=$rawUrl")
 
     Toast.makeText(context, "Saving ${if (isVideo) "video" else "photo"} to Gallery...", Toast.LENGTH_SHORT).show()
 
@@ -749,7 +749,7 @@ private fun downloadMediaToGallery(context: Context, message: ChatMessage) {
         var success = false
         var errorMessage: String? = null
         try {
-            val inputStream: InputStream? = when {
+            val mediaBytes: ByteArray = when {
                 rawUrl.startsWith("http://", ignoreCase = true) || rawUrl.startsWith("https://", ignoreCase = true) -> {
                     val conn = URL(rawUrl).openConnection() as HttpURLConnection
                     conn.connectTimeout = 15000
@@ -757,7 +757,7 @@ private fun downloadMediaToGallery(context: Context, message: ChatMessage) {
                     conn.doInput = true
                     conn.connect()
                     if (conn.responseCode in 200..299) {
-                        conn.inputStream
+                        conn.inputStream.use { it.readBytes() }
                     } else {
                         throw java.io.IOException("Server returned HTTP ${conn.responseCode}")
                     }
@@ -765,78 +765,92 @@ private fun downloadMediaToGallery(context: Context, message: ChatMessage) {
                 rawUrl.startsWith("data:", ignoreCase = true) -> {
                     val base64Data = rawUrl.substringAfter("base64,", "")
                     if (base64Data.isNotBlank()) {
-                        val bytes = Base64.decode(base64Data, Base64.DEFAULT)
-                        java.io.ByteArrayInputStream(bytes)
+                        Base64.decode(base64Data, Base64.DEFAULT)
                     } else {
-                        null
+                        throw java.io.IOException("Empty base64 data")
                     }
                 }
                 rawUrl.startsWith("content://", ignoreCase = true) || rawUrl.startsWith("file://", ignoreCase = true) -> {
-                    context.contentResolver.openInputStream(Uri.parse(rawUrl))
+                    context.contentResolver.openInputStream(Uri.parse(rawUrl))?.use { it.readBytes() }
+                        ?: throw java.io.IOException("Cannot open content stream")
                 }
                 else -> {
                     val cached = VideoCacheManager.getCachedVideoFile(context, rawUrl)
                     if (cached != null && cached.exists()) {
-                        cached.inputStream()
+                        cached.readBytes()
                     } else {
                         val file = File(rawUrl)
-                        if (file.exists()) file.inputStream() else null
+                        if (file.exists()) file.readBytes() else throw java.io.IOException("File not found at $rawUrl")
                     }
                 }
             }
 
-            if (inputStream == null) {
-                throw java.io.IOException("Unable to open media stream for source: $rawUrl")
-            }
+            // Strategy 1: MediaStore API (Standard, works on modern Android without storage permission)
+            try {
+                val collection = if (isVideo) {
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                } else {
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                }
 
-            inputStream.use { input ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val values = ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                        put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         put(
                             MediaStore.MediaColumns.RELATIVE_PATH,
                             if (isVideo) Environment.DIRECTORY_MOVIES + "/Talkly" else Environment.DIRECTORY_PICTURES + "/Talkly"
                         )
                         put(MediaStore.MediaColumns.IS_PENDING, 1)
                     }
+                }
 
-                    val collection = if (isVideo) {
-                        MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                    } else {
-                        MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                val itemUri = context.contentResolver.insert(collection, values)
+                if (itemUri != null) {
+                    context.contentResolver.openOutputStream(itemUri)?.use { output ->
+                        output.write(mediaBytes)
+                        output.flush()
                     }
-
-                    val itemUri = context.contentResolver.insert(collection, values)
-                    if (itemUri != null) {
-                        context.contentResolver.openOutputStream(itemUri)?.use { output ->
-                            input.copyTo(output)
-                        }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         values.clear()
                         values.put(MediaStore.MediaColumns.IS_PENDING, 0)
                         context.contentResolver.update(itemUri, values, null, null)
-                        success = true
                     }
-                } else {
-                    val targetDir = File(
-                        Environment.getExternalStoragePublicDirectory(
-                            if (isVideo) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES
-                        ),
-                        "Talkly"
-                    )
-                    if (!targetDir.exists()) targetDir.mkdirs()
-                    val targetFile = File(targetDir, filename)
-                    java.io.FileOutputStream(targetFile).use { output ->
-                        input.copyTo(output)
-                    }
-                    MediaScannerConnection.scanFile(
-                        context,
-                        arrayOf(targetFile.absolutePath),
-                        arrayOf(mimeType),
-                        null
-                    )
                     success = true
                 }
+            } catch (mediaStoreError: Exception) {
+                Log.w(TAG, "MediaStore insert failed, falling back to direct file write: ${mediaStoreError.message}")
+            }
+
+            // Strategy 2: Direct public directory / Downloads directory fallback
+            if (!success) {
+                val primaryBase = Environment.getExternalStoragePublicDirectory(
+                    if (isVideo) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES
+                )
+                val targetDir = File(primaryBase, "Talkly")
+                val dirToUse: File = when {
+                    targetDir.exists() || targetDir.mkdirs() -> targetDir
+                    primaryBase.exists() || primaryBase.mkdirs() -> primaryBase
+                    else -> {
+                        val dlDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                        if (!dlDir.exists()) dlDir.mkdirs()
+                        dlDir
+                    }
+                }
+
+                val targetFile = File(dirToUse, filename)
+                targetFile.outputStream().use { output ->
+                    output.write(mediaBytes)
+                    output.flush()
+                }
+
+                MediaScannerConnection.scanFile(
+                    context,
+                    arrayOf(targetFile.absolutePath),
+                    arrayOf(mimeType),
+                    null
+                )
+                success = true
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to download media to gallery [${e.javaClass.name}]: ${e.message}", e)

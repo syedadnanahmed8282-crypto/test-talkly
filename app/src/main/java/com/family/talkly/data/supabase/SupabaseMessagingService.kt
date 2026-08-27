@@ -6,6 +6,8 @@ import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.realtime.PostgresAction
 import io.github.jan.supabase.realtime.RealtimeChannel
+import io.github.jan.supabase.realtime.broadcast
+import io.github.jan.supabase.realtime.broadcastFlow
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.postgresChangeFlow
 import io.github.jan.supabase.realtime.realtime
@@ -538,6 +540,7 @@ object SupabaseMessagingService {
         coroutineScope: CoroutineScope,
         onMessageAction: (PostgresAction) -> Unit,
         onRequestAction: (PostgresAction) -> Unit,
+        onTypingAction: ((SupabaseTypingPayload) -> Unit)? = null,
         onStatusChange: ((RealtimeChannel.Status) -> Unit)? = null
     ): RealtimeChannel? = withContext(Dispatchers.IO) {
         try {
@@ -562,6 +565,17 @@ object SupabaseMessagingService {
                 onRequestAction(action)
             }.launchIn(coroutineScope)
 
+            if (onTypingAction != null) {
+                try {
+                    val typingFlow = channel.broadcastFlow<SupabaseTypingPayload>(event = "typing")
+                    typingFlow.onEach { payload ->
+                        onTypingAction(payload)
+                    }.launchIn(coroutineScope)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error setting up typing broadcastFlow: ${e.localizedMessage}")
+                }
+            }
+
             if (onStatusChange != null) {
                 channel.status.onEach { status ->
                     Log.d(TAG, "Realtime channel $channelName status changed: $status")
@@ -575,6 +589,32 @@ object SupabaseMessagingService {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create Supabase Realtime channel: ${e.localizedMessage}", e)
             null
+        }
+    }
+
+    suspend fun sendTypingBroadcast(
+        senderId: String,
+        receiverId: String,
+        isTyping: Boolean
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            if (senderId.isBlank() || receiverId.isBlank()) return@withContext false
+            val channelName = "messages-user-$receiverId"
+            val channel = SupabaseClientProvider.client.realtime.channel(channelName)
+            channel.subscribe(blockUntilSubscribed = false)
+            channel.broadcast(
+                event = "typing",
+                message = SupabaseTypingPayload(
+                    senderId = senderId,
+                    receiverId = receiverId,
+                    isTyping = isTyping,
+                    timestamp = System.currentTimeMillis()
+                )
+            )
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "Error sending typing broadcast: ${e.localizedMessage}")
+            false
         }
     }
 
