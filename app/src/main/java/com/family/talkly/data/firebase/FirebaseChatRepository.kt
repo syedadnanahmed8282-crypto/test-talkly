@@ -1549,18 +1549,32 @@ class FirebaseChatRepository(private val context: Context) {
     }
 
     fun startRealtimeMessageSync(currentUserId: String?, force: Boolean = false) {
-        if (currentUserId.isNullOrBlank()) return
+        val channelStatusStr = supabaseRealtimeChannel?.status?.value?.name ?: "null"
+        val now = System.currentTimeMillis()
+        val authUid = try { com.family.talkly.data.supabase.SupabaseClientProvider.auth.currentUserOrNull()?.id } catch (e: Exception) { null }
+
+        Log.d(
+            TAG,
+            "DIAGNOSTIC startRealtimeMessageSync ENTRY -> uid='$currentUserId', authUid='$authUid', currentSyncedUserId='$currentSyncedUserId', channelStatus=$channelStatusStr, isReconnectingMessages=$isReconnectingMessages, lastForceReconnectTimestamp=$lastForceReconnectTimestamp, lastMessageSubscribedTimestamp=$lastMessageSubscribedTimestamp, force=$force, timeSinceLastReconnect=${now - lastForceReconnectTimestamp}ms"
+        )
+
+        if (currentUserId.isNullOrBlank() || currentUserId == "self") {
+            Log.d(TAG, "DIAGNOSTIC startRealtimeMessageSync GUARD EXIT: currentUserId is blank or 'self' (uid='$currentUserId')")
+            return
+        }
+
         val isChannelActive = supabaseRealtimeChannel != null && supabaseRealtimeChannel?.status?.value == RealtimeChannel.Status.SUBSCRIBED
         if (currentSyncedUserId == currentUserId && isChannelActive && !force) {
-            Log.d(TAG, "startRealtimeMessageSync: Channel already active for $currentUserId")
+            Log.d(TAG, "DIAGNOSTIC startRealtimeMessageSync GUARD EXIT: Channel already active/SUBSCRIBED for uid='$currentUserId' (force=$force)")
             return
         }
 
         if (currentSyncedUserId == currentUserId && messageSyncJob?.isActive == true && !force) {
-            Log.d(TAG, "startRealtimeMessageSync: Message sync already in progress for $currentUserId")
+            Log.d(TAG, "DIAGNOSTIC startRealtimeMessageSync GUARD EXIT: Message sync job already in progress for uid='$currentUserId' (force=$force)")
             return
         }
 
+        Log.d(TAG, "DIAGNOSTIC startRealtimeMessageSync PROCEEDING: Setting currentSyncedUserId='$currentUserId' and launching messageSyncJob")
         currentSyncedUserId = currentUserId
         isInitialMessageSyncDone = false
 
@@ -1569,6 +1583,7 @@ class FirebaseChatRepository(private val context: Context) {
             // 1. Cleanly unsubscribe and clear any previous channel sequentially
             try {
                 if (supabaseRealtimeChannel != null) {
+                    Log.d(TAG, "DIAGNOSTIC messageSyncJob: Unsubscribing previous realtime channel")
                     SupabaseMessagingService.unsubscribeChannel(supabaseRealtimeChannel)
                     supabaseRealtimeChannel = null
                 }
@@ -1579,7 +1594,9 @@ class FirebaseChatRepository(private val context: Context) {
 
             // 2. Fetch recent messages from Supabase PostgREST to initialize local DB & state
             try {
+                Log.d(TAG, "DIAGNOSTIC messageSyncJob: Fetching recent messages via PostgREST for uid='$currentUserId'")
                 val recentSupabaseMessages = SupabaseMessagingService.fetchRecentMessagesForUser(currentUserId, limit = 200)
+                Log.d(TAG, "DIAGNOSTIC messageSyncJob: Fetched ${recentSupabaseMessages.size} recent messages via PostgREST")
                 if (recentSupabaseMessages.isNotEmpty()) {
                     val currentMap = _messagesMap.value.toMutableMap()
                     recentSupabaseMessages.forEach { sMsg ->
@@ -1610,41 +1627,54 @@ class FirebaseChatRepository(private val context: Context) {
 
             // 3. Connect Supabase Realtime Channel with auto-reconnect listener
             try {
+                Log.d(TAG, "DIAGNOSTIC messageSyncJob: Calling createMessagingRealtimeChannel for uid='$currentUserId'")
                 supabaseRealtimeChannel = SupabaseMessagingService.createMessagingRealtimeChannel(
                     currentUserId = currentUserId,
                     coroutineScope = repositoryScope,
                     onMessageAction = { action ->
+                        Log.d(TAG, "DIAGNOSTIC REALTIME ON_MESSAGE_ACTION: $action")
                         handleIncomingSupabaseMessageAction(action, currentUserId)
                     },
                     onRequestAction = { action ->
+                        Log.d(TAG, "DIAGNOSTIC REALTIME ON_REQUEST_ACTION: $action")
                         handleIncomingSupabaseRequestAction(action, currentUserId)
                     },
                     onStatusAction = { action ->
-                        Log.d(TAG, "Realtime status change event: $action")
+                        Log.d(TAG, "DIAGNOSTIC Realtime status change event: $action")
                         syncStatusesFromSupabase(currentUserId)
                     },
                     onTypingAction = { payload ->
                         handleIncomingTyping(payload)
                     },
                     onStatusChange = { status ->
-                        if (status == RealtimeChannel.Status.SUBSCRIBED) {
-                            Log.d(TAG, "Messaging Realtime channel successfully SUBSCRIBED for $currentUserId")
-                            lastMessageSubscribedTimestamp = System.currentTimeMillis()
-                        } else if (status == RealtimeChannel.Status.UNSUBSCRIBED) {
-                            Log.w(TAG, "Messaging channel disconnected (status=$status). Reconnecting in 3s...")
-                            repositoryScope.launch(Dispatchers.IO) {
-                                delay(3000)
-                                if (currentSyncedUserId == currentUserId &&
-                                    supabaseRealtimeChannel?.status?.value != RealtimeChannel.Status.SUBSCRIBED) {
-                                    startRealtimeMessageSync(currentUserId)
+                        Log.d(TAG, "DIAGNOSTIC messagingRealtimeChannel onStatusChange -> status=$status for uid='$currentUserId'")
+                        when (status) {
+                            RealtimeChannel.Status.SUBSCRIBED -> {
+                                Log.i(TAG, "DIAGNOSTIC Messaging Realtime channel successfully SUBSCRIBED for uid='$currentUserId'")
+                                lastMessageSubscribedTimestamp = System.currentTimeMillis()
+                            }
+                            RealtimeChannel.Status.SUBSCRIBING -> {
+                                Log.d(TAG, "DIAGNOSTIC Messaging Realtime channel SUBSCRIBING in progress for uid='$currentUserId'")
+                            }
+                            RealtimeChannel.Status.UNSUBSCRIBED -> {
+                                Log.w(TAG, "DIAGNOSTIC Messaging channel UNSUBSCRIBED for uid='$currentUserId'. Scheduling reconnect in 3s...")
+                                repositoryScope.launch(Dispatchers.IO) {
+                                    delay(3000)
+                                    if (currentSyncedUserId == currentUserId &&
+                                        supabaseRealtimeChannel?.status?.value != RealtimeChannel.Status.SUBSCRIBED) {
+                                        startRealtimeMessageSync(currentUserId, force = true)
+                                    }
                                 }
+                            }
+                            else -> {
+                                Log.d(TAG, "DIAGNOSTIC Messaging channel status: $status")
                             }
                         }
                     }
                 )
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.e(TAG, "Error connecting Supabase Realtime messaging channel: ${e.localizedMessage}")
+                Log.e(TAG, "DIAGNOSTIC Error connecting Supabase Realtime messaging channel: ${e.localizedMessage}", e)
             }
         }
 

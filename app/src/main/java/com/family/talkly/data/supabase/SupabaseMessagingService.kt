@@ -545,7 +545,11 @@ object SupabaseMessagingService {
         onStatusChange: ((RealtimeChannel.Status) -> Unit)? = null
     ): RealtimeChannel? = withContext(Dispatchers.IO) {
         try {
+            val preConnectSocketStatus = SupabaseClientProvider.client.realtime.status.value
+            Log.d(TAG, "DIAGNOSTIC createMessagingRealtimeChannel: Connecting socket (current socket status=$preConnectSocketStatus) for user=$currentUserId")
             SupabaseClientProvider.client.realtime.connect()
+            val postConnectSocketStatus = SupabaseClientProvider.client.realtime.status.value
+            Log.d(TAG, "DIAGNOSTIC createMessagingRealtimeChannel: Socket connected (status=$postConnectSocketStatus)")
 
             val channelName = "messages-user-$currentUserId"
             
@@ -553,6 +557,7 @@ object SupabaseMessagingService {
             try {
                 val existingChannel = SupabaseClientProvider.client.realtime.subscriptions[channelName]
                 if (existingChannel != null) {
+                    Log.d(TAG, "DIAGNOSTIC Cleaning existing channel $channelName (status=${existingChannel.status.value})")
                     try { existingChannel.unsubscribe() } catch (_: Exception) {}
                     SupabaseClientProvider.client.realtime.removeChannel(existingChannel)
                 }
@@ -571,10 +576,12 @@ object SupabaseMessagingService {
             }
 
             messagesFlow.onEach { action ->
+                Log.d(TAG, "DIAGNOSTIC messagesFlow received action on $channelName: $action")
                 onMessageAction(action)
             }.launchIn(coroutineScope)
 
             requestsFlow.onEach { action ->
+                Log.d(TAG, "DIAGNOSTIC requestsFlow received action on $channelName: $action")
                 onRequestAction(action)
             }.launchIn(coroutineScope)
 
@@ -604,16 +611,17 @@ object SupabaseMessagingService {
 
             if (onStatusChange != null) {
                 channel.status.onEach { status ->
-                    Log.d(TAG, "Realtime channel $channelName status changed: $status")
+                    Log.d(TAG, "DIAGNOSTIC Realtime channel $channelName status changed: $status")
                     onStatusChange(status)
                 }.launchIn(coroutineScope)
             }
 
+            Log.d(TAG, "DIAGNOSTIC Subscribing to channel $channelName (blockUntilSubscribed=true)")
             channel.subscribe(blockUntilSubscribed = true)
-            Log.i(TAG, "Subscribed to Supabase Realtime channel: $channelName, status=${channel.status.value}")
+            Log.i(TAG, "DIAGNOSTIC Successfully subscribed to channel: $channelName, final status=${channel.status.value}")
             channel
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to create Supabase Realtime channel: ${e.localizedMessage}", e)
+            Log.e(TAG, "DIAGNOSTIC Failed to create Supabase Realtime channel for $currentUserId: ${e.localizedMessage}", e)
             null
         }
     }

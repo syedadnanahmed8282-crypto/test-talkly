@@ -179,9 +179,26 @@ object SupabaseCallService {
     ): RealtimeChannel? = withContext(Dispatchers.IO) {
         if (currentUserId.isBlank() || currentUserId == "self") return@withContext null
         try {
+            val preConnectSocketStatus = SupabaseClientProvider.client.realtime.status.value
+            Log.d(TAG, "DIAGNOSTIC createCallsRealtimeChannel: Connecting socket (current socket status=$preConnectSocketStatus) for user=$currentUserId")
             SupabaseClientProvider.client.realtime.connect()
+            val postConnectSocketStatus = SupabaseClientProvider.client.realtime.status.value
+            Log.d(TAG, "DIAGNOSTIC createCallsRealtimeChannel: Socket connected (status=$postConnectSocketStatus)")
 
             val channelName = "calls-user-$currentUserId"
+            
+            // Cleanly remove any existing joined channel with this name
+            try {
+                val existingChannel = SupabaseClientProvider.client.realtime.subscriptions[channelName]
+                if (existingChannel != null) {
+                    Log.d(TAG, "DIAGNOSTIC Cleaning existing calls channel $channelName (status=${existingChannel.status.value})")
+                    try { existingChannel.unsubscribe() } catch (_: Exception) {}
+                    SupabaseClientProvider.client.realtime.removeChannel(existingChannel)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error cleaning previous calls channel instance: ${e.localizedMessage}")
+            }
+
             val channel = SupabaseClientProvider.client.realtime.channel(channelName)
 
             val callsFlow = channel.postgresChangeFlow<PostgresAction>(schema = "public") {
@@ -189,21 +206,23 @@ object SupabaseCallService {
             }
 
             callsFlow.onEach { action ->
+                Log.d(TAG, "DIAGNOSTIC callsFlow received action on $channelName: $action")
                 onCallAction(action)
             }.launchIn(coroutineScope)
 
             if (onStatusChange != null) {
                 channel.status.onEach { status ->
-                    Log.d(TAG, "Realtime Calls channel $channelName status changed: $status")
+                    Log.d(TAG, "DIAGNOSTIC Realtime Calls channel $channelName status changed: $status")
                     onStatusChange(status)
                 }.launchIn(coroutineScope)
             }
 
+            Log.d(TAG, "DIAGNOSTIC Subscribing to calls channel $channelName (blockUntilSubscribed=true)")
             channel.subscribe(blockUntilSubscribed = true)
-            Log.i(TAG, "Subscribed to Supabase Realtime Calls channel: $channelName, status=${channel.status.value}")
+            Log.i(TAG, "DIAGNOSTIC Successfully subscribed to calls channel: $channelName, final status=${channel.status.value}")
             channel
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to create Supabase Realtime Calls channel: ${e.localizedMessage}", e)
+            Log.e(TAG, "DIAGNOSTIC Failed to create Supabase Realtime Calls channel: ${e.localizedMessage}", e)
             null
         }
     }
