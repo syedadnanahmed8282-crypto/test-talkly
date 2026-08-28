@@ -87,6 +87,7 @@ class FirebaseChatRepository(private val context: Context) {
     }
 
     private var supabaseRealtimeChannel: RealtimeChannel? = null
+    private var supabaseStatusesRealtimeChannel: RealtimeChannel? = null
     private var currentSyncedUserId: String? = null
     private var messageSyncJob: Job? = null
     private val contactPrefs = context.getSharedPreferences(CONTACTS_PREFS, Context.MODE_PRIVATE)
@@ -1587,6 +1588,10 @@ class FirebaseChatRepository(private val context: Context) {
                     SupabaseMessagingService.unsubscribeChannel(supabaseRealtimeChannel)
                     supabaseRealtimeChannel = null
                 }
+                if (supabaseStatusesRealtimeChannel != null) {
+                    SupabaseMessagingService.unsubscribeChannel(supabaseStatusesRealtimeChannel)
+                    supabaseStatusesRealtimeChannel = null
+                }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.w(TAG, "Error cleaning previous realtime channel: ${e.localizedMessage}")
@@ -1639,10 +1644,6 @@ class FirebaseChatRepository(private val context: Context) {
                         Log.d(TAG, "DIAGNOSTIC REALTIME ON_REQUEST_ACTION: $action")
                         handleIncomingSupabaseRequestAction(action, currentUserId)
                     },
-                    onStatusAction = { action ->
-                        Log.d(TAG, "DIAGNOSTIC Realtime status change event: $action")
-                        syncStatusesFromSupabase(currentUserId)
-                    },
                     onTypingAction = { payload ->
                         handleIncomingTyping(payload)
                     },
@@ -1670,6 +1671,16 @@ class FirebaseChatRepository(private val context: Context) {
                                 Log.d(TAG, "DIAGNOSTIC Messaging channel status: $status")
                             }
                         }
+                    }
+                )
+
+                // Connect independent Statuses Realtime Channel (safe fallback)
+                supabaseStatusesRealtimeChannel = SupabaseMessagingService.createStatusesRealtimeChannel(
+                    currentUserId = currentUserId,
+                    coroutineScope = repositoryScope,
+                    onStatusAction = { action ->
+                        Log.d(TAG, "DIAGNOSTIC Realtime status change event: $action")
+                        syncStatusesFromSupabase(currentUserId)
                     }
                 )
             } catch (e: Exception) {

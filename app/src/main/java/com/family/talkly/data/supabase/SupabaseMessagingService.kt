@@ -585,19 +585,6 @@ object SupabaseMessagingService {
                 onRequestAction(action)
             }.launchIn(coroutineScope)
 
-            if (onStatusAction != null) {
-                try {
-                    val statusesFlow = channel.postgresChangeFlow<PostgresAction>(schema = "public") {
-                        table = "statuses"
-                    }
-                    statusesFlow.onEach { action ->
-                        onStatusAction(action)
-                    }.launchIn(coroutineScope)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Optional statuses realtime change flow not attached: ${e.localizedMessage}")
-                }
-            }
-
             if (onTypingAction != null) {
                 try {
                     val typingFlow = channel.broadcastFlow<SupabaseTypingPayload>(event = "typing")
@@ -651,6 +638,41 @@ object SupabaseMessagingService {
         } catch (e: Exception) {
             Log.w(TAG, "Error sending typing broadcast: ${e.localizedMessage}")
             false
+        }
+    }
+
+    suspend fun createStatusesRealtimeChannel(
+        currentUserId: String,
+        coroutineScope: CoroutineScope,
+        onStatusAction: (PostgresAction) -> Unit
+    ): RealtimeChannel? = withContext(Dispatchers.IO) {
+        if (currentUserId.isBlank() || currentUserId == "self") return@withContext null
+        try {
+            val channelName = "statuses-user-$currentUserId"
+            try {
+                val existingChannel = SupabaseClientProvider.client.realtime.subscriptions[channelName]
+                if (existingChannel != null) {
+                    try { existingChannel.unsubscribe() } catch (_: Exception) {}
+                    SupabaseClientProvider.client.realtime.removeChannel(existingChannel)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error cleaning previous statuses channel: ${e.localizedMessage}")
+            }
+
+            val channel = SupabaseClientProvider.client.realtime.channel(channelName)
+            val statusesFlow = channel.postgresChangeFlow<PostgresAction>(schema = "public") {
+                table = "statuses"
+            }
+            statusesFlow.onEach { action ->
+                onStatusAction(action)
+            }.launchIn(coroutineScope)
+
+            channel.subscribe(blockUntilSubscribed = false)
+            Log.i(TAG, "Independent Statuses Realtime channel subscribed: $channelName")
+            channel
+        } catch (e: Exception) {
+            Log.w(TAG, "Optional Statuses Realtime channel not connected: ${e.localizedMessage}")
+            null
         }
     }
 
