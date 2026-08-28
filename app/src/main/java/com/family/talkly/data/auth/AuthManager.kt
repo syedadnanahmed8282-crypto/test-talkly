@@ -263,54 +263,81 @@ class AuthManager(private val context: Context) {
         _authState.value = AuthState.VerificationInProgress("Signing in...")
 
         CoroutineScope(Dispatchers.IO).launch {
-            try {
-                auth.signInWith(Email) {
-                    this.email = internalEmail
-                    this.password = password
-                }
+            var attempt = 0
+            val maxAttempts = 2
+            var lastException: Exception? = null
 
-                val user = auth.currentUserOrNull() ?: auth.currentSessionOrNull()?.user
-                val uid = user?.id
-
-                if (uid != null) {
-                    Log.d(TAG, "Supabase sign in successful for phone $phoneNumber ($internalEmail), UID: $uid")
-                    syncProfileFromSupabase(uid, phoneNumber, onComplete = {
-                        CoroutineScope(Dispatchers.Main).launch {
-                            onSuccess()
-                        }
-                    })
-                } else {
-                    val err = "Authentication succeeded but user session is null."
-                    withContext(Dispatchers.Main) {
-                        _authState.value = AuthState.Error(err)
-                        onError(err)
+            while (attempt < maxAttempts) {
+                attempt++
+                try {
+                    auth.signInWith(Email) {
+                        this.email = internalEmail
+                        this.password = password
                     }
+
+                    val user = auth.currentUserOrNull() ?: auth.currentSessionOrNull()?.user
+                    val uid = user?.id
+
+                    if (uid != null) {
+                        Log.d(TAG, "Supabase sign in successful for phone $phoneNumber ($internalEmail), UID: $uid")
+                        syncProfileFromSupabase(uid, phoneNumber, onComplete = {
+                            CoroutineScope(Dispatchers.Main).launch {
+                                onSuccess()
+                            }
+                        })
+                        return@launch
+                    } else {
+                        val err = "Authentication succeeded but user session is null."
+                        withContext(Dispatchers.Main) {
+                            _authState.value = AuthState.Error(err)
+                            onError(err)
+                        }
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    lastException = e
+                    Log.w(TAG, "Supabase Sign in attempt $attempt failed: ${e.localizedMessage}")
+                    val raw = e.localizedMessage ?: ""
+                    val isTimeoutOrNetwork = raw.contains("timeout", ignoreCase = true) ||
+                        raw.contains("connect", ignoreCase = true) ||
+                        raw.contains("network", ignoreCase = true) ||
+                        raw.contains("Unable to resolve host", ignoreCase = true)
+
+                    if (isTimeoutOrNetwork && attempt < maxAttempts) {
+                        withContext(Dispatchers.Main) {
+                            _authState.value = AuthState.VerificationInProgress("Connecting to server...")
+                        }
+                        kotlinx.coroutines.delay(1000)
+                        continue
+                    }
+                    break
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Supabase Sign in exception: ${e.localizedMessage}", e)
-                val rawErr = e.localizedMessage ?: "Authentication failed."
-                val formatted = when {
-                    rawErr.contains("invalid login credentials", ignoreCase = true) ||
-                    rawErr.contains("invalid_credentials", ignoreCase = true) ||
-                    rawErr.contains("invalid_grant", ignoreCase = true) ||
-                    rawErr.contains("invalid-credential", ignoreCase = true) ||
-                    rawErr.contains("wrong-password", ignoreCase = true) ||
-                    rawErr.contains("invalid password", ignoreCase = true) ->
-                        "Incorrect mobile number or password. If you do not have an account, please switch to Register."
-                    rawErr.contains("user not found", ignoreCase = true) ||
-                    rawErr.contains("user-not-found", ignoreCase = true) ->
-                        "No account found with this phone number. Please register first."
-                    rawErr.contains("network", ignoreCase = true) ||
-                    rawErr.contains("timeout", ignoreCase = true) ||
-                    rawErr.contains("connect", ignoreCase = true) ||
-                    rawErr.contains("Unable to resolve host", ignoreCase = true) ->
-                        "Network error. Please check your internet connection."
-                    else -> rawErr
-                }
-                withContext(Dispatchers.Main) {
-                    _authState.value = AuthState.Error(formatted)
-                    onError(formatted)
-                }
+            }
+
+            val e = lastException ?: Exception("Authentication failed")
+            Log.e(TAG, "Supabase Sign in exception: ${e.localizedMessage}", e)
+            val rawErr = e.localizedMessage ?: "Authentication failed."
+            val formatted = when {
+                rawErr.contains("invalid login credentials", ignoreCase = true) ||
+                rawErr.contains("invalid_credentials", ignoreCase = true) ||
+                rawErr.contains("invalid_grant", ignoreCase = true) ||
+                rawErr.contains("invalid-credential", ignoreCase = true) ||
+                rawErr.contains("wrong-password", ignoreCase = true) ||
+                rawErr.contains("invalid password", ignoreCase = true) ->
+                    "Incorrect mobile number or password. If you do not have an account, please switch to Register."
+                rawErr.contains("user not found", ignoreCase = true) ||
+                rawErr.contains("user-not-found", ignoreCase = true) ->
+                    "No account found with this phone number. Please register first."
+                rawErr.contains("network", ignoreCase = true) ||
+                rawErr.contains("timeout", ignoreCase = true) ||
+                rawErr.contains("connect", ignoreCase = true) ||
+                rawErr.contains("Unable to resolve host", ignoreCase = true) ->
+                    "Connection timed out. Please check your data speed and try again."
+                else -> rawErr
+            }
+            withContext(Dispatchers.Main) {
+                _authState.value = AuthState.Error(formatted)
+                onError(formatted)
             }
         }
     }

@@ -11,6 +11,9 @@ import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.realtime.realtime
 import io.github.jan.supabase.serializer.KotlinXSerializer
+import io.ktor.client.engine.okhttp.OkHttp
+import java.util.concurrent.TimeUnit
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.serialization.json.Json
 
 /**
@@ -43,6 +46,15 @@ object SupabaseClientProvider {
             supabaseUrl = supabaseUrl,
             supabaseKey = supabasePublishableKey
         ) {
+            requestTimeout = 45.seconds
+            httpEngine = OkHttp.create {
+                config {
+                    connectTimeout(30, TimeUnit.SECONDS)
+                    readTimeout(45, TimeUnit.SECONDS)
+                    writeTimeout(45, TimeUnit.SECONDS)
+                    retryOnConnectionFailure(true)
+                }
+            }
             defaultSerializer = KotlinXSerializer(
                 Json {
                     ignoreUnknownKeys = true

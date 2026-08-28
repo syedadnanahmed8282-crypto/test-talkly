@@ -106,6 +106,7 @@ class MessageSyncForegroundService : Service() {
     }
 
     private fun safeStartForeground(notification: Notification) {
+        var started = false
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
@@ -113,16 +114,25 @@ class MessageSyncForegroundService : Service() {
                     notification,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
                 )
+                started = true
             } else {
                 startForeground(NOTIFICATION_ID, notification)
+                started = true
             }
         } catch (e: Throwable) {
             Log.e(TAG, "Typed startForeground failed: ${e.localizedMessage}, trying untyped fallback")
             try {
                 startForeground(NOTIFICATION_ID, notification)
+                started = true
             } catch (e2: Throwable) {
                 Log.e(TAG, "Untyped startForeground also failed: ${e2.localizedMessage}")
             }
+        }
+        if (!started) {
+            Log.e(TAG, "Could not start foreground notification; stopping self safely to prevent crash")
+            try {
+                stopSelf()
+            } catch (ignored: Throwable) {}
         }
     }
 
