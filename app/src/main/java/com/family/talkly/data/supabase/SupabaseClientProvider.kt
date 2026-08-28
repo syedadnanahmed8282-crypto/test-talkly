@@ -15,6 +15,7 @@ import io.ktor.client.engine.okhttp.OkHttp
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.serialization.json.Json
+import okhttp3.Protocol
 
 /**
  * Provides a singleton instance of the configured Supabase client.
@@ -49,6 +50,7 @@ object SupabaseClientProvider {
             requestTimeout = 45.seconds
             httpEngine = OkHttp.create {
                 config {
+                    protocols(listOf(Protocol.HTTP_1_1))
                     connectTimeout(30, TimeUnit.SECONDS)
                     readTimeout(45, TimeUnit.SECONDS)
                     writeTimeout(45, TimeUnit.SECONDS)
