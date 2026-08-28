@@ -32,8 +32,6 @@ data class SupabaseStatus(
     val textContent: String? = null,
     @SerialName("photo_url")
     val photoUrl: String? = null,
-    @SerialName("is_video")
-    val isVideo: Boolean = false,
     @SerialName("background_color_hex")
     val backgroundColorHex: String = "#321C3B",
     @SerialName("created_at")
@@ -43,6 +41,7 @@ data class SupabaseStatus(
 ) {
     fun toStatusItem(viewers: List<StatusViewer> = emptyList(), likes: List<StatusLiker> = emptyList()): StatusItem {
         val timestampMillis = SupabaseMessage.parseIsoTimestampToMillis(createdAt)
+        val isMediaVideo = photoUrl?.let { it.endsWith(".mp4", ignoreCase = true) || it.contains("video/upload") } ?: false
         return StatusItem(
             id = id,
             userId = userId,
@@ -50,7 +49,7 @@ data class SupabaseStatus(
             userAvatarUrl = userAvatarUrl,
             textContent = textContent,
             photoUrl = photoUrl,
-            isVideo = isVideo,
+            isVideo = isMediaVideo,
             backgroundColorHex = backgroundColorHex,
             timestamp = timestampMillis,
             isSeen = false,

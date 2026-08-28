@@ -8,8 +8,76 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.UUID
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+
+object PostgresStringListSerializer : KSerializer<List<String>> {
+    override val descriptor: SerialDescriptor = ListSerializer(String.serializer()).descriptor
+
+    override fun serialize(encoder: Encoder, value: List<String>) {
+        ListSerializer(String.serializer()).serialize(encoder, value)
+    }
+
+    override fun deserialize(decoder: Decoder): List<String> {
+        val jsonDecoder = decoder as? JsonDecoder
+        if (jsonDecoder != null) {
+            val element = jsonDecoder.decodeJsonElement()
+            return parseStringList(element)
+        }
+        return try {
+            ListSerializer(String.serializer()).deserialize(decoder)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    fun parseStringList(element: JsonElement): List<String> {
+        return when (element) {
+            is JsonArray -> {
+                element.mapNotNull {
+                    when (it) {
+                        is JsonPrimitive -> it.contentOrNull
+                        else -> null
+                    }
+                }
+            }
+            is JsonPrimitive -> {
+                val raw = element.contentOrNull ?: return emptyList()
+                parsePgArrayString(raw)
+            }
+            is JsonNull -> emptyList()
+            else -> emptyList()
+        }
+    }
+
+    fun parsePgArrayString(raw: String): List<String> {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty() || trimmed == "{}" || trimmed == "[]" || trimmed.equals("null", ignoreCase = true)) {
+            return emptyList()
+        }
+        val clean = trimmed.removePrefix("{").removeSuffix("}").removePrefix("[").removeSuffix("]")
+        if (clean.isBlank()) return emptyList()
+        return clean.split(",").map {
+            it.trim().removeSurrounding("\"").removeSurrounding("'")
+        }.filter { it.isNotBlank() }
+    }
+}
 
 @Serializable
 data class SupabaseTypingPayload(
@@ -86,6 +154,7 @@ data class SupabaseMessage(
     val isEdited: Boolean = false,
     @SerialName("is_deleted_for_everyone")
     val isDeletedForEveryone: Boolean = false,
+    @Serializable(with = PostgresStringListSerializer::class)
     @SerialName("deleted_for_users")
     val deletedForUsers: List<String> = emptyList(),
     @SerialName("created_at")
@@ -136,6 +205,81 @@ data class SupabaseMessage(
     }
 
     companion object {
+        fun fromJsonObject(record: JsonObject): SupabaseMessage {
+            fun getString(key: String): String? {
+                val elem = record[key] ?: return null
+                return if (elem is JsonPrimitive) elem.contentOrNull else null
+            }
+            fun getBoolean(key: String, default: Boolean = false): Boolean {
+                val elem = record[key] ?: return default
+                if (elem is JsonPrimitive) {
+                    return elem.booleanOrNull ?: (elem.contentOrNull?.equals("true", ignoreCase = true) == true)
+                }
+                return default
+            }
+            fun getInt(key: String, default: Int = 0): Int {
+                val elem = record[key] ?: return default
+                if (elem is JsonPrimitive) {
+                    return elem.intOrNull ?: elem.contentOrNull?.toIntOrNull() ?: default
+                }
+                return default
+            }
+
+            val id = getString("id") ?: UUID.randomUUID().toString()
+            val convId = getString("conversation_id")
+            val senderId = getString("sender_id") ?: ""
+            val receiverId = getString("receiver_id") ?: ""
+            val msgType = getString("message_type") ?: "TEXT"
+            val textContent = getString("text_content") ?: ""
+            val mediaUrl = getString("media_url")
+            val callType = getString("call_type")
+            val callDurationSec = getInt("call_duration_sec", 0)
+            val isDelivered = getBoolean("is_delivered", false)
+            val isRead = getBoolean("is_read", false)
+            val readAt = getString("read_at")
+            val reaction = getString("reaction")
+            val isStarred = getBoolean("is_starred", false)
+            val isPinned = getBoolean("is_pinned", false)
+            val pinnedBy = getString("pinned_by")
+            val replyToMsgId = getString("reply_to_message_id")
+            val replyToSenderName = getString("reply_to_sender_name")
+            val replyToText = getString("reply_to_text")
+            val isEdited = getBoolean("is_edited", false)
+            val isDeletedForEveryone = getBoolean("is_deleted_for_everyone", false)
+
+            val deletedForUsers = record["deleted_for_users"]?.let {
+                PostgresStringListSerializer.parseStringList(it)
+            } ?: emptyList()
+
+            val createdAt = getString("created_at")
+
+            return SupabaseMessage(
+                id = id,
+                conversationId = convId,
+                senderId = senderId,
+                receiverId = receiverId,
+                messageType = msgType,
+                textContent = textContent,
+                mediaUrl = mediaUrl,
+                callType = callType,
+                callDurationSec = callDurationSec,
+                isDelivered = isDelivered,
+                isRead = isRead,
+                readAt = readAt,
+                reaction = reaction,
+                isStarred = isStarred,
+                isPinned = isPinned,
+                pinnedBy = pinnedBy,
+                replyToMessageId = replyToMsgId,
+                replyToSenderName = replyToSenderName,
+                replyToText = replyToText,
+                isEdited = isEdited,
+                isDeletedForEveryone = isDeletedForEveryone,
+                deletedForUsers = deletedForUsers,
+                createdAt = createdAt
+            )
+        }
+
         fun parseIsoTimestampToMillis(isoString: String?): Long {
             if (isoString.isNullOrBlank()) return System.currentTimeMillis()
             return try {

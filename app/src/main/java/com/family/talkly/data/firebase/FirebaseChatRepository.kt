@@ -1655,20 +1655,30 @@ class FirebaseChatRepository(private val context: Context) {
         when (action) {
             is io.github.jan.supabase.realtime.PostgresAction.Insert -> {
                 try {
-                    val supabaseMsg = SupabaseMessagingService.json.decodeFromJsonElement<SupabaseMessage>(action.record)
+                    val supabaseMsg = try {
+                        SupabaseMessagingService.json.decodeFromJsonElement<SupabaseMessage>(action.record)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Standard decode failed for insert, using safe fromJsonObject fallback: ${e.localizedMessage}")
+                        SupabaseMessage.fromJsonObject(action.record)
+                    }
                     val chatMsg = supabaseMsg.toChatMessage(currentUserId)
                     handleSingleIncomingChatMessage(chatMsg, currentUserId)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error decoding inserted Supabase message: ${e.localizedMessage}")
+                    Log.e(TAG, "Error decoding inserted Supabase message: ${e.localizedMessage}", e)
                 }
             }
             is io.github.jan.supabase.realtime.PostgresAction.Update -> {
                 try {
-                    val supabaseMsg = SupabaseMessagingService.json.decodeFromJsonElement<SupabaseMessage>(action.record)
+                    val supabaseMsg = try {
+                        SupabaseMessagingService.json.decodeFromJsonElement<SupabaseMessage>(action.record)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Standard decode failed for update, using safe fromJsonObject fallback: ${e.localizedMessage}")
+                        SupabaseMessage.fromJsonObject(action.record)
+                    }
                     val chatMsg = supabaseMsg.toChatMessage(currentUserId)
                     handleSingleIncomingChatMessage(chatMsg, currentUserId)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error decoding updated Supabase message: ${e.localizedMessage}")
+                    Log.e(TAG, "Error decoding updated Supabase message: ${e.localizedMessage}", e)
                 }
             }
             is io.github.jan.supabase.realtime.PostgresAction.Delete -> {
@@ -2506,7 +2516,6 @@ class FirebaseChatRepository(private val context: Context) {
                     userAvatarUrl = userAvatarUrl,
                     textContent = textContent,
                     photoUrl = finalMediaUrl,
-                    isVideo = newStatus.isVideo,
                     backgroundColorHex = backgroundColorHex,
                     createdAt = SupabaseMessage.millisToIsoTimestamp(now),
                     expiresAt = SupabaseMessage.millisToIsoTimestamp(expiresAt)

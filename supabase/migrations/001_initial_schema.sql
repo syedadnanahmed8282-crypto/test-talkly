@@ -151,7 +151,6 @@ CREATE TABLE IF NOT EXISTS public.statuses (
     user_avatar_url TEXT,
     text_content TEXT,
     photo_url TEXT, -- Cloudinary Media URL
-    is_video BOOLEAN DEFAULT false,
     background_color_hex TEXT DEFAULT '#321C3B',
     created_at TIMESTAMPTZ DEFAULT now(),
     expires_at TIMESTAMPTZ DEFAULT (now() + INTERVAL '24 hours')
