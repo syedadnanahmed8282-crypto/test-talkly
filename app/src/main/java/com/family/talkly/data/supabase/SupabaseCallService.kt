@@ -189,11 +189,13 @@ object SupabaseCallService {
             
             // Cleanly remove any existing joined channel with this name
             try {
-                val existingChannel = SupabaseClientProvider.client.realtime.subscriptions[channelName]
-                if (existingChannel != null) {
-                    Log.d(TAG, "DIAGNOSTIC Cleaning existing calls channel $channelName (status=${existingChannel.status.value})")
-                    try { existingChannel.unsubscribe() } catch (_: Exception) {}
-                    SupabaseClientProvider.client.realtime.removeChannel(existingChannel)
+                val matchingChannels = SupabaseClientProvider.client.realtime.subscriptions.values.filter {
+                    it.topic == "realtime:$channelName" || it.topic == channelName
+                }
+                for (existing in matchingChannels) {
+                    Log.d(TAG, "DIAGNOSTIC Cleaning existing calls channel ${existing.topic} (status=${existing.status.value})")
+                    try { existing.unsubscribe() } catch (_: Exception) {}
+                    try { SupabaseClientProvider.client.realtime.removeChannel(existing) } catch (_: Exception) {}
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Error cleaning previous calls channel instance: ${e.localizedMessage}")

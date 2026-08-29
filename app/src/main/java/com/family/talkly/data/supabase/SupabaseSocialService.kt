@@ -261,6 +261,8 @@ class SupabaseSocialService(private val context: Context) {
         val channel = realtime.channel(PRESENCE_CHANNEL_NAME)
         presenceChannel = channel
 
+        val presenceFlow = channel.presenceDataFlow<SupabasePresencePayload>()
+
         try {
             if (channel.status.value != io.github.jan.supabase.realtime.RealtimeChannel.Status.SUBSCRIBED &&
                 channel.status.value != io.github.jan.supabase.realtime.RealtimeChannel.Status.SUBSCRIBING) {
@@ -285,12 +287,13 @@ class SupabaseSocialService(private val context: Context) {
             emit(_onlineUserIds.value)
 
             try {
-                channel.presenceDataFlow<SupabasePresencePayload>().collect { onlineList ->
+                presenceFlow.collect { onlineList ->
                     val userIds = onlineList.map { it.userId }.filter { it.isNotBlank() }.toSet()
                     _onlineUserIds.value = userIds
                     emit(userIds)
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.w(TAG, "Presence data flow ended: ${e.localizedMessage}")
             }
         }.flowOn(Dispatchers.IO)

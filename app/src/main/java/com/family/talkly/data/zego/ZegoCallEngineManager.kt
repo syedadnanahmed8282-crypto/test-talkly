@@ -1012,7 +1012,7 @@ class ZegoCallEngineManager(private val context: Context) {
                 }
 
                 val callLog = CallLog(
-                    id = "call_${System.currentTimeMillis()}",
+                    id = java.util.UUID.randomUUID().toString(),
                     memberId = member.id,
                     memberName = member.name,
                     direction = CallDirection.OUTGOING,
@@ -1122,7 +1122,7 @@ class ZegoCallEngineManager(private val context: Context) {
 
         if (member != null) {
             val callLog = CallLog(
-                id = "call_${System.currentTimeMillis()}",
+                id = java.util.UUID.randomUUID().toString(),
                 memberId = member.id,
                 memberName = member.name,
                 direction = CallDirection.MISSED,
@@ -1154,7 +1154,7 @@ class ZegoCallEngineManager(private val context: Context) {
             val isOutgoing = current.isOutgoing || current.state == CallState.OUTGOING_RINGING || current.state == CallState.OUTGOING_CALLING
             val direction = if (isOutgoing) CallDirection.OUTGOING else CallDirection.INCOMING
             val callLog = CallLog(
-                id = "call_${System.currentTimeMillis()}",
+                id = java.util.UUID.randomUUID().toString(),
                 memberId = member.id,
                 memberName = member.name,
                 direction = direction,
