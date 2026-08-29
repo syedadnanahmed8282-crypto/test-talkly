@@ -96,6 +96,7 @@ class FirebaseChatRepository(private val context: Context) {
     private val database: TalklyDatabase by lazy { TalklyDatabase.getInstance(context) }
     private val socialService: SupabaseSocialService by lazy { SupabaseSocialService.getInstance(context) }
     private val presenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var currentPresenceUserId: String? = null
     private var presenceJob: Job? = null
     private var presenceHeartbeatJob: Job? = null
 
@@ -590,6 +591,11 @@ class FirebaseChatRepository(private val context: Context) {
 
     fun startRealtimePresenceSync(userId: String, userName: String = "Talkly User", avatarUrl: String? = null) {
         if (userId.isBlank() || userId == "self") return
+        if (presenceJob?.isActive == true && currentPresenceUserId == userId) {
+            Log.d(TAG, "Presence sync already active for user: $userId, skipping redundant start")
+            return
+        }
+        currentPresenceUserId = userId
         presenceJob?.cancel()
         presenceHeartbeatJob?.cancel()
 
@@ -635,6 +641,7 @@ class FirebaseChatRepository(private val context: Context) {
     }
 
     fun stopRealtimePresenceSync(userId: String) {
+        currentPresenceUserId = null
         presenceJob?.cancel()
         presenceJob = null
         presenceHeartbeatJob?.cancel()
