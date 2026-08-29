@@ -129,6 +129,7 @@ import com.family.talkly.data.models.UserStatusGroup
 import com.family.talkly.ui.components.AddContactDialog
 import com.family.talkly.ui.components.BlockedContactsDialog
 import com.family.talkly.ui.components.ContactProfileDetailsDialog
+import com.family.talkly.ui.components.OnlinePresenceIndicator
 import com.family.talkly.ui.components.PostStatusDialog
 import com.family.talkly.ui.components.StatusViewerDialog
 import com.family.talkly.ui.components.UserProfileDetailsDialog
@@ -1676,12 +1677,13 @@ private fun TalklyConversationCard(
 
                 // Online indicator
                 if (member.isRecentlyActive()) {
-                    Box(
-                        modifier = Modifier
-                            .size(13.dp)
-                            .background(SuccessColor, CircleShape)
-                            .border(2.dp, SurfaceCard, CircleShape)
-                            .align(Alignment.BottomEnd)
+                    OnlinePresenceIndicator(
+                        member = member,
+                        size = 13.dp,
+                        borderColor = SurfaceCard,
+                        borderWidth = 2.dp,
+                        greenColor = SuccessColor,
+                        modifier = Modifier.align(Alignment.BottomEnd)
                     )
                 }
             }
@@ -3091,12 +3093,13 @@ private fun ContactsTab(
                                 }
 
                                 if (member.isRecentlyActive() && !isBlocked) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(11.dp)
-                                            .background(SuccessColor, CircleShape)
-                                            .border(2.dp, SurfaceCard, CircleShape)
-                                            .align(Alignment.BottomEnd)
+                                    OnlinePresenceIndicator(
+                                        member = member,
+                                        size = 11.dp,
+                                        borderColor = SurfaceCard,
+                                        borderWidth = 2.dp,
+                                        greenColor = SuccessColor,
+                                        modifier = Modifier.align(Alignment.BottomEnd)
                                     )
                                 }
                             }

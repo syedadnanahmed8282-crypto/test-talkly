@@ -69,6 +69,7 @@ import com.family.talkly.data.models.FamilyMember
 import com.family.talkly.data.models.UserProfile
 import com.family.talkly.ui.components.AddContactDialog
 import com.family.talkly.ui.components.ContactProfileDetailsDialog
+import com.family.talkly.ui.components.OnlinePresenceIndicator
 
 // ==========================================
 // TALKLY SIGNATURE DESIGN TOKENS
@@ -646,13 +647,13 @@ fun FamilyMembersScreen(
                                     }
 
                                     if (member.isRecentlyActive()) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(13.dp)
-                                                .clip(CircleShape)
-                                                .background(SuccessColor)
-                                                .border(2.dp, SurfaceCard, CircleShape)
-                                                .align(Alignment.BottomEnd)
+                                        OnlinePresenceIndicator(
+                                            member = member,
+                                            size = 13.dp,
+                                            borderColor = SurfaceCard,
+                                            borderWidth = 2.dp,
+                                            greenColor = SuccessColor,
+                                            modifier = Modifier.align(Alignment.BottomEnd)
                                         )
                                     }
                                 }

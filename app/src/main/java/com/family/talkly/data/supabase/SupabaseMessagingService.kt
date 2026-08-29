@@ -166,11 +166,17 @@ object SupabaseMessagingService {
     }
 
     suspend fun sendMessage(message: SupabaseMessage): Boolean = withContext(Dispatchers.IO) {
-            Log.e(TAG, "DEBUG_ACTUAL_INSERT_PAYLOAD: id='${message.id}', senderId='${message.senderId}', receiverId='${message.receiverId}', conversationId='${message.conversationId}', replyToId='${message.replyToMessageId}', type='${message.messageType}'")
+        try {
+            Log.d(TAG, "DEBUG_ACTUAL_INSERT_PAYLOAD: id='${message.id}', senderId='${message.senderId}', receiverId='${message.receiverId}', conversationId='${message.conversationId}', replyToId='${message.replyToMessageId}', type='${message.messageType}'")
             SupabaseClientProvider.client.postgrest["messages"]
                 .insert(message)
             true
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.e(TAG, "sendMessage failed: ${e.localizedMessage}")
+            false
         }
+    }
 
     suspend fun fetchMessagesForConversation(
         conversationId: String?,
@@ -217,6 +223,9 @@ object SupabaseMessagingService {
                     .decodeList<SupabaseMessage>()
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) {
+                return@withContext emptyList()
+            }
             Log.w(TAG, "Error fetching messages: ${e.localizedMessage}")
             emptyList()
         }
@@ -263,6 +272,9 @@ object SupabaseMessagingService {
                 }
                 .decodeList<SupabaseMessage>()
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) {
+                return@withContext emptyList()
+            }
             Log.w(TAG, "Error fetching recent messages: ${e.localizedMessage}")
             emptyList()
         }
@@ -664,20 +676,6 @@ object SupabaseMessagingService {
                 table = "statuses"
             }
             statusesFlow.onEach { action ->
-                onStatusAction(action)
-            }.launchIn(coroutineScope)
-
-            val viewersFlow = channel.postgresChangeFlow<PostgresAction>(schema = "public") {
-                table = "status_viewers"
-            }
-            viewersFlow.onEach { action ->
-                onStatusAction(action)
-            }.launchIn(coroutineScope)
-
-            val likesFlow = channel.postgresChangeFlow<PostgresAction>(schema = "public") {
-                table = "status_likes"
-            }
-            likesFlow.onEach { action ->
                 onStatusAction(action)
             }.launchIn(coroutineScope)
 

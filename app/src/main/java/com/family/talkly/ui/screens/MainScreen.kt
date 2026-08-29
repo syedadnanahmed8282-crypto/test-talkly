@@ -87,14 +87,14 @@ fun MainScreen(
     val callInfo by zegoManager.callState.collectAsState()
     val callLogs by zegoManager.callLogs.collectAsState()
 
-    androidx.compose.runtime.LaunchedEffect(currentUserProfile) {
-        android.util.Log.d("MainScreen", "DIAGNOSTIC MainScreen LaunchedEffect(currentUserProfile) triggered: profile=${currentUserProfile?.uid}, name=${currentUserProfile?.name}")
-        if (currentUserProfile != null && currentUserProfile.uid.isNotBlank()) {
-            android.util.Log.d("MainScreen", "DIAGNOSTIC MainScreen: invoking zegoManager.startRealtimeCallSync for uid=${currentUserProfile.uid}")
-            chatRepository.invalidateLocalCacheAndSyncPrimaryProfile(currentUserProfile.uid)
-            chatRepository.syncContactsFromSupabase(currentUserProfile.uid)
-            chatRepository.syncStatusesFromSupabase(currentUserProfile.uid)
-            zegoManager.startRealtimeCallSync(currentUserProfile, chatRepository)
+    androidx.compose.runtime.LaunchedEffect(currentUserProfile?.uid) {
+        val uid = currentUserProfile?.uid
+        android.util.Log.d("MainScreen", "DIAGNOSTIC MainScreen LaunchedEffect(currentUserProfile.uid) triggered: profile=$uid, name=${currentUserProfile?.name}")
+        if (!uid.isNullOrBlank()) {
+            android.util.Log.d("MainScreen", "DIAGNOSTIC MainScreen: invoking zegoManager.startRealtimeCallSync for uid=$uid")
+            chatRepository.syncContactsFromSupabase(uid)
+            chatRepository.syncStatusesFromSupabase(uid)
+            currentUserProfile?.let { zegoManager.startRealtimeCallSync(it, chatRepository) }
         } else {
             android.util.Log.d("MainScreen", "DIAGNOSTIC MainScreen: currentUserProfile is null or blank, skipping startRealtimeCallSync")
         }

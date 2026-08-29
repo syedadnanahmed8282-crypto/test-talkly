@@ -164,6 +164,7 @@ import com.family.talkly.ui.components.FullMediaViewerDialog
 import com.family.talkly.ui.components.MediaAttachmentDialog
 import com.family.talkly.ui.components.MediaMessageItem
 import com.family.talkly.ui.components.MessageLoadingState
+import com.family.talkly.ui.components.OnlinePresenceIndicator
 import com.family.talkly.ui.components.WallpaperSelectionDialog
 import com.family.talkly.util.AudioRecorder
 import com.family.talkly.util.MediaCompressorAndUploader
@@ -1462,12 +1463,13 @@ fun ChatDetailScreen(
 
                                 // Online badge
                                 if (member.isRecentlyActive() && isMutualContact && !isBlocked) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(11.dp)
-                                            .align(Alignment.BottomEnd)
-                                            .background(TalklySuccess, CircleShape)
-                                            .border(1.5.dp, TalklySurface, CircleShape)
+                                    OnlinePresenceIndicator(
+                                        member = member,
+                                        size = 11.dp,
+                                        borderColor = TalklySurface,
+                                        borderWidth = 1.5.dp,
+                                        greenColor = TalklySuccess,
+                                        modifier = Modifier.align(Alignment.BottomEnd)
                                     )
                                 }
                             }

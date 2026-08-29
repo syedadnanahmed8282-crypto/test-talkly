@@ -311,9 +311,9 @@ class SupabaseSocialService(private val context: Context) {
             current.remove(userId)
             _onlineUserIds.value = current
 
-            // Update last_seen_at in profiles once upon disconnect
+            // Update last_seen_at in profiles immediately upon disconnect
             if (userId.isNotBlank() && userId != "self") {
-                updateLastSeenTimestamp(userId)
+                updateLastSeenTimestamp(userId, force = true)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Error disconnecting presence: ${e.localizedMessage}")
@@ -321,15 +321,15 @@ class SupabaseSocialService(private val context: Context) {
     }
 
     /**
-     * Update `last_seen_at` on `profiles` once upon explicit disconnect / app backgrounding.
-     * Throttled with 60-second window to prevent unnecessary database writes.
+     * Update `last_seen_at` on `profiles` upon disconnect / heartbeat.
+     * Throttled with 15-second window (unless force = true) to keep database updated accurately.
      */
     suspend fun updateLastSeenTimestamp(userId: String, force: Boolean = false) = withContext(Dispatchers.IO) {
         try {
             if (userId.isBlank() || userId == "self") return@withContext
             val now = System.currentTimeMillis()
-            if (!force && (now - lastRecordedTimestampUpdate < 60_000L)) {
-                return@withContext // 60s throttling protection
+            if (!force && (now - lastRecordedTimestampUpdate < 15_000L)) {
+                return@withContext // 15s throttling protection
             }
             lastRecordedTimestampUpdate = now
 

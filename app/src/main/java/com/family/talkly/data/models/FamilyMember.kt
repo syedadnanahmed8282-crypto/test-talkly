@@ -28,6 +28,21 @@ data class FamilyMember(
         return false
     }
 
+    /**
+     * True if the user is not actively in the foreground (isOnline == false)
+     * but was active within the last 5 minutes (background state).
+     */
+    fun isBackgroundRecentlyActive(maxInactiveMs: Long = 5 * 60 * 1000L): Boolean {
+        if (!isRegisteredOnTalkly) return false
+        if (isOnline) return false
+        val now = System.currentTimeMillis()
+        if (lastActiveTimestamp > 0L) {
+            val diff = now - lastActiveTimestamp
+            return diff in 0..maxInactiveMs
+        }
+        return false
+    }
+
     val displayLastSeen: String
         get() {
             if (!isRegisteredOnTalkly) return "Not on Talkly"

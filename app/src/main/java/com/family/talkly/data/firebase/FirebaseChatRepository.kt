@@ -25,6 +25,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -95,6 +96,7 @@ class FirebaseChatRepository(private val context: Context) {
     private val database: TalklyDatabase by lazy { TalklyDatabase.getInstance(context) }
     private val socialService: SupabaseSocialService by lazy { SupabaseSocialService.getInstance(context) }
     private var presenceJob: Job? = null
+    private var presenceHeartbeatJob: Job? = null
 
     // Connectivity state management
     private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -588,6 +590,8 @@ class FirebaseChatRepository(private val context: Context) {
     fun startRealtimePresenceSync(userId: String, userName: String = "Talkly User", avatarUrl: String? = null) {
         if (userId.isBlank() || userId == "self") return
         presenceJob?.cancel()
+        presenceHeartbeatJob?.cancel()
+
         presenceJob = repositoryScope.launch(Dispatchers.IO) {
             try {
                 socialService.connectPresence(userId, userName, avatarUrl).collect { onlineUserIds ->
@@ -613,11 +617,25 @@ class FirebaseChatRepository(private val context: Context) {
                 Log.w(TAG, "Presence sync error: ${e.localizedMessage}")
             }
         }
+
+        // Active Heartbeat: periodically update last_seen timestamp in background (every 30 seconds)
+        presenceHeartbeatJob = repositoryScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                kotlinx.coroutines.delay(30_000L)
+                try {
+                    socialService.updateLastSeenTimestamp(userId, force = true)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Heartbeat timestamp update warning: ${e.localizedMessage}")
+                }
+            }
+        }
     }
 
     fun stopRealtimePresenceSync(userId: String) {
         presenceJob?.cancel()
         presenceJob = null
+        presenceHeartbeatJob?.cancel()
+        presenceHeartbeatJob = null
         repositoryScope.launch(Dispatchers.IO) {
             socialService.disconnectPresence(userId)
         }
@@ -1958,8 +1976,7 @@ class FirebaseChatRepository(private val context: Context) {
         saveStatusesToPrefs()
 
         // Restart realtime message listener, status sync, and contact sync
-        currentSyncedUserId = null
-        startRealtimeMessageSync(primaryUid)
+        startRealtimeMessageSync(primaryUid, force = true)
         syncContactsFromSupabase(primaryUid)
         syncStatusesFromSupabase(primaryUid)
     }

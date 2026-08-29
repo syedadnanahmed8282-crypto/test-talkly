@@ -28,7 +28,8 @@
   1. Real-time Messaging (Text, Photos, Videos, Documents, File Sharing).
   2. Voice Messages / Audio Recordings & Playback.
   3. Real-time Audio & Video Calling (ZEGOCloud / Supabase Call Service).
-  4. Real-time Channel Architecture: Independent channel separation (`messages-user-$uid`, `calls-user-$uid`, `statuses-user-$uid`) must NEVER be merged or altered without explicit user request.
+  4. Real-time Typing Indicator & Online Presence (real-time typing signals, debounce, and active indicators).
+  5. Real-time Channel Architecture: Independent channel separation (`messages-user-$uid`, `calls-user-$uid`, `statuses-user-$uid`) must NEVER be merged or altered without explicit user request.
 - **Pre-Update Impact Verification & Consent**:
   - Never modify, refactor, or touch any of the above core pipelines during unrelated updates or feature additions.
   - If a requested update could in any way impact, modify, or break any part of these core communication/media pipelines, you MUST explain the exact technical reason to the user and obtain explicit permission BEFORE making any code changes.

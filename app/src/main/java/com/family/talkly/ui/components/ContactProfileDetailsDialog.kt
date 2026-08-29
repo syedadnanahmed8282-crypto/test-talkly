@@ -532,14 +532,25 @@ fun ContactProfileDetailsDialog(
 
                         // Floating Online Status Beacon
                         if (isMutualContact) {
-                            Box(
-                                modifier = Modifier
-                                    .size(22.dp)
-                                    .clip(CircleShape)
-                                    .background(if (member.isRecentlyActive()) SuccessColor else TextMuted)
-                                    .border(3.dp, SurfaceMain, CircleShape)
-                                    .align(Alignment.BottomEnd)
-                            )
+                            if (member.isRecentlyActive()) {
+                                OnlinePresenceIndicator(
+                                    member = member,
+                                    size = 22.dp,
+                                    borderColor = SurfaceMain,
+                                    borderWidth = 3.dp,
+                                    greenColor = SuccessColor,
+                                    modifier = Modifier.align(Alignment.BottomEnd)
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .clip(CircleShape)
+                                        .background(TextMuted)
+                                        .border(3.dp, SurfaceMain, CircleShape)
+                                        .align(Alignment.BottomEnd)
+                                )
+                            }
                         }
                     }
                 }
@@ -578,12 +589,21 @@ fun ContactProfileDetailsDialog(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(if (member.isRecentlyActive()) SuccessColor else TextMuted)
-                    )
+                    if (member.isRecentlyActive()) {
+                        OnlinePresenceIndicator(
+                            member = member,
+                            size = 7.dp,
+                            borderWidth = 0.dp,
+                            greenColor = SuccessColor
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(TextMuted)
+                        )
+                    }
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = if (member.isOnline) "Online" else member.displayLastSeen,
