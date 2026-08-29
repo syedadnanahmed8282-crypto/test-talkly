@@ -251,7 +251,9 @@ class SupabaseSocialService(private val context: Context) {
         avatarUrl: String?
     ): Flow<Set<String>> = withContext(Dispatchers.IO) {
         try {
-            if (realtime.status.value != io.github.jan.supabase.realtime.Realtime.Status.CONNECTED) {
+            val status = realtime.status.value
+            if (status != io.github.jan.supabase.realtime.Realtime.Status.CONNECTED &&
+                status != io.github.jan.supabase.realtime.Realtime.Status.CONNECTING) {
                 realtime.connect()
             }
         } catch (e: Exception) {

@@ -119,9 +119,6 @@ fun MainScreen(
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        if (!uid.isNullOrBlank()) {
-            chatRepository.startRealtimePresenceSync(uid, name, avatar)
-        }
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             if (!uid.isNullOrBlank()) {
