@@ -95,6 +95,7 @@ class FirebaseChatRepository(private val context: Context) {
     private val contactPrefs = context.getSharedPreferences(CONTACTS_PREFS, Context.MODE_PRIVATE)
     private val database: TalklyDatabase by lazy { TalklyDatabase.getInstance(context) }
     private val socialService: SupabaseSocialService by lazy { SupabaseSocialService.getInstance(context) }
+    private val presenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var presenceJob: Job? = null
     private var presenceHeartbeatJob: Job? = null
 
@@ -592,7 +593,7 @@ class FirebaseChatRepository(private val context: Context) {
         presenceJob?.cancel()
         presenceHeartbeatJob?.cancel()
 
-        presenceJob = repositoryScope.launch(Dispatchers.IO) {
+        presenceJob = presenceScope.launch {
             try {
                 socialService.connectPresence(userId, userName, avatarUrl).collect { onlineUserIds ->
                     withContext(Dispatchers.Main) {
@@ -614,12 +615,14 @@ class FirebaseChatRepository(private val context: Context) {
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Presence sync error: ${e.localizedMessage}")
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    Log.w(TAG, "Presence sync error: ${e.localizedMessage}")
+                }
             }
         }
 
         // Active Heartbeat: periodically update last_seen timestamp in background (every 30 seconds)
-        presenceHeartbeatJob = repositoryScope.launch(Dispatchers.IO) {
+        presenceHeartbeatJob = presenceScope.launch {
             while (isActive) {
                 kotlinx.coroutines.delay(30_000L)
                 try {
@@ -636,7 +639,7 @@ class FirebaseChatRepository(private val context: Context) {
         presenceJob = null
         presenceHeartbeatJob?.cancel()
         presenceHeartbeatJob = null
-        repositoryScope.launch(Dispatchers.IO) {
+        presenceScope.launch {
             socialService.disconnectPresence(userId)
         }
     }

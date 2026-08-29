@@ -264,9 +264,8 @@ class SupabaseSocialService(private val context: Context) {
         val presenceFlow = channel.presenceDataFlow<SupabasePresencePayload>()
 
         try {
-            if (channel.status.value != io.github.jan.supabase.realtime.RealtimeChannel.Status.SUBSCRIBED &&
-                channel.status.value != io.github.jan.supabase.realtime.RealtimeChannel.Status.SUBSCRIBING) {
-                channel.subscribe(blockUntilSubscribed = false)
+            if (channel.status.value != io.github.jan.supabase.realtime.RealtimeChannel.Status.SUBSCRIBED) {
+                channel.subscribe(blockUntilSubscribed = true)
             }
 
             if (userId.isNotBlank() && userId != "self") {
@@ -277,7 +276,7 @@ class SupabaseSocialService(private val context: Context) {
                     onlineAt = System.currentTimeMillis()
                 )
                 channel.track(payload)
-                _onlineUserIds.value = setOf(userId)
+                _onlineUserIds.value = _onlineUserIds.value + userId
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to track initial presence: ${e.localizedMessage}")
