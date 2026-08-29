@@ -627,14 +627,15 @@ class FirebaseChatRepository(private val context: Context) {
             }
         }
 
-        // Active Heartbeat: periodically update last_seen timestamp in background (every 30 seconds)
+        // Active Heartbeat: periodically re-track presence (15s) and update last_seen timestamp in background
         presenceHeartbeatJob = presenceScope.launch {
             while (isActive) {
-                kotlinx.coroutines.delay(30_000L)
+                kotlinx.coroutines.delay(15_000L)
                 try {
+                    socialService.retrackPresence(userId, userName, avatarUrl)
                     socialService.updateLastSeenTimestamp(userId, force = true)
                 } catch (e: Exception) {
-                    Log.w(TAG, "Heartbeat timestamp update warning: ${e.localizedMessage}")
+                    Log.w(TAG, "Heartbeat timestamp/retrack update warning: ${e.localizedMessage}")
                 }
             }
         }

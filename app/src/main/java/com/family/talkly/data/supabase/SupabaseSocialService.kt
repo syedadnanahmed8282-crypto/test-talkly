@@ -301,6 +301,33 @@ class SupabaseSocialService(private val context: Context) {
     }
 
     /**
+     * Periodically re-track presence on the existing channel to prevent presence lease expiry.
+     * Reuses the existing presenceChannel instance without creating or re-subscribing a new channel.
+     */
+    suspend fun retrackPresence(
+        userId: String,
+        userName: String = "Talkly User",
+        avatarUrl: String? = null
+    ) = withContext(Dispatchers.IO) {
+        try {
+            if (userId.isBlank() || userId == "self") return@withContext
+            val ch = presenceChannel ?: return@withContext
+            if (ch.status.value == io.github.jan.supabase.realtime.RealtimeChannel.Status.SUBSCRIBED) {
+                val payload = SupabasePresencePayload(
+                    userId = userId,
+                    userName = userName,
+                    avatarUrl = avatarUrl,
+                    onlineAt = System.currentTimeMillis()
+                )
+                ch.track(payload)
+                Log.d(TAG, "Presence re-tracked successfully for user: $userId")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "retrackPresence warning: ${e.localizedMessage}")
+        }
+    }
+
+    /**
      * Untrack and unsubscribe from the presence channel.
      */
     suspend fun disconnectPresence(userId: String) = withContext(Dispatchers.IO) {
