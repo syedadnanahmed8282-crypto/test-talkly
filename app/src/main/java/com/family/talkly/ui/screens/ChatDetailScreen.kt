@@ -1506,7 +1506,7 @@ fun ChatDetailScreen(
                                     !member.isRegisteredOnTalkly -> "Not on Talkly"
                                     isBlocked -> "Blocked"
                                     member.isTyping -> "typing..."
-                                    member.isRecentlyActive() -> "Online"
+                                    member.isOnline -> "Online"
                                     else -> member.displayLastSeen
                                 }
                                 Text(
@@ -1515,7 +1515,7 @@ fun ChatDetailScreen(
                                     fontWeight = if (member.isTyping && !isBlocked) FontWeight.Bold else FontWeight.Normal,
                                     color = if (!isMutualContact || !member.isRegisteredOnTalkly || isBlocked) TalklyError
                                     else if (member.isTyping) TalklyMint
-                                    else if (member.isRecentlyActive()) TalklySuccess
+                                    else if (member.isOnline) TalklySuccess
                                     else TalklyTextSecondary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis

@@ -73,6 +73,7 @@ class FirebaseChatRepository(private val context: Context) {
         private const val KEY_SAVED_CONTACTS_JSON = "saved_contacts_json"
         private const val KEY_DEMO_CLEARED = "demo_contacts_cleared"
         private const val KEY_STATUSES_JSON = "talkly_statuses_json"
+        private const val KEY_SEEN_STATUS_IDS = "talkly_seen_status_ids"
         private const val KEY_BLOCKED_USERS = "talkly_blocked_user_ids"
         private const val KEY_DELETED_CONTACT_IDS = "talkly_deleted_contact_ids"
 
@@ -591,13 +592,18 @@ class FirebaseChatRepository(private val context: Context) {
             try {
                 socialService.connectPresence(userId, userName, avatarUrl).collect { onlineUserIds ->
                     withContext(Dispatchers.Main) {
+                        val now = System.currentTimeMillis()
                         val updatedMembers = _familyMembers.value.map { member ->
+                            val wasOnline = member.isOnline
                             val isOnline = member.firebaseUid in onlineUserIds ||
                                     member.id in onlineUserIds ||
                                     (member.id == userId || member.firebaseUid == userId)
+                            val updatedTimestamp = if (isOnline) now else if (wasOnline && !isOnline) now else member.lastActiveTimestamp
+                            val updatedLastSeen = if (isOnline) "Online" else if (updatedTimestamp > 0L) PhoneUtils.formatLastSeenTime(updatedTimestamp) else member.lastSeen
                             member.copy(
                                 isOnline = isOnline,
-                                lastSeen = if (isOnline) "Online" else member.lastSeen
+                                lastActiveTimestamp = updatedTimestamp,
+                                lastSeen = updatedLastSeen
                             )
                         }
                         setFamilyMembersWithDeduplication(updatedMembers)
@@ -652,6 +658,9 @@ class FirebaseChatRepository(private val context: Context) {
 
                         val existing = currentMap[c.contactPhone]
                         val profile = if (!c.contactUserId.isNullOrBlank()) profilesMap[c.contactUserId] else null
+                        val parsedLastSeen = profile?.lastSeenAt?.let { SupabaseMessage.parseIsoTimestampToMillis(it) } ?: 0L
+                        val effectiveLastActive = if (parsedLastSeen > 0L) parsedLastSeen else (existing?.lastActiveTimestamp ?: 0L)
+                        val effectiveLastSeen = if (existing?.isOnline == true) "Online" else if (effectiveLastActive > 0L) PhoneUtils.formatLastSeenTime(effectiveLastActive) else (existing?.lastSeen ?: "Recently")
 
                         FamilyMember(
                             id = if (!c.contactUserId.isNullOrBlank()) c.contactUserId else "contact_${suffix}",
@@ -663,8 +672,8 @@ class FirebaseChatRepository(private val context: Context) {
                             phone = c.contactPhone,
                             isOnline = existing?.isOnline ?: false,
                             isTyping = false,
-                            lastSeen = existing?.lastSeen ?: "Recently",
-                            lastActiveTimestamp = existing?.lastActiveTimestamp ?: 0L,
+                            lastSeen = effectiveLastSeen,
+                            lastActiveTimestamp = effectiveLastActive,
                             unreadCount = existing?.unreadCount ?: 0,
                             isPinned = c.isPinned,
                             isRegisteredOnTalkly = !c.contactUserId.isNullOrBlank(),
@@ -2326,6 +2335,7 @@ class FirebaseChatRepository(private val context: Context) {
 
     private fun loadStatuses() {
         val savedStatusesJson = contactPrefs.getString(KEY_STATUSES_JSON, null)
+        val seenSet = contactPrefs.getStringSet(KEY_SEEN_STATUS_IDS, emptySet())?.toSet() ?: emptySet()
         val loadedList = mutableListOf<StatusItem>()
 
         if (!savedStatusesJson.isNullOrBlank()) {
@@ -2365,8 +2375,11 @@ class FirebaseChatRepository(private val context: Context) {
                         }
                     }
 
+                    val id = obj.getString("id")
+                    val isSeenVal = obj.optBoolean("isSeen", false) || seenSet.contains(id)
+
                     val status = StatusItem(
-                        id = obj.getString("id"),
+                        id = id,
                         userId = obj.getString("userId"),
                         userName = obj.getString("userName"),
                         userAvatarUrl = if (obj.has("userAvatarUrl") && !obj.isNull("userAvatarUrl")) obj.getString("userAvatarUrl") else null,
@@ -2374,7 +2387,7 @@ class FirebaseChatRepository(private val context: Context) {
                         photoUrl = if (obj.has("photoUrl") && !obj.isNull("photoUrl")) obj.getString("photoUrl") else null,
                         backgroundColorHex = obj.optString("backgroundColorHex", "#321C3B"),
                         timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
-                        isSeen = obj.optBoolean("isSeen", false),
+                        isSeen = isSeenVal,
                         viewers = viewers,
                         likes = likes
                     )
@@ -2598,15 +2611,36 @@ class FirebaseChatRepository(private val context: Context) {
                 Log.d(TAG, "Fetched ${activeItems.size} active statuses from Supabase")
 
                 val now = System.currentTimeMillis()
+                val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+                val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+                val userPhone = sessionPrefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", "") ?: ""
+                val userSuffix = PhoneUtils.extractPhoneSuffix(userPhone)
+                val realCurrentUid = if (currentUserId != "self") currentUserId else (currentSyncedUserId ?: "self")
+
+                val seenSet = contactPrefs.getStringSet(KEY_SEEN_STATUS_IDS, emptySet())?.toSet() ?: emptySet()
+
                 // Preserve active unexpired local self-statuses so they aren't lost before Supabase index syncs
                 val localSelfUnexpired = _statuses.value.filter {
-                    (it.userId == currentUserId || it.userId == "self") &&
+                    (it.userId == currentUserId || it.userId == "self" || it.userId == realCurrentUid) &&
                     (it.timestamp + (24 * 60 * 60 * 1000L) > now)
                 }
 
                 val myViewedSet = activeItems.map { status ->
-                    val isSelf = status.userId == currentUserId || status.userId == "self"
-                    val seen = isSelf || status.viewers.any { it.userId == currentUserId }
+                    val isSelf = status.userId == currentUserId ||
+                            status.userId == "self" ||
+                            status.userId == realCurrentUid ||
+                            (userPhone.isNotBlank() && status.userId == userPhone) ||
+                            (userSuffix.isNotBlank() && PhoneUtils.extractPhoneSuffix(status.userId) == userSuffix)
+
+                    val isViewedByMe = seenSet.contains(status.id) || status.viewers.any {
+                        it.userId == currentUserId ||
+                        it.userId == realCurrentUid ||
+                        it.userId == "self" ||
+                        (userPhone.isNotBlank() && it.userId == userPhone) ||
+                        (userSuffix.isNotBlank() && PhoneUtils.extractPhoneSuffix(it.userId) == userSuffix)
+                    }
+
+                    val seen = isSelf || isViewedByMe
                     status.copy(isSeen = seen)
                 }.toMutableList()
 
@@ -2633,19 +2667,27 @@ class FirebaseChatRepository(private val context: Context) {
         currentUserName: String = "You",
         currentUserAvatar: String? = null
     ) {
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val realName = if (currentUserName != "You") currentUserName else (sessionPrefs.getString("user_name", null) ?: fallbackPrefs.getString("user_name", null) ?: "You")
+        val realAvatar = currentUserAvatar ?: sessionPrefs.getString("user_profile_pic", null) ?: fallbackPrefs.getString("user_profile_pic", null)
         val realCurrentUid = if (currentUserId != "self") currentUserId else (currentSyncedUserId ?: "self")
+
         val updated = _statuses.value.map { status ->
             if (status.id == statusId) {
-                val existingLike = status.likes.firstOrNull { it.userId == realCurrentUid }
+                val existingLike = status.likes.firstOrNull { it.userId == realCurrentUid || it.userId == currentUserId || it.userId == "self" }
                 val newLikes = if (existingLike != null) {
-                    status.likes.filter { it.userId != realCurrentUid }
+                    status.likes.filter { it.userId != realCurrentUid && it.userId != currentUserId && it.userId != "self" }
                 } else {
-                    status.likes + StatusLiker(realCurrentUid, currentUserName, currentUserAvatar)
+                    status.likes + StatusLiker(realCurrentUid, realName, realAvatar)
                 }
 
                 if (realCurrentUid.isNotBlank() && realCurrentUid != "self") {
                     repositoryScope.launch(Dispatchers.IO) {
-                        socialService.toggleStatusLike(statusId, realCurrentUid, currentUserName, currentUserAvatar)
+                        val likeResult = socialService.toggleStatusLike(statusId, realCurrentUid, realName, realAvatar)
+                        if (likeResult.isSuccess) {
+                            syncStatusesFromSupabase(realCurrentUid)
+                        }
                     }
                 }
 
@@ -2664,23 +2706,38 @@ class FirebaseChatRepository(private val context: Context) {
         currentUserName: String = "You",
         currentUserAvatar: String? = null
     ) {
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val realName = if (currentUserName != "You") currentUserName else (sessionPrefs.getString("user_name", null) ?: fallbackPrefs.getString("user_name", null) ?: "You")
+        val realAvatar = currentUserAvatar ?: sessionPrefs.getString("user_profile_pic", null) ?: fallbackPrefs.getString("user_profile_pic", null)
         val realCurrentUid = if (currentUserId != "self") currentUserId else (currentSyncedUserId ?: "self")
+
+        // Persist seen status ID in local SharedPreferences immediately
+        try {
+            val seenSet = contactPrefs.getStringSet(KEY_SEEN_STATUS_IDS, emptySet())?.toMutableSet() ?: mutableSetOf()
+            seenSet.add(statusId)
+            contactPrefs.edit().putStringSet(KEY_SEEN_STATUS_IDS, seenSet).apply()
+        } catch (_: Exception) {}
+
         val updated = _statuses.value.map { status ->
             if (status.id == statusId) {
                 var newViewers = status.viewers
                 val isSelfStatus = status.userId == "self" || status.userId == realCurrentUid || (currentSyncedUserId != null && status.userId == currentSyncedUserId)
-                if (!isSelfStatus && status.viewers.none { it.userId == realCurrentUid || it.userId == "self" }) {
+                if (!isSelfStatus && status.viewers.none { it.userId == realCurrentUid || it.userId == currentUserId || it.userId == "self" }) {
                     val newViewer = StatusViewer(
                         userId = realCurrentUid,
-                        userName = currentUserName,
-                        userAvatarUrl = currentUserAvatar,
+                        userName = realName,
+                        userAvatarUrl = realAvatar,
                         timeAgo = "Just now"
                     )
                     newViewers = status.viewers + newViewer
 
                     if (realCurrentUid.isNotBlank() && realCurrentUid != "self") {
                         repositoryScope.launch(Dispatchers.IO) {
-                            socialService.markStatusViewed(statusId, realCurrentUid, currentUserName, currentUserAvatar)
+                            val viewResult = socialService.markStatusViewed(statusId, realCurrentUid, realName, realAvatar)
+                            if (viewResult.isSuccess) {
+                                syncStatusesFromSupabase(realCurrentUid)
+                            }
                         }
                     }
                 }

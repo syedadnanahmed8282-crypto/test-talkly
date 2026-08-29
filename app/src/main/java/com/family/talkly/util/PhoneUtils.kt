@@ -30,37 +30,39 @@ object PhoneUtils {
     }
 
     /**
-     * Formats last seen timestamp into human-readable string like '10:15 AM', 'Today at 10:15 AM', 'Yesterday at 8:30 PM', etc.
+     * Formats last seen timestamp into clean time string (e.g., '10:15 AM', 'Yesterday, 8:30 PM', 'Wednesday, 3:00 PM', '12 Oct, 5:45 PM') without any 'Last seen' or 'at' prefixes.
      */
     fun formatLastSeenTime(timestamp: Long): String {
         if (timestamp <= 0L) return "Recently"
         val now = System.currentTimeMillis()
-        val diffMs = now - timestamp
-        if (diffMs < 60 * 1000L) {
-            return "Just now"
-        }
         val calNow = java.util.Calendar.getInstance()
         val calThen = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
 
         val timeFormat = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US)
         val timeStr = timeFormat.format(java.util.Date(timestamp))
 
-        val isSameDay = calNow.get(java.util.Calendar.YEAR) == calThen.get(java.util.Calendar.YEAR) &&
-                calNow.get(java.util.Calendar.DAY_OF_YEAR) == calThen.get(java.util.Calendar.DAY_OF_YEAR)
+        val isSameYear = calNow.get(java.util.Calendar.YEAR) == calThen.get(java.util.Calendar.YEAR)
+        val isSameDay = isSameYear && calNow.get(java.util.Calendar.DAY_OF_YEAR) == calThen.get(java.util.Calendar.DAY_OF_YEAR)
 
         if (isSameDay) {
-            return "Today at $timeStr"
+            return timeStr
         }
 
         calNow.add(java.util.Calendar.DAY_OF_YEAR, -1)
-        val isYesterday = calNow.get(java.util.Calendar.YEAR) == calThen.get(java.util.Calendar.YEAR) &&
-                calNow.get(java.util.Calendar.DAY_OF_YEAR) == calThen.get(java.util.Calendar.DAY_OF_YEAR)
+        val isYesterday = isSameYear && calNow.get(java.util.Calendar.DAY_OF_YEAR) == calThen.get(java.util.Calendar.DAY_OF_YEAR)
 
         if (isYesterday) {
-            return "Yesterday at $timeStr"
+            return "Yesterday, $timeStr"
         }
 
-        val dateFormat = java.text.SimpleDateFormat("MMM d 'at' h:mm a", java.util.Locale.US)
+        val daysDiff = (now - timestamp) / (24 * 60 * 60 * 1000L)
+        if (daysDiff < 7 && daysDiff >= 0) {
+            val dayFormat = java.text.SimpleDateFormat("EEEE, h:mm a", java.util.Locale.US)
+            return dayFormat.format(java.util.Date(timestamp))
+        }
+
+        val pattern = if (isSameYear) "d MMM, h:mm a" else "d MMM yyyy, h:mm a"
+        val dateFormat = java.text.SimpleDateFormat(pattern, java.util.Locale.US)
         return dateFormat.format(java.util.Date(timestamp))
     }
 

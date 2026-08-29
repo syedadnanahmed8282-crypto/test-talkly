@@ -1719,7 +1719,7 @@ private fun TalklyConversationCard(
                         )
                     }
 
-                    val displayTime = if (lastMessage != null) lastMessage.formattedTime else (if (member.isRecentlyActive()) "Online" else member.displayLastSeen)
+                    val displayTime = if (lastMessage != null) lastMessage.formattedTime else (if (member.isOnline) "Online" else member.displayLastSeen)
                     Text(
                         text = if (member.isTyping) "typing..." else displayTime,
                         fontSize = 11.sp,

@@ -22,3 +22,13 @@
 - **Preserve Existing Code & Layouts**: Never rewrite or modify existing core layout wrappers, custom styling, colors, or existing input/output functionalities unless explicitly requested.
 - **Additive / Injection Only**: Treat new feature requests strictly as incremental additions or injections into their designated places.
 - **No Unsolicited Redesigns**: Do not redesign existing components, alter layout positions, or remove existing features during updates.
+
+## 6. Critical Core Features Preservation Rule (MANDATORY)
+- **Protected Core Modules**:
+  1. Real-time Messaging (Text, Photos, Videos, Documents, File Sharing).
+  2. Voice Messages / Audio Recordings & Playback.
+  3. Real-time Audio & Video Calling (ZEGOCloud / Supabase Call Service).
+  4. Real-time Channel Architecture: Independent channel separation (`messages-user-$uid`, `calls-user-$uid`, `statuses-user-$uid`) must NEVER be merged or altered without explicit user request.
+- **Pre-Update Impact Verification & Consent**:
+  - Never modify, refactor, or touch any of the above core pipelines during unrelated updates or feature additions.
+  - If a requested update could in any way impact, modify, or break any part of these core communication/media pipelines, you MUST explain the exact technical reason to the user and obtain explicit permission BEFORE making any code changes.

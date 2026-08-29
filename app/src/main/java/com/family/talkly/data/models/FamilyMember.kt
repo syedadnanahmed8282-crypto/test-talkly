@@ -17,26 +17,26 @@ data class FamilyMember(
     val isRegisteredOnTalkly: Boolean = false,
     val firebaseUid: String? = null
 ) {
-    fun isRecentlyActive(maxInactiveMs: Long = 2 * 60 * 1000L): Boolean {
+    fun isRecentlyActive(maxInactiveMs: Long = 5 * 60 * 1000L): Boolean {
         if (!isRegisteredOnTalkly) return false
-        if (!isOnline) return false
+        if (isOnline) return true
         val now = System.currentTimeMillis()
         if (lastActiveTimestamp > 0L) {
-            val diff = Math.abs(now - lastActiveTimestamp)
-            return diff <= maxInactiveMs
+            val diff = now - lastActiveTimestamp
+            return diff in 0..maxInactiveMs
         }
-        return lastSeen.equals("Online", ignoreCase = true)
+        return false
     }
 
     val displayLastSeen: String
         get() {
             if (!isRegisteredOnTalkly) return "Not on Talkly"
-            if (isRecentlyActive()) {
+            if (isOnline) {
                 return "Online"
             }
             if (lastActiveTimestamp > 0L) {
                 val formatted = com.family.talkly.util.PhoneUtils.formatLastSeenTime(lastActiveTimestamp)
-                if (formatted.isNotBlank() && !formatted.equals("Online", ignoreCase = true)) {
+                if (formatted.isNotBlank() && !formatted.equals("Online", ignoreCase = true) && !formatted.equals("Offline", ignoreCase = true)) {
                     return formatted
                 }
             }

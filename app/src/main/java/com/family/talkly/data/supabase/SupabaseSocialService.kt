@@ -239,6 +239,8 @@ class SupabaseSocialService(private val context: Context) {
     // 2. SUPABASE REALTIME PRESENCE (LIVE ONLINE / OFFLINE)
     // ==========================================
 
+    private var lastRecordedTimestampUpdate: Long = 0L
+
     /**
      * Connect to the Supabase Realtime Presence channel and track local user state.
      * ZERO database polling or heartbeat loops are used.
@@ -248,11 +250,22 @@ class SupabaseSocialService(private val context: Context) {
         userName: String,
         avatarUrl: String?
     ): Flow<Set<String>> = withContext(Dispatchers.IO) {
+        try {
+            if (realtime.status.value != io.github.jan.supabase.realtime.Realtime.Status.CONNECTED) {
+                realtime.connect()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Realtime connect note: ${e.localizedMessage}")
+        }
+
         val channel = realtime.channel(PRESENCE_CHANNEL_NAME)
         presenceChannel = channel
 
         try {
-            channel.subscribe(blockUntilSubscribed = false)
+            if (channel.status.value != io.github.jan.supabase.realtime.RealtimeChannel.Status.SUBSCRIBED &&
+                channel.status.value != io.github.jan.supabase.realtime.RealtimeChannel.Status.SUBSCRIBING) {
+                channel.subscribe(blockUntilSubscribed = false)
+            }
 
             if (userId.isNotBlank() && userId != "self") {
                 val payload = SupabasePresencePayload(
@@ -309,10 +322,16 @@ class SupabaseSocialService(private val context: Context) {
 
     /**
      * Update `last_seen_at` on `profiles` once upon explicit disconnect / app backgrounding.
+     * Throttled with 60-second window to prevent unnecessary database writes.
      */
-    suspend fun updateLastSeenTimestamp(userId: String) = withContext(Dispatchers.IO) {
+    suspend fun updateLastSeenTimestamp(userId: String, force: Boolean = false) = withContext(Dispatchers.IO) {
         try {
             if (userId.isBlank() || userId == "self") return@withContext
+            val now = System.currentTimeMillis()
+            if (!force && (now - lastRecordedTimestampUpdate < 60_000L)) {
+                return@withContext // 60s throttling protection
+            }
+            lastRecordedTimestampUpdate = now
 
             @kotlinx.serialization.Serializable
             data class LastSeenUpdate(
@@ -322,7 +341,7 @@ class SupabaseSocialService(private val context: Context) {
                 val updatedAt: String
             )
 
-            val nowIso = SupabaseMessage.millisToIsoTimestamp(System.currentTimeMillis())
+            val nowIso = SupabaseMessage.millisToIsoTimestamp(now)
             postgrest.from(TABLE_PROFILES)
                 .update(LastSeenUpdate(lastSeenAt = nowIso, updatedAt = nowIso)) {
                     filter {
@@ -437,16 +456,35 @@ class SupabaseSocialService(private val context: Context) {
         try {
             if (viewerUserId.isBlank() || viewerUserId == "self") return@withContext Result.success(Unit)
 
-            val viewer = SupabaseStatusViewer(
-                statusId = statusId,
-                viewerId = viewerUserId,
-                viewerName = viewerName,
-                viewerAvatarUrl = viewerAvatarUrl,
-                viewedAt = SupabaseMessage.millisToIsoTimestamp(System.currentTimeMillis())
-            )
+            val existing = try {
+                postgrest.from(TABLE_STATUS_VIEWERS)
+                    .select {
+                        filter {
+                            eq("status_id", statusId)
+                            eq("viewer_id", viewerUserId)
+                        }
+                        limit(1)
+                    }
+                    .decodeList<SupabaseStatusViewer>()
+            } catch (_: Exception) {
+                emptyList()
+            }
 
-            postgrest.from(TABLE_STATUS_VIEWERS)
-                .upsert(viewer)
+            if (existing.isEmpty()) {
+                val viewer = SupabaseStatusViewer(
+                    statusId = statusId,
+                    viewerId = viewerUserId,
+                    viewerName = viewerName,
+                    viewerAvatarUrl = viewerAvatarUrl,
+                    viewedAt = SupabaseMessage.millisToIsoTimestamp(System.currentTimeMillis())
+                )
+
+                try {
+                    postgrest.from(TABLE_STATUS_VIEWERS).insert(viewer)
+                } catch (_: Exception) {
+                    postgrest.from(TABLE_STATUS_VIEWERS).upsert(viewer)
+                }
+            }
 
             Result.success(Unit)
         } catch (e: Exception) {

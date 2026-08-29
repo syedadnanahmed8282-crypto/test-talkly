@@ -586,10 +586,10 @@ fun ContactProfileDetailsDialog(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (member.isRecentlyActive()) "Online" else member.displayLastSeen,
+                        text = if (member.isOnline) "Online" else member.displayLastSeen,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
-                        color = if (member.isRecentlyActive()) SuccessColor else TextSecondary
+                        color = if (member.isOnline) SuccessColor else TextSecondary
                     )
 
                     if (member.relation.isNotBlank()) {

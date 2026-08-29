@@ -620,7 +620,7 @@ object SupabaseMessagingService {
     ): Boolean = withContext(Dispatchers.IO) {
         try {
             if (senderId.isBlank() || receiverId.isBlank()) return@withContext false
-            val channelName = "typing-channel-$receiverId"
+            val channelName = "messages-user-$receiverId"
             val channel = SupabaseClientProvider.client.realtime.channel(channelName)
             if (channel.status.value != RealtimeChannel.Status.SUBSCRIBED && channel.status.value != RealtimeChannel.Status.SUBSCRIBING) {
                 channel.subscribe(blockUntilSubscribed = false)
@@ -664,6 +664,20 @@ object SupabaseMessagingService {
                 table = "statuses"
             }
             statusesFlow.onEach { action ->
+                onStatusAction(action)
+            }.launchIn(coroutineScope)
+
+            val viewersFlow = channel.postgresChangeFlow<PostgresAction>(schema = "public") {
+                table = "status_viewers"
+            }
+            viewersFlow.onEach { action ->
+                onStatusAction(action)
+            }.launchIn(coroutineScope)
+
+            val likesFlow = channel.postgresChangeFlow<PostgresAction>(schema = "public") {
+                table = "status_likes"
+            }
+            likesFlow.onEach { action ->
                 onStatusAction(action)
             }.launchIn(coroutineScope)
 
