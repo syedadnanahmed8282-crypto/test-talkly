@@ -9,6 +9,8 @@ import com.family.talkly.data.supabase.SupabaseFcmToken
 import com.google.firebase.messaging.FirebaseMessaging
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.postgrest
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -138,15 +140,15 @@ object FcmTokenManager {
         scope.launch {
             try {
                 Log.e(TAG, "DIAGNOSTIC_FCM_IDS: userUid='$uid', deviceId='$deviceId'")
-                val fcmEntry = SupabaseFcmToken(
-                    userId = uid,
-                    token = token,
-                    deviceId = deviceId,
-                    platform = "android"
-                )
+                val tokenPayload = buildJsonObject {
+                    put("user_id", uid)
+                    put("token", token)
+                    put("device_id", deviceId)
+                    put("platform", "android")
+                }
 
                 SupabaseClientProvider.client.postgrest["fcm_tokens"]
-                    .upsert(fcmEntry)
+                    .upsert(tokenPayload)
 
                 Log.d(TAG, "Successfully registered FCM token in Supabase for user: $uid (device: $deviceId)")
             } catch (e: Exception) {

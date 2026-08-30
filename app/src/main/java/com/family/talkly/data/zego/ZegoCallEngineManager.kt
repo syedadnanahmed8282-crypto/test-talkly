@@ -1253,7 +1253,14 @@ class ZegoCallEngineManager(private val context: Context) {
             scope.launch(Dispatchers.IO) {
                 try {
                     var peerUid = log.memberId
-                    if (peerUid.startsWith("contact_") || peerUid.contains(" ")) {
+                    val isDirectUuid = try {
+                        java.util.UUID.fromString(peerUid)
+                        true
+                    } catch (e: Exception) {
+                        false
+                    }
+
+                    if (!isDirectUuid) {
                         val member = _callState.value.targetMember
                         if (member != null && !member.firebaseUid.isNullOrBlank()) {
                             peerUid = member.firebaseUid!!
@@ -1263,10 +1270,17 @@ class ZegoCallEngineManager(private val context: Context) {
                         }
                     }
 
+                    val finalPeerUuid = try {
+                        java.util.UUID.fromString(peerUid)
+                        peerUid
+                    } catch (e: Exception) {
+                        null
+                    }
+
                     val supabaseLog = SupabaseCallLog(
                         id = log.id,
                         userId = profile.uid,
-                        peerId = if (peerUid.isNotBlank() && !peerUid.startsWith("contact_")) peerUid else null,
+                        peerId = finalPeerUuid,
                         peerName = log.memberName,
                         direction = log.direction.name,
                         callType = log.callType.name,
