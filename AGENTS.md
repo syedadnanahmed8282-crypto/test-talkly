@@ -33,3 +33,24 @@
 - **Pre-Update Impact Verification & Consent**:
   - Never modify, refactor, or touch any of the above core pipelines during unrelated updates or feature additions.
   - If a requested update could in any way impact, modify, or break any part of these core communication/media pipelines, you MUST explain the exact technical reason to the user and obtain explicit permission BEFORE making any code changes.
+
+## 7. Protected Feature: Online Presence / Last Seen (DO NOT BREAK)
+
+The following presence system is now fully working correctly and must be treated with the same protection level as messaging, calling, and media sharing. Any future task — even unrelated ones — must NOT modify, refactor, or remove any of the following unless a task explicitly and specifically asks to change presence behavior:
+
+- `presenceScope` (independent CoroutineScope in FirebaseChatRepository.kt) — must remain fully separate from `repositoryScope`, `callScope`, `messageSyncJob`, and `callSyncJob`.
+- `startRealtimePresenceSync()` in FirebaseChatRepository.kt — including its idempotency guard (checks `presenceJob?.isActive == true && currentPresenceUserId == userId` before relaunching).
+- `presenceHeartbeatJob` — runs every 15 seconds, calls BOTH `socialService.retrackPresence(userId, userName, avatarUrl)` AND `socialService.updateLastSeenTimestamp(userId, force = true)`. Do not remove either call or change the interval without explicit instruction.
+- `connectPresence()` in SupabaseSocialService.kt — including the check that skips calling `realtime.connect()` if `realtime.status.value` is already CONNECTED or CONNECTING.
+- `retrackPresence()` in SupabaseSocialService.kt — reuses the existing `presenceChannel` instance and re-calls `.track(payload)`; must not be removed or merged into a channel-recreation flow.
+- The `DisposableEffect(lifecycleOwner, currentUserProfile?.uid)` block in MainScreen.kt that manages presence lifecycle (ON_START/ON_RESUME connects, ON_PAUSE/ON_STOP disconnects) — including its initial call on entry.
+- The `profiles` table's Realtime publication setting on Supabase (`ALTER PUBLICATION supabase_realtime ADD TABLE profiles` + `REPLICA IDENTITY FULL`) — do not assume this is unnecessary or suggest removing it.
+
+**Current correct behavior (for reference, to verify nothing has regressed):**
+- Opening the app shows the user as "Online"/"Active now" to their contacts immediately.
+- Staying in the foreground keeps the user "Online" continuously (no flipping back to "Last seen" after 10-20 seconds).
+- Backgrounding the app immediately and correctly shows "Last seen [time]" to contacts.
+- Reopening the app immediately shows "Online" again.
+
+If any future change (even one seemingly unrelated to presence) touches FirebaseChatRepository.kt, SupabaseSocialService.kt, or MainScreen.kt, explicitly verify presence still behaves as described above before considering the task complete.
+
