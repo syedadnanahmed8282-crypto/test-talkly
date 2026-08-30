@@ -23,6 +23,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import io.github.jan.supabase.auth.status.SessionStatus
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -88,10 +91,33 @@ class AuthManager(private val context: Context) {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val session = auth.currentSessionOrNull()
-                val user = auth.currentUserOrNull()
                 val isLoggedIn = prefs.getBoolean(KEY_IS_LOGGED_IN, false)
                 val savedUid = prefs.getString(KEY_UID, null)
+
+                // If user was previously logged in, ensure Supabase Auth finishes restoring/refreshing session from storage
+                if (isLoggedIn || !savedUid.isNullOrEmpty()) {
+                    try {
+                        withTimeoutOrNull(3000L) {
+                            auth.sessionStatus.first { it !is SessionStatus.Initializing }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Auth session restoration wait note: ${e.message}")
+                    }
+
+                    // Ensure token is refreshed if session exists
+                    try {
+                        val currentSession = auth.currentSessionOrNull()
+                        if (currentSession != null) {
+                            auth.refreshCurrentSession()
+                            Log.d(TAG, "Supabase Auth session refreshed successfully")
+                        }
+                    } catch (refreshEx: Exception) {
+                        Log.w(TAG, "Supabase Auth session refresh note: ${refreshEx.localizedMessage}")
+                    }
+                }
+
+                val session = auth.currentSessionOrNull()
+                val user = auth.currentUserOrNull()
 
                 if (user != null || (session != null && !savedUid.isNullOrEmpty()) || (isLoggedIn && !savedUid.isNullOrEmpty())) {
                     val effectiveUid = user?.id ?: savedUid ?: ""

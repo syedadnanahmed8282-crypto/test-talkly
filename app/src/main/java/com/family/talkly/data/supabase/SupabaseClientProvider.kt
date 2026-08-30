@@ -65,7 +65,9 @@ object SupabaseClientProvider {
                     encodeDefaults = true
                 }
             )
-            install(Auth)
+            install(Auth) {
+                alwaysAutoRefresh = true
+            }
             install(Postgrest)
             install(Realtime)
         }
