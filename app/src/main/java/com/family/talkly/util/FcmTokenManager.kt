@@ -137,6 +137,7 @@ object FcmTokenManager {
 
         scope.launch {
             try {
+                Log.e(TAG, "DIAGNOSTIC_FCM_IDS: userUid='$uid', deviceId='$deviceId'")
                 val fcmEntry = SupabaseFcmToken(
                     userId = uid,
                     token = token,
