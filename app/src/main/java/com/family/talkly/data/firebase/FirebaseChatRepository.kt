@@ -77,6 +77,7 @@ class FirebaseChatRepository(private val context: Context) {
         private const val KEY_SEEN_STATUS_IDS = "talkly_seen_status_ids"
         private const val KEY_BLOCKED_USERS = "talkly_blocked_user_ids"
         private const val KEY_DELETED_CONTACT_IDS = "talkly_deleted_contact_ids"
+        private const val KEY_CONTACTS_WHO_SAVED_ME = "talkly_contacts_who_saved_me"
 
         @Volatile
         private var INSTANCE: FirebaseChatRepository? = null
@@ -195,10 +196,20 @@ class FirebaseChatRepository(private val context: Context) {
     init {
         setupNetworkMonitoring()
         loadDeletedContactIds()
+        loadContactsWhoSavedMeFromPrefs()
         loadInitialFamilyMembers()
         seedInitialFamilyChats()
         loadStatuses()
         loadBlockedUsers()
+    }
+
+    private fun loadContactsWhoSavedMeFromPrefs() {
+        val set = contactPrefs.getStringSet(KEY_CONTACTS_WHO_SAVED_ME, emptySet()) ?: emptySet()
+        _contactsWhoSavedMe.value = set
+    }
+
+    private fun saveContactsWhoSavedMeToPrefs(set: Set<String>) {
+        contactPrefs.edit().putStringSet(KEY_CONTACTS_WHO_SAVED_ME, set).apply()
     }
 
 
@@ -559,6 +570,7 @@ class FirebaseChatRepository(private val context: Context) {
         if (targetSuffix.isNotBlank()) currentSavedMe.remove(targetSuffix)
         if (targetFirebaseUid.isNotBlank()) currentSavedMe.remove(targetFirebaseUid)
         _contactsWhoSavedMe.value = currentSavedMe
+        saveContactsWhoSavedMeToPrefs(currentSavedMe)
     }
 
     fun togglePinMember(memberId: String) {
@@ -2874,6 +2886,7 @@ class FirebaseChatRepository(private val context: Context) {
                             if (partnerUid.isNotBlank()) currentSavedMe.add(partnerUid)
                             currentSavedMe.add(partnerContactId)
                             _contactsWhoSavedMe.value = currentSavedMe
+                            saveContactsWhoSavedMeToPrefs(currentSavedMe)
                         }
                     }
                 }
@@ -2893,6 +2906,7 @@ class FirebaseChatRepository(private val context: Context) {
                             val savedMeSet = _contactsWhoSavedMe.value.toMutableSet()
                             savedMeSet.addAll(ownerIds)
                             _contactsWhoSavedMe.value = savedMeSet
+                            saveContactsWhoSavedMeToPrefs(savedMeSet)
                         }
                     }
                 } catch (e: Exception) {
@@ -2932,7 +2946,16 @@ class FirebaseChatRepository(private val context: Context) {
             return true
         }
 
-        // 3. Check if there is an ACCEPTED message request between current user and target member
+        // 3. Existing conversation history guard: If messages already exist with this member, keep unlocked
+        val hasExistingMessages = _messagesMap.value[targetMember.id]?.isNotEmpty() == true ||
+                (!targetMember.firebaseUid.isNullOrBlank() && _messagesMap.value[targetMember.firebaseUid]?.isNotEmpty() == true) ||
+                (targetSuffix.isNotBlank() && _messagesMap.value.keys.any { key -> PhoneUtils.extractPhoneSuffix(key) == targetSuffix && _messagesMap.value[key]?.isNotEmpty() == true })
+
+        if (hasExistingMessages) {
+            return true
+        }
+
+        // 4. Check if there is an ACCEPTED message request between current user and target member
         val hasAcceptedRequest = _messageRequests.value.any { req ->
             req.status == "ACCEPTED" && (
                 (req.senderId == currentUid && (req.receiverId == targetMember.id || req.receiverId == targetMember.firebaseUid || (targetSuffix.isNotBlank() && req.receiverPhoneSuffix == targetSuffix))) ||
@@ -3080,6 +3103,7 @@ class FirebaseChatRepository(private val context: Context) {
             if (senderUid.isNotBlank()) currentSavedMe.add(senderUid)
             currentSavedMe.add(contactId)
             _contactsWhoSavedMe.value = currentSavedMe
+            saveContactsWhoSavedMeToPrefs(currentSavedMe)
 
             onComplete?.invoke()
         }
