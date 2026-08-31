@@ -21,8 +21,126 @@ object TalklyNotificationHelper {
     const val SUMMARY_NOTIFICATION_ID = 99999
     private const val TAG = "Talkly_NotificationHelper"
 
+    data class ActiveChatInfo(
+        val memberId: String,
+        val firebaseUid: String? = null,
+        val phone: String? = null,
+        val phoneSuffix: String? = null,
+        var isResumed: Boolean = true
+    )
+
     @Volatile
-    var activeChatMemberId: String? = null
+    private var currentActiveChat: ActiveChatInfo? = null
+
+    var activeChatMemberId: String?
+        get() = if (currentActiveChat?.isResumed == true) currentActiveChat?.memberId else null
+        set(value) {
+            currentActiveChat = if (value != null) {
+                ActiveChatInfo(memberId = value, isResumed = true)
+            } else {
+                null
+            }
+        }
+
+    fun setActiveChat(
+        memberId: String,
+        firebaseUid: String? = null,
+        phone: String? = null,
+        isResumed: Boolean = true
+    ) {
+        val suffix = phone?.let { PhoneUtils.extractPhoneSuffix(it) }?.takeIf { it.isNotBlank() }
+        currentActiveChat = ActiveChatInfo(
+            memberId = memberId,
+            firebaseUid = firebaseUid?.takeIf { it.isNotBlank() },
+            phone = phone?.takeIf { it.isNotBlank() },
+            phoneSuffix = suffix,
+            isResumed = isResumed
+        )
+        Log.d(TAG, "Active chat set: memberId=$memberId, uid=$firebaseUid, phone=$phone, isResumed=$isResumed")
+    }
+
+    fun updateActiveChatLifecycle(isResumed: Boolean) {
+        currentActiveChat?.let {
+            it.isResumed = isResumed
+            Log.d(TAG, "Active chat lifecycle updated: memberId=${it.memberId}, isResumed=$isResumed")
+        }
+    }
+
+    fun clearActiveChat(memberId: String? = null) {
+        if (memberId == null || currentActiveChat?.memberId == memberId || currentActiveChat?.firebaseUid == memberId) {
+            Log.d(TAG, "Active chat cleared (was: ${currentActiveChat?.memberId})")
+            currentActiveChat = null
+        }
+    }
+
+    fun isConversationActive(
+        candidateMemberId: String = "",
+        candidateSenderUid: String = "",
+        candidateSenderPhone: String = "",
+        candidateConversationId: String = "",
+        context: Context? = null
+    ): Boolean {
+        val active = currentActiveChat ?: return false
+        if (!active.isResumed) {
+            return false
+        }
+
+        val incomingIds = mutableSetOf<String>()
+        if (candidateMemberId.isNotBlank()) {
+            incomingIds.add(candidateMemberId)
+            val s = PhoneUtils.extractPhoneSuffix(candidateMemberId)
+            if (s.isNotBlank()) incomingIds.add(s)
+        }
+        if (candidateSenderUid.isNotBlank()) {
+            incomingIds.add(candidateSenderUid)
+            val s = PhoneUtils.extractPhoneSuffix(candidateSenderUid)
+            if (s.isNotBlank()) incomingIds.add(s)
+        }
+        if (candidateSenderPhone.isNotBlank()) {
+            incomingIds.add(candidateSenderPhone)
+            val s = PhoneUtils.extractPhoneSuffix(candidateSenderPhone)
+            if (s.isNotBlank()) incomingIds.add(s)
+        }
+
+        // Direct matching with active chat properties
+        if (incomingIds.contains(active.memberId)) return true
+        if (!active.firebaseUid.isNullOrBlank() && incomingIds.contains(active.firebaseUid)) return true
+        if (!active.phone.isNullOrBlank() && incomingIds.contains(active.phone)) return true
+        if (!active.phoneSuffix.isNullOrBlank() && incomingIds.contains(active.phoneSuffix)) return true
+
+        // Suffix-level comparison
+        if (!active.phoneSuffix.isNullOrBlank()) {
+            for (id in incomingIds) {
+                val suffix = PhoneUtils.extractPhoneSuffix(id)
+                if (suffix.isNotBlank() && suffix == active.phoneSuffix) {
+                    return true
+                }
+            }
+        }
+
+        // Check against known repository contacts if context is provided
+        if (context != null) {
+            try {
+                val members = com.family.talkly.data.firebase.FirebaseChatRepository.getInstance(context).familyMembers.value
+                val matchedMember = members.firstOrNull { m ->
+                    incomingIds.contains(m.id) ||
+                    (!m.firebaseUid.isNullOrBlank() && incomingIds.contains(m.firebaseUid)) ||
+                    (m.phone.isNotBlank() && incomingIds.contains(m.phone)) ||
+                    (m.phone.isNotBlank() && incomingIds.contains(PhoneUtils.extractPhoneSuffix(m.phone)))
+                }
+                if (matchedMember != null) {
+                    if (matchedMember.id == active.memberId) return true
+                    if (!matchedMember.firebaseUid.isNullOrBlank() && matchedMember.firebaseUid == active.firebaseUid) return true
+                    val mSuffix = PhoneUtils.extractPhoneSuffix(matchedMember.phone)
+                    if (mSuffix.isNotBlank() && mSuffix == active.phoneSuffix) return true
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Note: checking contacts repository: ${e.localizedMessage}")
+            }
+        }
+
+        return false
+    }
 
     private val inMemoryProcessedMessageIds = HashSet<String>()
 
@@ -182,10 +300,20 @@ object TalklyNotificationHelper {
         senderName: String,
         messageText: String,
         chatMemberId: String = "",
+        senderUid: String = "",
+        senderPhone: String = "",
+        conversationId: String = "",
         messageId: String = ""
     ) {
-        if (chatMemberId.isNotBlank() && chatMemberId == activeChatMemberId) {
-            Log.d(TAG, "Chat $chatMemberId is active in foreground. Suppressing notification alert.")
+        if (isConversationActive(
+                candidateMemberId = chatMemberId,
+                candidateSenderUid = senderUid,
+                candidateSenderPhone = senderPhone,
+                candidateConversationId = conversationId,
+                context = context
+            )
+        ) {
+            Log.d(TAG, "Chat ($chatMemberId / $senderUid / $senderPhone) is active in foreground. Suppressing notification alert.")
             if (messageId.isNotBlank()) markMessageProcessed(context, messageId)
             return
         }
@@ -202,7 +330,7 @@ object TalklyNotificationHelper {
         try {
             val intent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                putExtra("open_chat_member_id", chatMemberId)
+                putExtra("open_chat_member_id", chatMemberId.ifBlank { senderUid })
             }
 
             val pendingIntent = PendingIntent.getActivity(

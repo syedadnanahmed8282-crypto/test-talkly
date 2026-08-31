@@ -112,7 +112,10 @@ class TalklyFirebaseMessagingService : FirebaseMessagingService() {
 
                     val senderName = data["senderName"] ?: "Talkly Message"
                     val messageText = data["messageText"] ?: "New message"
-                    val chatMemberId = data["chatMemberId"] ?: data["senderUid"] ?: ""
+                    val senderUid = data["senderUid"] ?: data["sender_id"] ?: data["sender_uid"] ?: ""
+                    val senderPhone = data["senderPhone"] ?: data["sender_phone"] ?: ""
+                    val chatMemberId = data["chatMemberId"] ?: senderUid
+                    val conversationId = data["conversationId"] ?: data["conversation_id"] ?: ""
                     val messageId = data["messageId"] ?: data["id"] ?: ""
 
                     TalklyNotificationHelper.postIncomingMessageNotification(
@@ -120,6 +123,9 @@ class TalklyFirebaseMessagingService : FirebaseMessagingService() {
                         senderName = senderName,
                         messageText = messageText,
                         chatMemberId = chatMemberId,
+                        senderUid = senderUid,
+                        senderPhone = senderPhone,
+                        conversationId = conversationId,
                         messageId = messageId
                     )
                 }

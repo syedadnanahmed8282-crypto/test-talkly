@@ -1896,7 +1896,12 @@ class FirebaseChatRepository(private val context: Context) {
         // Deduplication & notification tracking
         if (isSelf || finalMessage.isRead) {
             com.family.talkly.util.TalklyNotificationHelper.markMessageProcessed(context, message.id)
-        } else if (canonicalOtherPartyId == com.family.talkly.util.TalklyNotificationHelper.activeChatMemberId) {
+        } else if (com.family.talkly.util.TalklyNotificationHelper.isConversationActive(
+                candidateMemberId = canonicalOtherPartyId,
+                candidateSenderUid = finalMessage.senderId,
+                context = context
+            )
+        ) {
             com.family.talkly.util.TalklyNotificationHelper.markMessageProcessed(context, message.id)
         } else if (!com.family.talkly.util.TalklyNotificationHelper.isMessageProcessed(context, message.id)) {
             val displayContent = when (finalMessage.messageType) {
@@ -1911,6 +1916,7 @@ class FirebaseChatRepository(private val context: Context) {
                 senderName = if (finalMessage.senderName.isNotBlank() && finalMessage.senderName != "Talkly User") finalMessage.senderName else "New Message",
                 messageText = displayContent,
                 chatMemberId = canonicalOtherPartyId,
+                senderUid = finalMessage.senderId,
                 messageId = finalMessage.id
             )
         }
@@ -2340,7 +2346,8 @@ class FirebaseChatRepository(private val context: Context) {
             "senderName" to senderName,
             "messageText" to previewText,
             "senderUid" to (senderUid ?: ""),
-            "chatMemberId" to canonicalId
+            "chatMemberId" to canonicalId,
+            "messageId" to newMessage.id
         )
         val resolvedTargetUid = targetMember?.firebaseUid ?: if (!canonicalId.startsWith("contact_") && !canonicalId.contains(" ")) canonicalId else ""
         com.family.talkly.util.FcmTokenManager.sendHighPriorityPush(

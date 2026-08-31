@@ -473,15 +473,37 @@ fun ChatDetailScreen(
         Toast.makeText(context, "Recording cancelled", Toast.LENGTH_SHORT).show()
     }
 
-    // Mark active chat in notification helper & clear notifications on enter/exit
-    androidx.compose.runtime.DisposableEffect(member.id) {
-        com.family.talkly.util.TalklyNotificationHelper.activeChatMemberId = member.id
+    // Mark active chat in notification helper & clear notifications on enter/exit with lifecycle tracking
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(member.id, lifecycleOwner) {
+        com.family.talkly.util.TalklyNotificationHelper.setActiveChat(
+            memberId = member.id,
+            firebaseUid = member.firebaseUid,
+            phone = member.phone,
+            isResumed = lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+        )
         com.family.talkly.util.TalklyNotificationHelper.cancelNotificationsForChat(context, member.id)
         onReadMessages()
-        onDispose {
-            if (com.family.talkly.util.TalklyNotificationHelper.activeChatMemberId == member.id) {
-                com.family.talkly.util.TalklyNotificationHelper.activeChatMemberId = null
+
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
+                    com.family.talkly.util.TalklyNotificationHelper.updateActiveChatLifecycle(true)
+                    com.family.talkly.util.TalklyNotificationHelper.cancelNotificationsForChat(context, member.id)
+                    onReadMessages()
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE,
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
+                    com.family.talkly.util.TalklyNotificationHelper.updateActiveChatLifecycle(false)
+                }
+                else -> {}
             }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            com.family.talkly.util.TalklyNotificationHelper.clearActiveChat(member.id)
         }
     }
 
