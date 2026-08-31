@@ -143,6 +143,7 @@ object FcmTokenManager {
                 val tokenPayload = buildJsonObject {
                     put("user_id", uid)
                     put("token", token)
+                    put("fcm_token", token)
                     put("device_id", deviceId)
                     put("platform", "android")
                 }
