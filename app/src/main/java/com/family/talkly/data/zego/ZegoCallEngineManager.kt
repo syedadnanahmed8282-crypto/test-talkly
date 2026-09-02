@@ -360,11 +360,11 @@ class ZegoCallEngineManager(private val context: Context) {
 
             Log.i(
                 TAG,
-                "[AGORA_TOKEN_DIAGNOSTIC] Starting token fetch: channelId='$channelId', numericUid=$uid, supabaseUrl='$supabaseUrl', sessionExists=$sessionExists, accessTokenExists=$accessTokenExists"
+                "[AGORA_TOKEN_DIAGNOSTIC] Step 1: Initiating token request. channelId='$channelId', numericUid=$uid, sessionExists=$sessionExists, accessTokenExists=$accessTokenExists, supabaseUrl='$supabaseUrl'"
             )
 
             if (!accessTokenExists) {
-                Log.e(TAG, "[AGORA_TOKEN_DIAGNOSTIC] FAILED: No Supabase authenticated user session token available. Cannot authenticate request to Edge Function.")
+                Log.e(TAG, "[AGORA_TOKEN_DIAGNOSTIC] FAILED: No Supabase authenticated access token available. Cannot query Edge Function.")
                 return@withContext null
             }
 
@@ -389,7 +389,7 @@ class ZegoCallEngineManager(private val context: Context) {
             val isSuccess = response.isSuccessful
             val responseBody = response.body?.string() ?: ""
 
-            Log.i(TAG, "[AGORA_TOKEN_DIAGNOSTIC] Edge Function response: HTTP status=$httpStatusCode, isSuccessful=$isSuccess")
+            Log.i(TAG, "[AGORA_TOKEN_DIAGNOSTIC] Step 2: Edge Function response received. HTTP status=$httpStatusCode, isSuccessful=$isSuccess")
 
             if (isSuccess && responseBody.isNotBlank()) {
                 try {
@@ -402,22 +402,22 @@ class ZegoCallEngineManager(private val context: Context) {
 
                     Log.i(
                         TAG,
-                        "[AGORA_TOKEN_DIAGNOSTIC] Parsed Edge Function payload: returnedChannelId='$returnedChannelId', returnedUid=$returnedUid, isTokenNonEmpty=$isTokenNonEmpty, tokenLength=$tokenLength"
+                        "[AGORA_TOKEN_DIAGNOSTIC] Step 3: Parsed payload -> success=true, returnedChannelId='$returnedChannelId', returnedUid=$returnedUid, isTokenNonEmpty=$isTokenNonEmpty, tokenLength=$tokenLength"
                     )
 
                     if (isTokenNonEmpty) {
                         return@withContext token
                     } else {
-                        Log.e(TAG, "[AGORA_TOKEN_DIAGNOSTIC] FAILED: Edge Function returned HTTP 200 but token field was empty or null in response payload.")
+                        Log.e(TAG, "[AGORA_TOKEN_DIAGNOSTIC] FAILED: Edge Function HTTP 200 returned empty/blank 'token' property.")
                     }
                 } catch (jsonErr: Exception) {
-                    Log.e(TAG, "[AGORA_TOKEN_DIAGNOSTIC] FAILED: Could not parse response JSON from Edge Function: ${jsonErr.localizedMessage}")
+                    Log.e(TAG, "[AGORA_TOKEN_DIAGNOSTIC] FAILED: JSON parse error: ${jsonErr.localizedMessage}")
                 }
             } else {
-                Log.e(TAG, "[AGORA_TOKEN_DIAGNOSTIC] FAILED: HTTP $httpStatusCode, body=$responseBody")
+                Log.e(TAG, "[AGORA_TOKEN_DIAGNOSTIC] FAILED: HTTP status=$httpStatusCode, responseBody='$responseBody'")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "[AGORA_TOKEN_DIAGNOSTIC] Error fetching Agora token from Edge Function: ${e.localizedMessage}", e)
+            Log.e(TAG, "[AGORA_TOKEN_DIAGNOSTIC] FAILED with Exception: ${e.localizedMessage}", e)
         }
         return@withContext null
     }
@@ -467,15 +467,18 @@ class ZegoCallEngineManager(private val context: Context) {
                 "[AGORA_SEQ_1] Before fetchAgoraToken: channelId='$roomID', numericUid=$numericUid, userId='$myUserId', isVideoCall=$isVideoCall"
             )
             val token = fetchAgoraToken(roomID, numericUid)
+            val isTokenValid = !token.isNullOrBlank()
+            val tokenLength = token?.length ?: 0
+
             Log.i(
                 TAG,
-                "[AGORA_SEQ_2] After fetchAgoraToken: channelId='$roomID', numericUid=$numericUid, success=${!token.isNullOrBlank()}, tokenLength=${token?.length ?: 0}"
+                "[AGORA_SEQ_2] After fetchAgoraToken: channelId='$roomID', numericUid=$numericUid, success=$isTokenValid, tokenPresent=$isTokenValid, tokenLength=$tokenLength"
             )
 
             if (token.isNullOrBlank()) {
                 Log.e(
                     TAG,
-                    "[AGORA_ERROR] fetchAgoraToken returned NULL or BLANK token for roomID='$roomID', numericUid=$numericUid. ABORTING joinChannel() to prevent invalid join!"
+                    "[AGORA_ERROR] fetchAgoraToken returned NULL or BLANK token for roomID='$roomID', numericUid=$numericUid. Aborting joinChannel()!"
                 )
                 withContext(Dispatchers.Main) {
                     isJoinedRoom = false
@@ -497,15 +500,19 @@ class ZegoCallEngineManager(private val context: Context) {
                 }
                 Log.i(
                     TAG,
-                    "[AGORA_SEQ_3] Before joinChannel: roomID='$roomID', numericUid=$numericUid, isVideoCall=$isVideoCall, publishCameraTrack=$isVideoCall, publishMicrophoneTrack=true, autoSubscribeAudio=true, autoSubscribeVideo=true, tokenLength=${token.length}"
+                    "[AGORA_SEQ_3] Before joinChannel: channelId='$roomID', numericUid=$numericUid, tokenPresent=true, tokenLength=${token.length}, isVideoCall=$isVideoCall, publishMicrophoneTrack=true, publishCameraTrack=$isVideoCall, autoSubscribeAudio=true, autoSubscribeVideo=true"
                 )
                 val joinResult = rtcEngine?.joinChannel(token, roomID, numericUid, options)
+                val joinResultInt = joinResult ?: -1
                 Log.i(
                     TAG,
-                    "[AGORA_SEQ_4] joinChannel return value: $joinResult (0 means success/initiated, negative means error code) for roomID='$roomID', uid=$numericUid"
+                    "[AGORA_SEQ_4] joinChannel returned exact integer: $joinResultInt (0 = ERR_OK, negative = Agora error code: ${getAgoraErrorCodeName(joinResultInt)}) for channelId='$roomID', uid=$numericUid"
                 )
-                if (joinResult != null && joinResult < 0) {
-                    Log.e(TAG, "[AGORA_ERROR] joinChannel failed immediately with error code $joinResult (${getAgoraErrorCodeName(joinResult)})")
+                if (joinResultInt < 0) {
+                    Log.e(
+                        TAG,
+                        "[AGORA_ERROR] joinChannel failed immediately with error code $joinResultInt (${getAgoraErrorCodeName(joinResultInt)})"
+                    )
                 }
             }
         }
