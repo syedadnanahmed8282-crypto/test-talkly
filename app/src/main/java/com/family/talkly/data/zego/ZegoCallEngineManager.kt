@@ -6,6 +6,7 @@ import android.graphics.SurfaceTexture
 import android.util.Log
 import android.view.TextureView
 import android.view.View
+import com.family.talkly.BuildConfig
 import com.family.talkly.data.firebase.FirebaseChatRepository
 import com.family.talkly.data.models.CallDirection
 import com.family.talkly.data.models.CallLog
@@ -20,23 +21,14 @@ import com.family.talkly.data.supabase.SupabaseMessage
 import com.family.talkly.data.supabase.SupabaseMessagingService
 import com.family.talkly.util.CallSoundManager
 import com.family.talkly.util.PhoneUtils
+import io.agora.rtc2.ChannelMediaOptions
+import io.agora.rtc2.Constants
+import io.agora.rtc2.IRtcEngineEventHandler
+import io.agora.rtc2.RtcEngine
+import io.agora.rtc2.RtcEngineConfig
+import io.agora.rtc2.video.BeautyOptions
+import io.agora.rtc2.video.VideoCanvas
 import io.github.jan.supabase.auth.auth
-import im.zego.zegoexpress.ZegoExpressEngine
-import im.zego.zegoexpress.callback.IZegoEventHandler
-import im.zego.zegoexpress.constants.ZegoBeautifyFeature
-import im.zego.zegoexpress.constants.ZegoPublishChannel
-import im.zego.zegoexpress.constants.ZegoPublisherState
-import im.zego.zegoexpress.constants.ZegoPlayerState
-import im.zego.zegoexpress.constants.ZegoRoomStateChangedReason
-import im.zego.zegoexpress.constants.ZegoScenario
-import im.zego.zegoexpress.constants.ZegoUpdateType
-import im.zego.zegoexpress.constants.ZegoViewMode
-import im.zego.zegoexpress.entity.ZegoBeautifyOption
-import im.zego.zegoexpress.entity.ZegoCanvas
-import im.zego.zegoexpress.entity.ZegoEngineProfile
-import im.zego.zegoexpress.entity.ZegoRoomConfig
-import im.zego.zegoexpress.entity.ZegoStream
-import im.zego.zegoexpress.entity.ZegoUser
 import io.github.jan.supabase.realtime.PostgresAction
 import io.github.jan.supabase.realtime.RealtimeChannel
 import kotlinx.coroutines.CoroutineScope
@@ -50,6 +42,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.decodeFromJsonElement
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 
 enum class CallState {
@@ -71,13 +67,13 @@ data class CurrentCallInfo(
     val isCameraOff: Boolean = false,
     val isFrontCamera: Boolean = true,
     val isSpeakerOn: Boolean = true,
-    val zegoAppId: Long = ZegoCallEngineManager.ZEGO_APP_ID,
-    val zegoAppSign: String = ZegoCallEngineManager.ZEGO_APP_SIGN,
+    val zegoAppId: Long = 0L,
+    val zegoAppSign: String = "",
     val isZegoInitialized: Boolean = true,
     val usePrebuiltCallUi: Boolean = false,
-    val zegoUIKitAppId: Long = ZegoCallEngineManager.ZEGO_APP_ID,
-    val zegoUIKitAppSign: String = ZegoCallEngineManager.ZEGO_APP_SIGN,
-    val stunServers: List<String> = ZegoCallEngineManager.PUBLIC_STUN_SERVERS,
+    val zegoUIKitAppId: Long = 0L,
+    val zegoUIKitAppSign: String = "",
+    val stunServers: List<String> = emptyList(),
     val turnUsername: String = "openrelayproject",
     val turnPassword: String = "openrelayproject",
     val offerToReceiveAudio: Boolean = true,
@@ -97,16 +93,22 @@ data class CurrentCallInfo(
 class ZegoCallEngineManager(private val context: Context) {
 
     companion object {
-        const val TAG = "Talkly_ZegoEngine"
+        const val TAG = "Talkly_AgoraEngine"
         val PUBLIC_STUN_SERVERS: List<String> = listOf(
             "stun:stun.l.google.com:19302",
-            "stun:stun1.l.google.com:19302",
-            "turn:openrelay.metered.ca:80",
-            "turn:openrelay.metered.ca:443",
-            "turn:openrelay.metered.ca:443?transport=tcp"
+            "stun:stun1.l.google.com:19302"
         )
         val ZEGO_APP_ID: Long = 196267710L
         val ZEGO_APP_SIGN: String = "620de7961f58b3a6f8390c8a484233ff60aafd59a6f4bc8a538b25c502fd4403"
+
+        val AGORA_APP_ID: String by lazy {
+            val id = try {
+                BuildConfig.AGORA_APP_ID
+            } catch (e: Exception) {
+                ""
+            }
+            if (id.isNullOrBlank()) "80b874784d164d9aba38cea4626ba400" else id
+        }
 
         @Volatile
         private var INSTANCE: ZegoCallEngineManager? = null
@@ -116,14 +118,35 @@ class ZegoCallEngineManager(private val context: Context) {
                 INSTANCE ?: ZegoCallEngineManager(context.applicationContext).also { INSTANCE = it }
             }
         }
+
+        /**
+         * Derives a deterministic positive 31-bit integer UID from a user UUID string.
+         * Agora numeric UIDs must be 32-bit unsigned integers (1 to 2,147,483,647).
+         */
+        fun getAgoraNumericUid(userUid: String): Int {
+            if (userUid.isBlank() || userUid == "self") {
+                return ((System.currentTimeMillis() % 1_000_000) + 1).toInt()
+            }
+            val crc = java.util.zip.CRC32()
+            crc.update(userUid.toByteArray(Charsets.UTF_8))
+            val value = (crc.value and 0x7FFFFFFFL).toInt()
+            return if (value == 0) 1 else value
+        }
     }
 
     private val callSoundManager = CallSoundManager(context)
+    private val httpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
 
-    private var expressEngine: ZegoExpressEngine? = null
+    private var rtcEngine: RtcEngine? = null
     private var isJoinedRoom = false
     private var localViewRef: View? = null
     private var remoteViewRef: View? = null
+    private var remoteUid: Int = 0
 
     private var callsRealtimeChannel: RealtimeChannel? = null
     private var callSyncJob: Job? = null
@@ -149,8 +172,8 @@ class ZegoCallEngineManager(private val context: Context) {
     var onCallLogAdded: ((CallLog) -> Unit)? = null
 
     init {
-        Log.i(TAG, "ZEGOCloud Express Engine initialized with AppID: $ZEGO_APP_ID")
-        initZegoExpressEngine(context)
+        Log.i(TAG, "Agora RTC Engine Manager initialized with AppID: $AGORA_APP_ID")
+        initRtcEngine(context)
 
         // Safety lifecycle state manager listener: force stop outgoing/incoming sounds on connected/ended state transitions
         scope.launch {
@@ -166,174 +189,191 @@ class ZegoCallEngineManager(private val context: Context) {
     }
 
     @Synchronized
-    private fun initZegoExpressEngine(ctx: Context) {
-        if (expressEngine != null) return
+    private fun initRtcEngine(ctx: Context) {
+        if (rtcEngine != null) return
         try {
             val app = ctx.applicationContext as? Application ?: return
-            val profile = ZegoEngineProfile().apply {
-                appID = ZEGO_APP_ID
-                appSign = ZEGO_APP_SIGN
-                scenario = ZegoScenario.COMMUNICATION
-                application = app
-            }
+            val config = RtcEngineConfig().apply {
+                mContext = app
+                mAppId = AGORA_APP_ID
+                mChannelProfile = Constants.CHANNEL_PROFILE_COMMUNICATION
+                mEventHandler = object : IRtcEngineEventHandler() {
+                    override fun onJoinChannelSuccess(channel: String?, uid: Int, elapsed: Int) {
+                        Log.i(TAG, "Agora onJoinChannelSuccess: channel=$channel, uid=$uid, elapsed=$elapsed")
+                    }
 
-            Log.i(TAG, "[DIAGNOSTIC] Calling ZegoExpressEngine.createEngine with AppID=$ZEGO_APP_ID")
-            expressEngine = ZegoExpressEngine.createEngine(profile, object : IZegoEventHandler() {
-                override fun onRoomUserUpdate(
-                    roomID: String?,
-                    updateType: ZegoUpdateType?,
-                    userList: ArrayList<ZegoUser>?
-                ) {
-                    Log.e(TAG, "[DIAGNOSTIC] onRoomUserUpdate: roomID=$roomID, updateType=$updateType, users=${userList?.size}")
-                    if (updateType == ZegoUpdateType.ADD && !userList.isNullOrEmpty()) {
-                        val currentState = _callState.value.state
-                        if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) {
-                            Log.d(TAG, "Remote peer joined Zego room: stopping outgoing ringtone immediately")
-                            ringingTimeoutJob?.cancel()
-                            callSoundManager.stopAllSounds()
-                            val isVideo = (_callState.value.callType == CallType.VIDEO)
-                            callSoundManager.configureAudioForActiveCall(isSpeakerOn = isVideo, isMuted = _callState.value.isMuted)
-                            _callState.value = _callState.value.copy(state = CallState.ACTIVE, isSpeakerOn = isVideo)
-                            startCallTimer()
+                    override fun onUserJoined(uid: Int, elapsed: Int) {
+                        Log.i(TAG, "Agora onUserJoined: uid=$uid, elapsed=$elapsed")
+                        scope.launch(Dispatchers.Main) {
+                            val currentState = _callState.value.state
+                            if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) {
+                                Log.d(TAG, "Remote peer joined channel: stopping outgoing ringtone immediately")
+                                ringingTimeoutJob?.cancel()
+                                callSoundManager.stopAllSounds()
+                                val isVideo = (_callState.value.callType == CallType.VIDEO)
+                                callSoundManager.configureAudioForActiveCall(
+                                    isSpeakerOn = isVideo,
+                                    isMuted = _callState.value.isMuted
+                                )
+                                _callState.value = _callState.value.copy(
+                                    state = CallState.ACTIVE,
+                                    isSpeakerOn = isVideo,
+                                    remoteStreamId = uid.toString(),
+                                    isRemoteStreamPlaying = true
+                                )
+                                startCallTimer()
+                            } else {
+                                _callState.value = _callState.value.copy(
+                                    remoteStreamId = uid.toString(),
+                                    isRemoteStreamPlaying = true
+                                )
+                            }
+                            remoteUid = uid
+                            bindRemoteView(uid)
                         }
                     }
-                }
 
-                override fun onRoomStreamUpdate(
-                    roomID: String?,
-                    updateType: ZegoUpdateType?,
-                    streamList: ArrayList<ZegoStream>?,
-                    extendedData: JSONObject?
-                ) {
-                    if (streamList.isNullOrEmpty() || updateType == null) return
-                    Log.e(TAG, "[DIAGNOSTIC] onRoomStreamUpdate: roomID=$roomID, updateType=$updateType, streams=${streamList.size}")
-
-                    if (updateType == ZegoUpdateType.ADD) {
-                        Log.d(TAG, "Remote stream ADDED: stopping outgoing ringtone and configuring active audio")
-                        ringingTimeoutJob?.cancel()
-                        callSoundManager.stopAllSounds()
-                        val isVideo = (_callState.value.callType == CallType.VIDEO)
-                        callSoundManager.configureAudioForActiveCall(isSpeakerOn = isVideo, isMuted = _callState.value.isMuted)
-                        _callState.value = _callState.value.copy(
-                            state = CallState.ACTIVE,
-                            isSpeakerOn = isVideo
-                        )
-
-                        for (stream in streamList) {
-                            val streamID = stream.streamID
-                            Log.e(TAG, "[DIAGNOSTIC] Remote stream ADDED: streamID=$streamID by user=${stream.user?.userID}")
+                    override fun onFirstRemoteVideoDecoded(uid: Int, width: Int, height: Int, elapsed: Int) {
+                        Log.i(TAG, "Agora onFirstRemoteVideoDecoded: uid=$uid (${width}x${height})")
+                        scope.launch(Dispatchers.Main) {
+                            remoteUid = uid
                             _callState.value = _callState.value.copy(
-                                remoteStreamId = streamID,
+                                remoteStreamId = uid.toString(),
                                 isRemoteStreamPlaying = true
                             )
-                            bindRemoteStream(streamID)
+                            bindRemoteView(uid)
                         }
-                    } else if (updateType == ZegoUpdateType.DELETE) {
-                        for (stream in streamList) {
-                            val streamID = stream.streamID
-                            Log.e(TAG, "[DIAGNOSTIC] Remote stream DELETED: streamID=$streamID")
-                            expressEngine?.stopPlayingStream(streamID)
-                            if (_callState.value.remoteStreamId == streamID) {
-                                _callState.value = _callState.value.copy(
-                                    remoteStreamId = "",
-                                    isRemoteStreamPlaying = false
-                                )
+                    }
+
+                    override fun onUserOffline(uid: Int, reason: Int) {
+                        Log.i(TAG, "Agora onUserOffline: uid=$uid, reason=$reason")
+                        scope.launch(Dispatchers.Main) {
+                            val currentState = _callState.value.state
+                            if (currentState != CallState.IDLE && currentState != CallState.ENDED) {
+                                endCallInternal("User Offline")
                             }
                         }
                     }
-                }
 
-                override fun onRoomStateChanged(
-                    roomID: String?,
-                    reason: ZegoRoomStateChangedReason?,
-                    errorCode: Int,
-                    extendedData: JSONObject?
-                ) {
-                    Log.e(TAG, "[DIAGNOSTIC] onRoomStateChanged: roomID=$roomID, reason=$reason, errorCode=$errorCode (${getZegoErrorMessage(errorCode)})")
-                }
-
-                override fun onPublisherStateUpdate(
-                    streamID: String?,
-                    state: ZegoPublisherState?,
-                    errorCode: Int,
-                    extendedData: JSONObject?
-                ) {
-                    Log.e(TAG, "[DIAGNOSTIC] onPublisherStateUpdate: streamID=$streamID, state=$state, errorCode=$errorCode (${getZegoErrorMessage(errorCode)})")
-                }
-
-                override fun onPlayerStateUpdate(
-                    streamID: String?,
-                    state: ZegoPlayerState?,
-                    errorCode: Int,
-                    extendedData: JSONObject?
-                ) {
-                    Log.e(TAG, "[DIAGNOSTIC] onPlayerStateUpdate: streamID=$streamID, state=$state, errorCode=$errorCode (${getZegoErrorMessage(errorCode)})")
-                    if (state == ZegoPlayerState.PLAYING) {
-                        Log.d(TAG, "Remote player state PLAYING: stopping ringtone immediately")
-                        ringingTimeoutJob?.cancel()
-                        callSoundManager.stopAllSounds()
-                        val isVideo = (_callState.value.callType == CallType.VIDEO)
-                        callSoundManager.configureAudioForActiveCall(isSpeakerOn = isVideo, isMuted = _callState.value.isMuted)
-                        _callState.value = _callState.value.copy(
-                            state = CallState.ACTIVE,
-                            isRemoteStreamPlaying = true
-                        )
+                    override fun onError(err: Int) {
+                        Log.e(TAG, "Agora onError: code=$err")
                     }
                 }
-            })
-            Log.i(TAG, "ZegoExpressEngine created successfully")
+            }
+
+            Log.i(TAG, "[DIAGNOSTIC] Calling RtcEngine.create with AppID=$AGORA_APP_ID")
+            rtcEngine = RtcEngine.create(config).apply {
+                enableAudio()
+                enableVideo()
+                setChannelProfile(Constants.CHANNEL_PROFILE_COMMUNICATION)
+            }
+            Log.i(TAG, "Agora RtcEngine created successfully")
         } catch (e: Throwable) {
-            Log.e(TAG, "Failed to create ZegoExpressEngine: ${e.message}", e)
+            Log.e(TAG, "Failed to create Agora RtcEngine: ${e.message}", e)
         }
     }
 
+    private suspend fun fetchAgoraToken(channelId: String, uid: Int): String? = withContext(Dispatchers.IO) {
+        try {
+            val supabaseUrl = SupabaseClientProvider.supabaseUrl
+            val publishableKey = SupabaseClientProvider.supabasePublishableKey
+            val currentSessionToken = try {
+                SupabaseClientProvider.auth.currentAccessTokenOrNull()
+            } catch (e: Exception) {
+                null
+            }
+
+            if (currentSessionToken.isNullOrBlank()) {
+                Log.w(TAG, "fetchAgoraToken: No Supabase user session token available. Attempting tokenless fallback.")
+                return@withContext null
+            }
+
+            val json = JSONObject().apply {
+                put("channelId", channelId)
+                put("uid", uid)
+            }
+
+            val requestBody = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+            val edgeFunctionUrl = "$supabaseUrl/functions/v1/generate-agora-token"
+
+            val request = Request.Builder()
+                .url(edgeFunctionUrl)
+                .addHeader("apikey", publishableKey)
+                .addHeader("Authorization", "Bearer $currentSessionToken")
+                .addHeader("Content-Type", "application/json")
+                .post(requestBody)
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            val responseBody = response.body?.string()
+            if (response.isSuccessful && !responseBody.isNullOrBlank()) {
+                val resJson = JSONObject(responseBody)
+                val token = resJson.optString("token")
+                if (token.isNotBlank()) {
+                    Log.d(TAG, "Successfully fetched Agora RTC token for channel=$channelId, uid=$uid")
+                    return@withContext token
+                }
+            } else {
+                Log.e(TAG, "Failed to fetch Agora token: code=${response.code}, body=$responseBody")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error fetching Agora token from Edge Function: ${e.localizedMessage}", e)
+        }
+        return@withContext null
+    }
+
     fun joinCallRoom(roomID: String, isVideoCall: Boolean) {
-        initZegoExpressEngine(context)
+        initRtcEngine(context)
         if (isJoinedRoom && _callState.value.roomID == roomID) {
-            Log.d(TAG, "Already joined Zego room: $roomID")
+            Log.d(TAG, "Already joined Agora room: $roomID")
             return
         }
 
         val myProfile = currentUserProfile ?: getLocalUserProfile()
         val myUserId = if (myProfile.uid.isNotBlank() && myProfile.uid != "self") myProfile.uid else "user_${System.currentTimeMillis()}"
-        val myUserName = myProfile.name.ifBlank { "Talkly User" }
-        val localStreamId = "stream_$myUserId"
+        val numericUid = getAgoraNumericUid(myUserId)
 
         isJoinedRoom = true
         _callState.value = _callState.value.copy(
-            localStreamId = localStreamId,
+            localStreamId = numericUid.toString(),
             roomID = roomID
         )
 
         // Hardware permissions & explicit device controls
-        expressEngine?.enableCamera(isVideoCall)
-        expressEngine?.muteMicrophone(false)
-        expressEngine?.muteSpeaker(false)
-        expressEngine?.setAudioRouteToSpeaker(isVideoCall)
-        expressEngine?.useFrontCamera(true)
-
         if (isVideoCall) {
+            rtcEngine?.enableVideo()
+            rtcEngine?.startPreview()
             enableBeautyFilter(true)
+        } else {
+            rtcEngine?.disableVideo()
         }
+        rtcEngine?.enableAudio()
+        rtcEngine?.muteLocalAudioStream(false)
+        rtcEngine?.setEnableSpeakerphone(isVideoCall)
 
-        // Login to room
-        val user = ZegoUser(myUserId, myUserName)
-        val roomConfig = ZegoRoomConfig()
-        Log.e(TAG, "[DIAGNOSTIC] Attempting loginRoom: roomID=$roomID, userID=$myUserId")
-        expressEngine?.loginRoom(roomID, user, roomConfig) { errorCode, extendedData ->
-            Log.e(TAG, "[DIAGNOSTIC] loginRoom callback: roomID=$roomID, errorCode=$errorCode (${getZegoErrorMessage(errorCode)})")
-        }
-
-        // Publish local audio/video stream
-        Log.e(TAG, "[DIAGNOSTIC] Attempting startPublishingStream: $localStreamId")
-        expressEngine?.startPublishingStream(localStreamId)
-        Log.i(TAG, "Joined room $roomID as $myUserId ($myUserName), publishing stream $localStreamId")
-
-        // Attach local preview if view is bound
+        // Attach local preview if view is already bound
         localViewRef?.let { view ->
             if (isVideoCall) {
-                val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
-                expressEngine?.startPreview(canvas)
+                val canvas = VideoCanvas(view, VideoCanvas.RENDER_MODE_HIDDEN, 0)
+                rtcEngine?.setupLocalVideo(canvas)
+                rtcEngine?.startPreview()
+            }
+        }
+
+        // Fetch dynamic token and join Agora channel
+        callScope.launch {
+            val token = fetchAgoraToken(roomID, numericUid) ?: ""
+            withContext(Dispatchers.Main) {
+                val options = ChannelMediaOptions().apply {
+                    autoSubscribeAudio = true
+                    autoSubscribeVideo = true
+                    publishCameraTrack = isVideoCall
+                    publishMicrophoneTrack = true
+                    clientRoleType = Constants.CLIENT_ROLE_BROADCASTER
+                    channelProfile = Constants.CHANNEL_PROFILE_COMMUNICATION
+                }
+                val joinResult = rtcEngine?.joinChannel(token, roomID, numericUid, options)
+                Log.i(TAG, "Agora joinChannel called for room $roomID as uid $numericUid (result=$joinResult)")
             }
         }
     }
@@ -344,27 +384,18 @@ class ZegoCallEngineManager(private val context: Context) {
 
         val current = _callState.value
         val roomID = current.roomID
-        val remoteStreamId = current.remoteStreamId
 
         try {
-            expressEngine?.stopPreview()
-            expressEngine?.stopPublishingStream()
-            if (remoteStreamId.isNotBlank()) {
-                expressEngine?.stopPlayingStream(remoteStreamId)
-            }
-            if (roomID.isNotBlank()) {
-                Log.e(TAG, "[DIAGNOSTIC] Attempting logoutRoom: $roomID")
-                expressEngine?.logoutRoom(roomID) { errorCode, extendedData ->
-                    Log.e(TAG, "[DIAGNOSTIC] logoutRoom callback: roomID=$roomID, errorCode=$errorCode (${getZegoErrorMessage(errorCode)})")
-                }
-            }
-            Log.i(TAG, "Left Zego room: $roomID")
+            rtcEngine?.stopPreview()
+            rtcEngine?.leaveChannel()
+            Log.i(TAG, "Left Agora channel: $roomID")
         } catch (e: Exception) {
-            Log.w(TAG, "Error leaving Zego room: ${e.message}")
+            Log.w(TAG, "Error leaving Agora channel: ${e.message}")
         }
 
         localViewRef = null
         remoteViewRef = null
+        remoteUid = 0
         _callState.value = _callState.value.copy(
             localStreamId = "",
             remoteStreamId = "",
@@ -376,104 +407,59 @@ class ZegoCallEngineManager(private val context: Context) {
         localViewRef = view
         val isVideo = (_callState.value.callType == CallType.VIDEO)
         if (view != null && isVideo) {
-            expressEngine?.enableCamera(true)
+            rtcEngine?.enableVideo()
+            val canvas = VideoCanvas(view, VideoCanvas.RENDER_MODE_HIDDEN, 0)
+            rtcEngine?.setupLocalVideo(canvas)
+            rtcEngine?.startPreview()
             enableBeautyFilter(true)
-            if (view is TextureView) {
-                if (view.isAvailable) {
-                    val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
-                    expressEngine?.startPreview(canvas)
-                    Log.d(TAG, "Attached local video preview (TextureView available)")
-                } else {
-                    view.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                            enableBeautyFilter(true)
-                            val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
-                            expressEngine?.startPreview(canvas)
-                            Log.d(TAG, "Attached local video preview in onSurfaceTextureAvailable")
-                        }
-                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
-                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                            expressEngine?.stopPreview()
-                            return true
-                        }
-                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
-                    }
-                }
-            } else {
-                val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
-                expressEngine?.startPreview(canvas)
-                Log.d(TAG, "Attached local video preview view with beauty filter")
-            }
+            Log.d(TAG, "Attached local video preview to Agora VideoCanvas")
         } else if (view == null) {
-            expressEngine?.stopPreview()
+            rtcEngine?.setupLocalVideo(VideoCanvas(null, VideoCanvas.RENDER_MODE_HIDDEN, 0))
         }
     }
 
     fun enableBeautyFilter(enable: Boolean = true) {
-        if (expressEngine == null) return
+        if (rtcEngine == null) return
         try {
             if (enable) {
-                val beautifyOption = ZegoBeautifyOption().apply {
-                    whitenFactor = 0.85 // Skin whitening & bright lighting (0.0 to 1.0)
-                    sharpenFactor = 0.6 // Facial detail sharpening (0.0 to 1.0)
+                val beautyOptions = BeautyOptions().apply {
+                    lighteningContrastLevel = BeautyOptions.LIGHTENING_CONTRAST_NORMAL
+                    lighteningLevel = 0.7f
+                    smoothnessLevel = 0.5f
+                    rednessLevel = 0.1f
+                    sharpnessLevel = 0.3f
                 }
-                expressEngine?.setBeautifyOption(beautifyOption, ZegoPublishChannel.MAIN)
-                Log.i(TAG, "Zego express real-time Beauty & Brightness filter ENABLED (Whiten=0.8, Sharpen=0.5)")
+                rtcEngine?.setBeautyEffectOptions(true, beautyOptions)
+                Log.i(TAG, "Agora real-time Beauty & Brightness filter ENABLED")
             } else {
-                val defaultOption = ZegoBeautifyOption().apply {
-                    whitenFactor = 0.0
-                    sharpenFactor = 0.0
-                }
-                expressEngine?.setBeautifyOption(defaultOption, ZegoPublishChannel.MAIN)
-                Log.i(TAG, "Zego express Beauty filter DISABLED")
+                rtcEngine?.setBeautyEffectOptions(false, BeautyOptions())
+                Log.i(TAG, "Agora Beauty filter DISABLED")
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed setting Zego beautify options: ${e.localizedMessage}")
+            Log.w(TAG, "Failed setting Agora beautify options: ${e.localizedMessage}")
         }
     }
 
     fun setRemoteVideoView(view: View?) {
         remoteViewRef = view
-        val remoteStreamId = _callState.value.remoteStreamId
-        if (remoteStreamId.isNotBlank()) {
-            bindRemoteStream(remoteStreamId)
+        val rUid = remoteUid
+        if (view != null && rUid > 0) {
+            bindRemoteView(rUid)
+        } else if (view == null && rUid > 0) {
+            rtcEngine?.setupRemoteVideo(VideoCanvas(null, VideoCanvas.RENDER_MODE_HIDDEN, rUid))
         }
     }
 
-    private fun bindRemoteStream(streamID: String) {
-        if (streamID.isBlank()) return
+    private fun bindRemoteView(uid: Int) {
+        if (uid <= 0) return
         val view = remoteViewRef
         if (view != null) {
-            if (view is TextureView) {
-                if (view.isAvailable) {
-                    val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
-                    expressEngine?.startPlayingStream(streamID, canvas)
-                    _callState.value = _callState.value.copy(isRemoteStreamPlaying = true)
-                    Log.d(TAG, "Playing remote stream $streamID on available remote TextureView")
-                } else {
-                    view.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                            val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
-                            expressEngine?.startPlayingStream(streamID, canvas)
-                            _callState.value = _callState.value.copy(isRemoteStreamPlaying = true)
-                            Log.d(TAG, "Playing remote stream $streamID in onSurfaceTextureAvailable")
-                        }
-                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
-                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                            return true
-                        }
-                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
-                    }
-                }
-            } else {
-                val canvas = ZegoCanvas(view).apply { viewMode = ZegoViewMode.ASPECT_FILL }
-                expressEngine?.startPlayingStream(streamID, canvas)
-                _callState.value = _callState.value.copy(isRemoteStreamPlaying = true)
-                Log.d(TAG, "Playing remote stream $streamID on remote view")
-            }
+            val canvas = VideoCanvas(view, VideoCanvas.RENDER_MODE_HIDDEN, uid)
+            rtcEngine?.setupRemoteVideo(canvas)
+            _callState.value = _callState.value.copy(isRemoteStreamPlaying = true)
+            Log.d(TAG, "Bound remote video for uid=$uid")
         } else {
-            expressEngine?.startPlayingStream(streamID, ZegoCanvas(null))
-            Log.d(TAG, "Playing remote stream $streamID as audio-only / background canvas (awaiting remote view)")
+            Log.d(TAG, "Awaiting remote view binding for uid=$uid")
         }
     }
 
@@ -529,7 +515,7 @@ class ZegoCallEngineManager(private val context: Context) {
             _callState.value = CurrentCallInfo(state = CallState.IDLE)
             _callLogs.value = emptyList()
         } catch (e: Exception) {
-            Log.w(TAG, "Error clearing Zego session: ${e.localizedMessage}")
+            Log.w(TAG, "Error clearing session: ${e.localizedMessage}")
         }
     }
 
@@ -876,7 +862,7 @@ class ZegoCallEngineManager(private val context: Context) {
         callType: CallType,
         isBlocked: Boolean = false
     ) {
-        Log.e("Talkly_ZegoEngine", "[CALLER_DIAGNOSTIC] startOutgoingCall() received callType=$callType")
+        Log.e("Talkly_AgoraEngine", "[CALLER_DIAGNOSTIC] startOutgoingCall() received callType=$callType")
         if (isBlocked) {
             Log.w(TAG, "Cannot start call: ${member.name} is blocked")
             android.widget.Toast.makeText(context, "Call failed: User is blocked", android.widget.Toast.LENGTH_SHORT).show()
@@ -916,7 +902,7 @@ class ZegoCallEngineManager(private val context: Context) {
         )
         Log.d(TAG, "Starting outgoing ${callType.name} call to ${member.name} in room $roomID")
 
-        // Connect and publish stream early for outgoing call
+        // Join Agora RTC channel early for outgoing call
         joinCallRoom(roomID, isVideo)
 
         // Async resolve receiver UUID if needed and insert active_call row in Supabase
@@ -967,7 +953,7 @@ class ZegoCallEngineManager(private val context: Context) {
                 updatedAt = nowIso
             )
 
-            Log.e("Talkly_ZegoEngine", "[CALLER_DIAGNOSTIC] Inserting into Supabase: callerId=$effectiveCallerUid, receiverId=$finalReceiverId, roomId=$roomID, callType=${callType.name}")
+            Log.e("Talkly_AgoraEngine", "[CALLER_DIAGNOSTIC] Inserting into Supabase: callerId=$effectiveCallerUid, receiverId=$finalReceiverId, roomId=$roomID, callType=${callType.name}")
             val createResult = SupabaseCallService.createActiveCall(activeCall)
             if (createResult.isFailure) {
                 val errorMsg = createResult.exceptionOrNull()?.localizedMessage ?: "Unknown error"
@@ -1202,7 +1188,7 @@ class ZegoCallEngineManager(private val context: Context) {
         val current = _callState.value
         val newMuted = !current.isMuted
         _callState.value = current.copy(isMuted = newMuted)
-        expressEngine?.muteMicrophone(newMuted)
+        rtcEngine?.muteLocalAudioStream(newMuted)
         callSoundManager.setMicrophoneMute(newMuted)
     }
 
@@ -1211,21 +1197,22 @@ class ZegoCallEngineManager(private val context: Context) {
         val newCameraOff = !current.isCameraOff
         _callState.value = current.copy(isCameraOff = newCameraOff)
         Log.e(TAG, "[DIAGNOSTIC] _callState emitted (toggleCamera): state=${_callState.value.state}, callType=${_callState.value.callType}, isCameraOff=${_callState.value.isCameraOff}")
-        expressEngine?.enableCamera(!newCameraOff)
+        rtcEngine?.enableLocalVideo(!newCameraOff)
+        rtcEngine?.muteLocalVideoStream(newCameraOff)
     }
 
     fun flipCamera() {
         val current = _callState.value
         val newFront = !current.isFrontCamera
         _callState.value = current.copy(isFrontCamera = newFront)
-        expressEngine?.useFrontCamera(newFront)
+        rtcEngine?.switchCamera()
     }
 
     fun toggleSpeaker() {
         val current = _callState.value
         val newSpeaker = !current.isSpeakerOn
         _callState.value = current.copy(isSpeakerOn = newSpeaker)
-        expressEngine?.setAudioRouteToSpeaker(newSpeaker)
+        rtcEngine?.setEnableSpeakerphone(newSpeaker)
         callSoundManager.setSpeakerphoneOn(newSpeaker)
     }
 
@@ -1292,22 +1279,6 @@ class ZegoCallEngineManager(private val context: Context) {
                     Log.w(TAG, "Error persisting call log in Supabase: ${e.localizedMessage}")
                 }
             }
-        }
-    }
-
-    private fun getZegoErrorMessage(errorCode: Int): String {
-        return when (errorCode) {
-            0 -> "SUCCESS (0)"
-            1000001 -> "PARAM_INVALID (1000001)"
-            1002001 -> "AUTH_FAILED (1002001) - Check AppID/AppSign"
-            1002036 -> "ROOM_ALREADY_IN_ROOM (1002036)"
-            1002050 -> "ROOM_COUNT_LIMIT_EXCEEDED (1002050)"
-            1003001 -> "PUBLISH_STREAM_FAILED (1003001)"
-            1003005 -> "PUBLISH_STREAM_ID_CONFLICT (1003005)"
-            1004001 -> "PLAY_STREAM_FAILED (1004001)"
-            1004002 -> "PLAY_STREAM_NOT_EXIST (1004002)"
-            1009001 -> "TRIAL_LIMIT_EXCEEDED (1009001)"
-            else -> "CODE_$errorCode"
         }
     }
 }

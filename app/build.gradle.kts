@@ -153,7 +153,7 @@ dependencies {
 
   // Firebase Cloud Messaging (FCM push delivery only)
   implementation(libs.firebase.messaging)
-  implementation("im.zego:express-video:3.15.0")
+  implementation("io.agora.rtc:full-sdk:4.3.0")
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
