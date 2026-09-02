@@ -22,15 +22,14 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
-    ndk {
-      abiFilters.addAll(setOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
-    }
   }
 
   splits {
     abi {
-      isEnable = false
+      isEnable = true
+      reset()
+      include("armeabi-v7a", "arm64-v8a")
+      isUniversalApk = false
     }
   }
 
@@ -67,7 +66,8 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       val releaseKeystore = file(System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks")
       if (releaseKeystore.exists()) {
@@ -153,7 +153,7 @@ dependencies {
 
   // Firebase Cloud Messaging (FCM push delivery only)
   implementation(libs.firebase.messaging)
-  implementation("io.agora.rtc:full-sdk:4.3.0")
+  implementation("io.agora.rtc:full-rtc-basic:4.3.0")
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

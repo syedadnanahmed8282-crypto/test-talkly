@@ -199,11 +199,18 @@ class ZegoCallEngineManager(private val context: Context) {
                 mChannelProfile = Constants.CHANNEL_PROFILE_COMMUNICATION
                 mEventHandler = object : IRtcEngineEventHandler() {
                     override fun onJoinChannelSuccess(channel: String?, uid: Int, elapsed: Int) {
-                        Log.i(TAG, "Agora onJoinChannelSuccess: channel=$channel, uid=$uid, elapsed=$elapsed")
+                        Log.i(TAG, "[AGORA_SEQ_5] onJoinChannelSuccess: channel=$channel, uid=$uid, elapsed=$elapsed")
+                    }
+
+                    override fun onConnectionStateChanged(state: Int, reason: Int) {
+                        Log.i(
+                            TAG,
+                            "[AGORA_SEQ_7] onConnectionStateChanged: state=$state (${getConnectionStateName(state)}), reason=$reason (${getConnectionChangedReasonName(reason)})"
+                        )
                     }
 
                     override fun onUserJoined(uid: Int, elapsed: Int) {
-                        Log.i(TAG, "Agora onUserJoined: uid=$uid, elapsed=$elapsed")
+                        Log.i(TAG, "[AGORA_SEQ_8] onUserJoined: uid=$uid, elapsed=$elapsed")
                         scope.launch(Dispatchers.Main) {
                             val currentState = _callState.value.state
                             if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) {
@@ -234,7 +241,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     }
 
                     override fun onFirstRemoteVideoDecoded(uid: Int, width: Int, height: Int, elapsed: Int) {
-                        Log.i(TAG, "Agora onFirstRemoteVideoDecoded: uid=$uid (${width}x${height})")
+                        Log.i(TAG, "[AGORA_SEQ_9] onFirstRemoteVideoDecoded: uid=$uid (${width}x${height}), elapsed=$elapsed")
                         scope.launch(Dispatchers.Main) {
                             remoteUid = uid
                             _callState.value = _callState.value.copy(
@@ -246,7 +253,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     }
 
                     override fun onUserOffline(uid: Int, reason: Int) {
-                        Log.i(TAG, "Agora onUserOffline: uid=$uid, reason=$reason")
+                        Log.i(TAG, "[AGORA_SEQ_10] onUserOffline: uid=$uid, reason=$reason (${getUserOfflineReasonName(reason)})")
                         scope.launch(Dispatchers.Main) {
                             val currentState = _callState.value.state
                             if (currentState != CallState.IDLE && currentState != CallState.ENDED) {
@@ -256,7 +263,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     }
 
                     override fun onError(err: Int) {
-                        Log.e(TAG, "Agora onError: code=$err")
+                        Log.e(TAG, "[AGORA_SEQ_6] onError: code=$err (${getAgoraErrorCodeName(err)})")
                     }
                 }
             }
@@ -273,18 +280,91 @@ class ZegoCallEngineManager(private val context: Context) {
         }
     }
 
+    private fun getConnectionStateName(state: Int): String {
+        return when (state) {
+            Constants.CONNECTION_STATE_DISCONNECTED -> "DISCONNECTED (1)"
+            Constants.CONNECTION_STATE_CONNECTING -> "CONNECTING (2)"
+            Constants.CONNECTION_STATE_CONNECTED -> "CONNECTED (3)"
+            Constants.CONNECTION_STATE_RECONNECTING -> "RECONNECTING (4)"
+            Constants.CONNECTION_STATE_FAILED -> "FAILED (5)"
+            else -> "UNKNOWN ($state)"
+        }
+    }
+
+    private fun getConnectionChangedReasonName(reason: Int): String {
+        return when (reason) {
+            Constants.CONNECTION_CHANGED_CONNECTING -> "CONNECTING (0)"
+            Constants.CONNECTION_CHANGED_JOIN_SUCCESS -> "JOIN_SUCCESS (1)"
+            Constants.CONNECTION_CHANGED_INTERRUPTED -> "INTERRUPTED (2)"
+            Constants.CONNECTION_CHANGED_BANNED_BY_SERVER -> "BANNED_BY_SERVER (3)"
+            Constants.CONNECTION_CHANGED_JOIN_FAILED -> "JOIN_FAILED (4)"
+            Constants.CONNECTION_CHANGED_LEAVE_CHANNEL -> "LEAVE_CHANNEL (5)"
+            Constants.CONNECTION_CHANGED_INVALID_APP_ID -> "INVALID_APP_ID (6)"
+            Constants.CONNECTION_CHANGED_INVALID_CHANNEL_NAME -> "INVALID_CHANNEL_NAME (7)"
+            Constants.CONNECTION_CHANGED_INVALID_TOKEN -> "INVALID_TOKEN (8)"
+            Constants.CONNECTION_CHANGED_TOKEN_EXPIRED -> "TOKEN_EXPIRED (9)"
+            Constants.CONNECTION_CHANGED_REJECTED_BY_SERVER -> "REJECTED_BY_SERVER (10)"
+            Constants.CONNECTION_CHANGED_SETTING_PROXY_SERVER -> "SETTING_PROXY_SERVER (11)"
+            Constants.CONNECTION_CHANGED_RENEW_TOKEN -> "RENEW_TOKEN (12)"
+            Constants.CONNECTION_CHANGED_CLIENT_IP_ADDRESS_CHANGED -> "CLIENT_IP_ADDRESS_CHANGED (13)"
+            Constants.CONNECTION_CHANGED_KEEP_ALIVE_TIMEOUT -> "KEEP_ALIVE_TIMEOUT (14)"
+            else -> "REASON_CODE ($reason)"
+        }
+    }
+
+    private fun getUserOfflineReasonName(reason: Int): String {
+        return when (reason) {
+            Constants.USER_OFFLINE_QUIT -> "QUIT (0)"
+            Constants.USER_OFFLINE_DROPPED -> "DROPPED (1)"
+            Constants.USER_OFFLINE_BECOME_AUDIENCE -> "BECOME_AUDIENCE (2)"
+            else -> "OFFLINE_CODE ($reason)"
+        }
+    }
+
+    private fun getAgoraErrorCodeName(err: Int): String {
+        return when (err) {
+            Constants.ERR_OK -> "ERR_OK (0)"
+            Constants.ERR_FAILED -> "ERR_FAILED (1)"
+            Constants.ERR_INVALID_ARGUMENT -> "ERR_INVALID_ARGUMENT (2)"
+            Constants.ERR_NOT_READY -> "ERR_NOT_READY (3)"
+            Constants.ERR_NOT_SUPPORTED -> "ERR_NOT_SUPPORTED (4)"
+            Constants.ERR_REFUSED -> "ERR_REFUSED (5)"
+            Constants.ERR_BUFFER_TOO_SMALL -> "ERR_BUFFER_TOO_SMALL (6)"
+            Constants.ERR_NOT_INITIALIZED -> "ERR_NOT_INITIALIZED (7)"
+            Constants.ERR_INVALID_APP_ID -> "ERR_INVALID_APP_ID (101)"
+            Constants.ERR_INVALID_CHANNEL_NAME -> "ERR_INVALID_CHANNEL_NAME (102)"
+            Constants.ERR_TOKEN_EXPIRED -> "ERR_TOKEN_EXPIRED (109)"
+            Constants.ERR_INVALID_TOKEN -> "ERR_INVALID_TOKEN (110)"
+            Constants.ERR_CONNECTION_INTERRUPTED -> "ERR_CONNECTION_INTERRUPTED (111)"
+            Constants.ERR_CONNECTION_LOST -> "ERR_CONNECTION_LOST (112)"
+            else -> "ERR_CODE ($err)"
+        }
+    }
+
     private suspend fun fetchAgoraToken(channelId: String, uid: Int): String? = withContext(Dispatchers.IO) {
         try {
             val supabaseUrl = SupabaseClientProvider.supabaseUrl
             val publishableKey = SupabaseClientProvider.supabasePublishableKey
+            val session = try {
+                SupabaseClientProvider.auth.currentSessionOrNull()
+            } catch (e: Exception) {
+                null
+            }
+            val sessionExists = (session != null)
             val currentSessionToken = try {
                 SupabaseClientProvider.auth.currentAccessTokenOrNull()
             } catch (e: Exception) {
                 null
             }
+            val accessTokenExists = !currentSessionToken.isNullOrBlank()
 
-            if (currentSessionToken.isNullOrBlank()) {
-                Log.w(TAG, "fetchAgoraToken: No Supabase user session token available. Attempting tokenless fallback.")
+            Log.i(
+                TAG,
+                "[AGORA_TOKEN_DIAGNOSTIC] Starting token fetch: channelId='$channelId', numericUid=$uid, supabaseUrl='$supabaseUrl', sessionExists=$sessionExists, accessTokenExists=$accessTokenExists"
+            )
+
+            if (!accessTokenExists) {
+                Log.e(TAG, "[AGORA_TOKEN_DIAGNOSTIC] FAILED: No Supabase authenticated user session token available. Cannot authenticate request to Edge Function.")
                 return@withContext null
             }
 
@@ -305,19 +385,39 @@ class ZegoCallEngineManager(private val context: Context) {
                 .build()
 
             val response = httpClient.newCall(request).execute()
-            val responseBody = response.body?.string()
-            if (response.isSuccessful && !responseBody.isNullOrBlank()) {
-                val resJson = JSONObject(responseBody)
-                val token = resJson.optString("token")
-                if (token.isNotBlank()) {
-                    Log.d(TAG, "Successfully fetched Agora RTC token for channel=$channelId, uid=$uid")
-                    return@withContext token
+            val httpStatusCode = response.code
+            val isSuccess = response.isSuccessful
+            val responseBody = response.body?.string() ?: ""
+
+            Log.i(TAG, "[AGORA_TOKEN_DIAGNOSTIC] Edge Function response: HTTP status=$httpStatusCode, isSuccessful=$isSuccess")
+
+            if (isSuccess && responseBody.isNotBlank()) {
+                try {
+                    val resJson = JSONObject(responseBody)
+                    val returnedChannelId = resJson.optString("channelId", "")
+                    val returnedUid = resJson.optLong("uid", -1L)
+                    val token = resJson.optString("token", "")
+                    val isTokenNonEmpty = token.isNotBlank()
+                    val tokenLength = token.length
+
+                    Log.i(
+                        TAG,
+                        "[AGORA_TOKEN_DIAGNOSTIC] Parsed Edge Function payload: returnedChannelId='$returnedChannelId', returnedUid=$returnedUid, isTokenNonEmpty=$isTokenNonEmpty, tokenLength=$tokenLength"
+                    )
+
+                    if (isTokenNonEmpty) {
+                        return@withContext token
+                    } else {
+                        Log.e(TAG, "[AGORA_TOKEN_DIAGNOSTIC] FAILED: Edge Function returned HTTP 200 but token field was empty or null in response payload.")
+                    }
+                } catch (jsonErr: Exception) {
+                    Log.e(TAG, "[AGORA_TOKEN_DIAGNOSTIC] FAILED: Could not parse response JSON from Edge Function: ${jsonErr.localizedMessage}")
                 }
             } else {
-                Log.e(TAG, "Failed to fetch Agora token: code=${response.code}, body=$responseBody")
+                Log.e(TAG, "[AGORA_TOKEN_DIAGNOSTIC] FAILED: HTTP $httpStatusCode, body=$responseBody")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error fetching Agora token from Edge Function: ${e.localizedMessage}", e)
+            Log.e(TAG, "[AGORA_TOKEN_DIAGNOSTIC] Error fetching Agora token from Edge Function: ${e.localizedMessage}", e)
         }
         return@withContext null
     }
@@ -362,7 +462,30 @@ class ZegoCallEngineManager(private val context: Context) {
 
         // Fetch dynamic token and join Agora channel
         callScope.launch {
-            val token = fetchAgoraToken(roomID, numericUid) ?: ""
+            Log.i(
+                TAG,
+                "[AGORA_SEQ_1] Before fetchAgoraToken: channelId='$roomID', numericUid=$numericUid, userId='$myUserId', isVideoCall=$isVideoCall"
+            )
+            val token = fetchAgoraToken(roomID, numericUid)
+            Log.i(
+                TAG,
+                "[AGORA_SEQ_2] After fetchAgoraToken: channelId='$roomID', numericUid=$numericUid, success=${!token.isNullOrBlank()}, tokenLength=${token?.length ?: 0}"
+            )
+
+            if (token.isNullOrBlank()) {
+                Log.e(
+                    TAG,
+                    "[AGORA_ERROR] fetchAgoraToken returned NULL or BLANK token for roomID='$roomID', numericUid=$numericUid. ABORTING joinChannel() to prevent invalid join!"
+                )
+                withContext(Dispatchers.Main) {
+                    isJoinedRoom = false
+                    _callState.value = _callState.value.copy(localStreamId = "")
+                    android.widget.Toast.makeText(context, "কল সংযোগ ব্যর্থ হয়েছে: মিডিয়া টোকেন পাওয়া যায়নি", android.widget.Toast.LENGTH_LONG).show()
+                    endCallInternal("Token Generation Failed")
+                }
+                return@launch
+            }
+
             withContext(Dispatchers.Main) {
                 val options = ChannelMediaOptions().apply {
                     autoSubscribeAudio = true
@@ -372,8 +495,18 @@ class ZegoCallEngineManager(private val context: Context) {
                     clientRoleType = Constants.CLIENT_ROLE_BROADCASTER
                     channelProfile = Constants.CHANNEL_PROFILE_COMMUNICATION
                 }
+                Log.i(
+                    TAG,
+                    "[AGORA_SEQ_3] Before joinChannel: roomID='$roomID', numericUid=$numericUid, isVideoCall=$isVideoCall, publishCameraTrack=$isVideoCall, publishMicrophoneTrack=true, autoSubscribeAudio=true, autoSubscribeVideo=true, tokenLength=${token.length}"
+                )
                 val joinResult = rtcEngine?.joinChannel(token, roomID, numericUid, options)
-                Log.i(TAG, "Agora joinChannel called for room $roomID as uid $numericUid (result=$joinResult)")
+                Log.i(
+                    TAG,
+                    "[AGORA_SEQ_4] joinChannel return value: $joinResult (0 means success/initiated, negative means error code) for roomID='$roomID', uid=$numericUid"
+                )
+                if (joinResult != null && joinResult < 0) {
+                    Log.e(TAG, "[AGORA_ERROR] joinChannel failed immediately with error code $joinResult (${getAgoraErrorCodeName(joinResult)})")
+                }
             }
         }
     }
