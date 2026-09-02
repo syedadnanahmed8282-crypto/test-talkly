@@ -341,6 +341,25 @@ class ZegoCallEngineManager(private val context: Context) {
         }
     }
 
+    /**
+     * Derives a short, deterministic Agora channel name (<= 64 bytes) from the long roomID.
+     * Agora channel names must be 64 bytes or less.
+     * For example, "call_room_8236d060-8298-4bf2-abea-9fab132a1fe3_bdc6291b-c393-42a0-9da5-8e7a9726e4a9"
+     * is 83 chars. Using SHA-256 hex digest (take 12 bytes = 24 hex characters) produces "call_a1b2c3d4..." (29 chars).
+     */
+    fun getAgoraChannelName(roomID: String): String {
+        return try {
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            val digest = md.digest(roomID.toByteArray(Charsets.UTF_8))
+            val hex = digest.take(12).joinToString("") { "%02x".format(it) }
+            "call_$hex"
+        } catch (e: Exception) {
+            val crc = java.util.zip.CRC32()
+            crc.update(roomID.toByteArray(Charsets.UTF_8))
+            "call_${crc.value}"
+        }
+    }
+
     private suspend fun fetchAgoraToken(channelId: String, uid: Int): String? = withContext(Dispatchers.IO) {
         try {
             val supabaseUrl = SupabaseClientProvider.supabaseUrl
@@ -460,25 +479,28 @@ class ZegoCallEngineManager(private val context: Context) {
             }
         }
 
+        // Derive short deterministic Agora channel name (< 64 bytes)
+        val agoraChannel = getAgoraChannelName(roomID)
+
         // Fetch dynamic token and join Agora channel
         callScope.launch {
             Log.i(
                 TAG,
-                "[AGORA_SEQ_1] Before fetchAgoraToken: channelId='$roomID', numericUid=$numericUid, userId='$myUserId', isVideoCall=$isVideoCall"
+                "[AGORA_SEQ_1] Before fetchAgoraToken: agoraChannel='$agoraChannel' (derived from roomID='$roomID'), numericUid=$numericUid, userId='$myUserId', isVideoCall=$isVideoCall"
             )
-            val token = fetchAgoraToken(roomID, numericUid)
+            val token = fetchAgoraToken(agoraChannel, numericUid)
             val isTokenValid = !token.isNullOrBlank()
             val tokenLength = token?.length ?: 0
 
             Log.i(
                 TAG,
-                "[AGORA_SEQ_2] After fetchAgoraToken: channelId='$roomID', numericUid=$numericUid, success=$isTokenValid, tokenPresent=$isTokenValid, tokenLength=$tokenLength"
+                "[AGORA_SEQ_2] After fetchAgoraToken: agoraChannel='$agoraChannel', numericUid=$numericUid, success=$isTokenValid, tokenPresent=$isTokenValid, tokenLength=$tokenLength"
             )
 
             if (token.isNullOrBlank()) {
                 Log.e(
                     TAG,
-                    "[AGORA_ERROR] fetchAgoraToken returned NULL or BLANK token for roomID='$roomID', numericUid=$numericUid. Aborting joinChannel()!"
+                    "[AGORA_ERROR] fetchAgoraToken returned NULL or BLANK token for agoraChannel='$agoraChannel' (roomID='$roomID'), numericUid=$numericUid. Aborting joinChannel()!"
                 )
                 withContext(Dispatchers.Main) {
                     isJoinedRoom = false
@@ -500,13 +522,13 @@ class ZegoCallEngineManager(private val context: Context) {
                 }
                 Log.i(
                     TAG,
-                    "[AGORA_SEQ_3] Before joinChannel: channelId='$roomID', numericUid=$numericUid, tokenPresent=true, tokenLength=${token.length}, isVideoCall=$isVideoCall, publishMicrophoneTrack=true, publishCameraTrack=$isVideoCall, autoSubscribeAudio=true, autoSubscribeVideo=true"
+                    "[AGORA_SEQ_3] Before joinChannel: agoraChannel='$agoraChannel' (roomID='$roomID'), numericUid=$numericUid, tokenPresent=true, tokenLength=${token.length}, isVideoCall=$isVideoCall, publishMicrophoneTrack=true, publishCameraTrack=$isVideoCall, autoSubscribeAudio=true, autoSubscribeVideo=true"
                 )
-                val joinResult = rtcEngine?.joinChannel(token, roomID, numericUid, options)
+                val joinResult = rtcEngine?.joinChannel(token, agoraChannel, numericUid, options)
                 val joinResultInt = joinResult ?: -1
                 Log.i(
                     TAG,
-                    "[AGORA_SEQ_4] joinChannel returned exact integer: $joinResultInt (0 = ERR_OK, negative = Agora error code: ${getAgoraErrorCodeName(joinResultInt)}) for channelId='$roomID', uid=$numericUid"
+                    "[AGORA_SEQ_4] joinChannel returned exact integer: $joinResultInt (0 = ERR_OK, negative = Agora error code: ${getAgoraErrorCodeName(joinResultInt)}) for agoraChannel='$agoraChannel', uid=$numericUid"
                 )
                 if (joinResultInt < 0) {
                     Log.e(
