@@ -139,7 +139,7 @@ object FcmTokenManager {
 
         scope.launch {
             try {
-                Log.e(TAG, "DIAGNOSTIC_FCM_IDS: userUid='$uid', deviceId='$deviceId'")
+                Log.d(TAG, "DIAGNOSTIC_FCM_IDS: userUid='$uid', deviceId='$deviceId'")
                 val tokenPayload = buildJsonObject {
                     put("user_id", uid)
                     put("token", token)
