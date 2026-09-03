@@ -453,7 +453,10 @@ fun PhonePasswordAuthScreen(
                 Box(
                     modifier = Modifier
                         .matchParentSize()
-                        .padding((-6).dp)
+                        .graphicsLayer {
+                            scaleX = 1.04f
+                            scaleY = 1.04f
+                        }
                         .clip(RoundedCornerShape(32.dp))
                         .background(
                             Brush.radialGradient(
