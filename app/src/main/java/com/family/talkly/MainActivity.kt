@@ -137,6 +137,38 @@ class MainActivity : ComponentActivity() {
                 ) {
                     // ===== DEBUG: floating log button + dialog, visible on every screen =====
                     var showDebugLog by remember { mutableStateOf(false) }
+                    var detectedCrashReport by remember { mutableStateOf<String?>(null) }
+
+                    androidx.compose.runtime.LaunchedEffect(Unit) {
+                        val previousCrash = com.family.talkly.debug.CrashHandler.getLastCrash(applicationContext)
+                        if (!previousCrash.isNullOrBlank()) {
+                            detectedCrashReport = previousCrash
+                        }
+                    }
+
+                    if (detectedCrashReport != null) {
+                        androidx.compose.ui.window.Dialog(
+                            onDismissRequest = {
+                                com.family.talkly.debug.CrashHandler.clearLastCrash(applicationContext)
+                                detectedCrashReport = null
+                            },
+                            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+                        ) {
+                            com.family.talkly.debug.CrashDisplayScreen(
+                                crashInfo = detectedCrashReport!!,
+                                onCopy = {
+                                    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    val clip = android.content.ClipData.newPlainText("Talkly Crash Log", detectedCrashReport)
+                                    clipboard.setPrimaryClip(clip)
+                                    android.widget.Toast.makeText(applicationContext, "ক্র্যাশ রিপোর্ট কপি করা হয়েছে!", android.widget.Toast.LENGTH_LONG).show()
+                                },
+                                onRestartApp = {
+                                    com.family.talkly.debug.CrashHandler.clearLastCrash(applicationContext)
+                                    detectedCrashReport = null
+                                }
+                            )
+                        }
+                    }
 
                     Box(modifier = Modifier.fillMaxSize()) {
                         val authState by authManager.authState.collectAsState()

@@ -103,6 +103,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name="com.family.talkly.debug.CrashDisplayActivity"
+            android:exported="false"
+            android:process=":crash_reporter"
+            android:theme="@style/Theme.MyApplication" />
     </application>
 
 </manifest>

@@ -12,7 +12,6 @@ object CrashHandler {
 
     fun install(context: Context) {
         val appContext = context.applicationContext
-        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
 
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
@@ -22,16 +21,17 @@ object CrashHandler {
                 appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                     .edit()
                     .putString(KEY_LAST_CRASH, crashText)
-                    .apply()
-            } catch (e: Exception) {
-                // Swallow - we don't want the crash handler itself to crash
+                    .commit() // Synchronous commit before killing process
+
+                // Open full-screen Crash report activity so user immediately sees what happened
+                CrashDisplayActivity.start(appContext, crashText)
+            } catch (e: Throwable) {
+                // Ignore failure in handler
             }
 
-            if (defaultHandler != null) {
-                defaultHandler.uncaughtException(thread, throwable)
-            } else {
-                exitProcess(1)
-            }
+            // Terminate current crashed process cleanly
+            android.os.Process.killProcess(android.os.Process.myPid())
+            exitProcess(10)
         }
     }
 

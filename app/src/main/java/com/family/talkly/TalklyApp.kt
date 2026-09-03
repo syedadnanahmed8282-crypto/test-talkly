@@ -10,6 +10,9 @@ class TalklyApp : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        // Install crash handler immediately so even application-startup crashes are captured
+        com.family.talkly.debug.CrashHandler.install(this)
+
         ensureFirebaseInitialized()
 
         com.family.talkly.util.TalklyNotificationHelper.initNotificationChannels(this)
