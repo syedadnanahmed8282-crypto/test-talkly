@@ -623,17 +623,7 @@ fun ChatListScreen(
                                     modifier = Modifier.fillMaxSize(),
                                     contentPadding = PaddingValues(top = 4.dp, bottom = 120.dp)
                                 ) {
-                                    // B. QUICK ACTION TILES
-                                    item {
-                                        TalklyQuickActionPanel(
-                                            onNewChat = { showAddContactDialog = true },
-                                            onNewContact = { showAddContactDialog = true },
-                                            onAddStory = { showPostStatusDialog = true },
-                                            onBrowseContacts = { selectedBottomNavTab = 3 }
-                                        )
-                                    }
-
-                                    // C. STORIES / MOMENTS MEDIA-CARD CAROUSEL
+                                    // STATUS / MOMENTS MEDIA-CARD CAROUSEL
                                     item {
                                         TalklyMomentsCarousel(
                                             currentUserProfile = currentUserProfile,
