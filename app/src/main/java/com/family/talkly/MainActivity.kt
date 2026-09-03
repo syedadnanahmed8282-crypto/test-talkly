@@ -71,6 +71,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var zegoManager: ZegoCallEngineManager
     private lateinit var themePreferences: ThemePreferences
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var pendingOpenChatMemberId by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -124,6 +125,7 @@ class MainActivity : ComponentActivity() {
         DeleteExpiredMessagesWorker.schedulePeriodicCleanup(applicationContext)
 
         handleIncomingCallIntent(intent)
+        handleOpenChatIntent(intent)
 
         setContent {
             val currentThemeMode by themePreferences.themeMode.collectAsState()
@@ -224,7 +226,9 @@ class MainActivity : ComponentActivity() {
                                             bio = bio,
                                             coverPhotoUrl = coverUrl
                                         )
-                                    }
+                                    },
+                                    initialOpenChatMemberId = pendingOpenChatMemberId,
+                                    onClearOpenChatMemberId = { pendingOpenChatMemberId = null }
                                 )
                             }
 
@@ -283,6 +287,15 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIncomingCallIntent(intent)
+        handleOpenChatIntent(intent)
+    }
+
+    private fun handleOpenChatIntent(intent: android.content.Intent?) {
+        if (intent == null) return
+        val chatMemberId = intent.getStringExtra("open_chat_member_id")
+        if (!chatMemberId.isNullOrBlank()) {
+            pendingOpenChatMemberId = chatMemberId
+        }
     }
 
     private fun handleIncomingCallIntent(intent: android.content.Intent?) {

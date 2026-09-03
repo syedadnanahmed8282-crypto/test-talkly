@@ -54,3 +54,32 @@ The following presence system is now fully working correctly and must be treated
 
 If any future change (even one seemingly unrelated to presence) touches FirebaseChatRepository.kt, SupabaseSocialService.kt, or MainScreen.kt, explicitly verify presence still behaves as described above before considering the task complete.
 
+## 8. Protected Feature: Real-time Calling (Agora Engine & Token Generator - DO NOT BREAK)
+
+The 1-on-1 Real-time Audio & Video Calling engine (powered by Agora RTC SDK and the Supabase Edge Function token generator) is now **100% fully functional and tested working without errors**. Any future task — even unrelated ones — must **NEVER** modify, refactor, replace, or revert any of the following calling components unless explicitly requested by the user:
+
+### 1. Supabase Edge Function: `generate-agora-token/index.ts`
+- **PrivilegeMessage Expiration Timestamp**: In `buildAgoraRtcToken()`, the message buffer must write `messagesBuf.putUint32(privilegeExpireTs)` (the expiration timestamp, NOT `currentTs`).
+- **Binary Content Packing (Length Prefixes)**:
+  - Must use `ByteBuf` packing:
+    ```typescript
+    const contentBuf = new ByteBuf();
+    contentBuf.putBytes(signature);         // uint16 length prefix + signature
+    contentBuf.putUint32(crc32(channelId)); // raw 4-byte CRC
+    contentBuf.putUint32(crc32(uidStr));    // raw 4-byte CRC
+    contentBuf.putBytes(messageBytes);      // uint16 length prefix + message bytes
+    const content = contentBuf.pack();
+    ```
+  - Never revert to raw `content.set(...)` without length prefixes.
+- **Required Secrets**: `AGORA_APP_ID` and `AGORA_APP_CERTIFICATE` in Supabase.
+
+### 2. Android Client Calling Engine & Architecture
+- **Managers & ViewModels**: `ZegoCallEngineManager.kt`, `CallViewModel.kt`, and related call state flows.
+- **Call Signaling**: The Supabase realtime channels for call invitations, accept, reject, end, and busy states.
+- **Token Fetching**: `generateAgoraToken()` logic in repository / services that queries the Edge Function and parses the RTC token, app ID, channel ID, and uid.
+- **Engine Setup**: Agora RTC Engine initialization, audio/video profile configuration, and `joinChannel(token, channelId, "", uid)` handling.
+
+### 3. Strict Rule for Future Updates
+- Never touch `ZegoCallEngineManager.kt`, call screens, call repositories, or `/supabase/functions/generate-agora-token/index.ts` during unrelated updates.
+- If an explicit calling-related change is ever requested, ensure the Agora token binary structure and `privilegeExpireTs` timestamp logic remain strictly intact.
+

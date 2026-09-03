@@ -28,6 +28,7 @@ import io.agora.rtc2.RtcEngine
 import io.agora.rtc2.RtcEngineConfig
 import io.agora.rtc2.video.BeautyOptions
 import io.agora.rtc2.video.VideoCanvas
+import io.agora.rtc2.video.VideoEncoderConfiguration
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.realtime.PostgresAction
 import io.github.jan.supabase.realtime.RealtimeChannel
@@ -273,6 +274,15 @@ class ZegoCallEngineManager(private val context: Context) {
                 enableAudio()
                 enableVideo()
                 setChannelProfile(Constants.CHANNEL_PROFILE_COMMUNICATION)
+                setVideoEncoderConfiguration(
+                    VideoEncoderConfiguration(
+                        VideoEncoderConfiguration.VD_640x360,
+                        VideoEncoderConfiguration.FRAME_RATE.FRAME_RATE_FPS_15,
+                        VideoEncoderConfiguration.STANDARD_BITRATE,
+                        VideoEncoderConfiguration.ORIENTATION_MODE.ORIENTATION_MODE_ADAPTIVE
+                    )
+                )
+                setAudioProfile(Constants.AUDIO_PROFILE_DEFAULT, Constants.AUDIO_SCENARIO_DEFAULT)
             }
             Log.i(TAG, "Agora RtcEngine created successfully")
         } catch (e: Throwable) {

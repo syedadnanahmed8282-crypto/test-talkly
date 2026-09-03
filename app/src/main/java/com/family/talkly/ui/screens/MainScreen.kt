@@ -65,7 +65,9 @@ fun MainScreen(
     currentThemeMode: ThemeMode = ThemeMode.SYSTEM,
     onThemeModeChange: ((ThemeMode) -> Unit)? = null,
     onLogout: (() -> Unit)? = null,
-    onSaveProfile: ((name: String, bio: String, photoUrl: String, coverPhotoUrl: String) -> Unit)? = null
+    onSaveProfile: ((name: String, bio: String, photoUrl: String, coverPhotoUrl: String) -> Unit)? = null,
+    initialOpenChatMemberId: String? = null,
+    onClearOpenChatMemberId: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -78,6 +80,32 @@ fun MainScreen(
     val messageRequests by chatRepository.messageRequests.collectAsState()
     val contactsWhoSavedMe by chatRepository.contactsWhoSavedMe.collectAsState()
     val isNetworkConnected by chatRepository.isNetworkConnected.collectAsState()
+
+    androidx.compose.runtime.LaunchedEffect(initialOpenChatMemberId, familyMembers) {
+        val targetId = initialOpenChatMemberId
+        if (!targetId.isNullOrBlank()) {
+            val suffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(targetId)
+            val target = familyMembers.firstOrNull {
+                it.id == targetId ||
+                it.firebaseUid == targetId ||
+                it.phone == targetId ||
+                (suffix.isNotBlank() && it.phone.isNotBlank() && com.family.talkly.util.PhoneUtils.extractPhoneSuffix(it.phone) == suffix)
+            } ?: run {
+                val canonicalId = chatRepository.getCanonicalMemberId(targetId)
+                familyMembers.firstOrNull { it.id == canonicalId } ?: FamilyMember(
+                    id = targetId,
+                    name = if (!targetId.startsWith("+") && !targetId.all { it.isDigit() } && targetId.length > 6) "User " + targetId.takeLast(4) else targetId,
+                    relation = "Contact",
+                    phone = targetId,
+                    isOnline = true,
+                    isRegisteredOnTalkly = true,
+                    firebaseUid = if (!targetId.startsWith("contact_") && !targetId.contains(" ")) targetId else null
+                )
+            }
+            activeChatMember = target
+            onClearOpenChatMemberId?.invoke()
+        }
+    }
 
     val currentUid = currentUserProfile?.uid?.ifBlank { "self" } ?: "self"
     val statusGroups = remember(statuses, familyMembers, messageRequests, contactsWhoSavedMe, simulatedTimeOffsetMs, currentUserProfile) {

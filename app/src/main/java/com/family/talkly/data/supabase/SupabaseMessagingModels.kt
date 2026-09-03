@@ -171,7 +171,7 @@ data class SupabaseMessage(
         val readAtMillis = readAt?.let { parseIsoTimestampToMillis(it) }
 
         val isSelf = currentUserId.isNotBlank() && senderId == currentUserId
-        val name = if (isSelf) "You" else if (senderDisplayName.isNotBlank()) senderDisplayName else "Member"
+        val name = if (isSelf) "You" else if (senderDisplayName.isNotBlank()) senderDisplayName else ""
 
         return ChatMessage(
             id = id,

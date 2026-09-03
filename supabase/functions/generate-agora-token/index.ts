@@ -154,13 +154,12 @@ async function buildAgoraRtcToken(
   const uidStr = (!uid || uid === 0 || uid === "0") ? "" : String(uid);
   const encoder = new TextEncoder();
 
-  // Salt and signing timestamp
+  // Salt and expiration timestamp (PrivilegeMessage.ts per Agora spec)
   const salt = Math.floor(Math.random() * 0xFFFFFFFF);
-  const currentTs = Math.floor(Date.now() / 1000);
 
   const messagesBuf = new ByteBuf();
   messagesBuf.putUint32(salt);
-  messagesBuf.putUint32(currentTs);
+  messagesBuf.putUint32(privilegeExpireTs);
 
   const privileges: Record<number, number> = {};
   privileges[Privileges.kJoinChannel] = privilegeExpireTs;
@@ -192,24 +191,13 @@ async function buildAgoraRtcToken(
 
   const signature = await hmacSha256(appCertificate, toSign);
 
-  // Compute CRC32 for channel name and uid
-  const crcChannelBuf = new ByteBuf();
-  crcChannelBuf.putUint32(crc32(channelId));
-  const crcChannelBytes = crcChannelBuf.pack();
-
-  const crcUidBuf = new ByteBuf();
-  crcUidBuf.putUint32(crc32(uidStr));
-  const crcUidBytes = crcUidBuf.pack();
-
-  // Pack final token content: signature + crcChannel + crcUid + messageBytes
-  const content = new Uint8Array(
-    signature.length + crcChannelBytes.length + crcUidBytes.length + messageBytes.length
-  );
-  let cOffset = 0;
-  content.set(signature, cOffset); cOffset += signature.length;
-  content.set(crcChannelBytes, cOffset); cOffset += crcChannelBytes.length;
-  content.set(crcUidBytes, cOffset); cOffset += crcUidBytes.length;
-  content.set(messageBytes, cOffset);
+  // Pack final token content: signature (putBytes) + crcChannel (putUint32) + crcUid (putUint32) + messageBytes (putBytes)
+  const contentBuf = new ByteBuf();
+  contentBuf.putBytes(signature);
+  contentBuf.putUint32(crc32(channelId));
+  contentBuf.putUint32(crc32(uidStr));
+  contentBuf.putBytes(messageBytes);
+  const content = contentBuf.pack();
 
   return `${version}${appId}${uint8ArrayToBase64(content)}`;
 }

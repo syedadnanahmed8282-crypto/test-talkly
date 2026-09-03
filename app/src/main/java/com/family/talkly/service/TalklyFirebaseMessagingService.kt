@@ -40,12 +40,19 @@ class TalklyFirebaseMessagingService : FirebaseMessagingService() {
             val data = remoteMessage.data
             if (data.isEmpty()) {
                 remoteMessage.notification?.let { notification ->
-                    val title = notification.title ?: "Talkly"
+                    val rawTitle = notification.title
                     val body = notification.body ?: "New notification"
+                    val resolvedTitle = TalklyNotificationHelper.resolveSenderDisplayName(
+                        context = applicationContext,
+                        candidateSenderName = rawTitle
+                    )
+                    val messageId = remoteMessage.messageId ?: ""
                     TalklyNotificationHelper.postIncomingMessageNotification(
                         context = applicationContext,
-                        senderName = title,
-                        messageText = body
+                        senderName = resolvedTitle,
+                        messageText = body,
+                        messageId = messageId,
+                        timestamp = remoteMessage.sentTime
                     )
                 }
                 return
@@ -110,13 +117,26 @@ class TalklyFirebaseMessagingService : FirebaseMessagingService() {
                 data.containsKey("messageText") ||
                 data.containsKey("chatMemberId") -> {
 
-                    val senderName = data["senderName"] ?: "Talkly Message"
-                    val messageText = data["messageText"] ?: "New message"
+                    val rawSenderName = data["senderName"] ?: data["sender_name"] ?: ""
+                    val messageText = data["messageText"] ?: data["text"] ?: data["content"] ?: data["body"] ?: "New message"
                     val senderUid = data["senderUid"] ?: data["sender_id"] ?: data["sender_uid"] ?: ""
                     val senderPhone = data["senderPhone"] ?: data["sender_phone"] ?: ""
                     val chatMemberId = data["chatMemberId"] ?: senderUid
                     val conversationId = data["conversationId"] ?: data["conversation_id"] ?: ""
-                    val messageId = data["messageId"] ?: data["id"] ?: ""
+                    val messageId = data["messageId"] ?: data["id"] ?: data["message_id"] ?: remoteMessage.messageId ?: ""
+                    val timestamp = try {
+                        data["timestamp"]?.toLongOrNull() ?: remoteMessage.sentTime
+                    } catch (e: Exception) {
+                        remoteMessage.sentTime
+                    }
+
+                    val senderName = TalklyNotificationHelper.resolveSenderDisplayName(
+                        context = applicationContext,
+                        candidateSenderName = rawSenderName,
+                        chatMemberId = chatMemberId,
+                        senderUid = senderUid,
+                        senderPhone = senderPhone
+                    )
 
                     TalklyNotificationHelper.postIncomingMessageNotification(
                         context = applicationContext,
@@ -126,18 +146,42 @@ class TalklyFirebaseMessagingService : FirebaseMessagingService() {
                         senderUid = senderUid,
                         senderPhone = senderPhone,
                         conversationId = conversationId,
-                        messageId = messageId
+                        messageId = messageId,
+                        timestamp = timestamp
                     )
                 }
 
                 else -> {
                     // Fallback for general notification
-                    val title = data["title"] ?: data["senderName"] ?: "Talkly"
+                    val rawTitle = data["title"] ?: data["senderName"] ?: data["sender_name"] ?: ""
                     val body = data["body"] ?: data["messageText"] ?: "New message"
+                    val senderUid = data["senderUid"] ?: data["sender_id"] ?: data["sender_uid"] ?: ""
+                    val senderPhone = data["senderPhone"] ?: data["sender_phone"] ?: ""
+                    val chatMemberId = data["chatMemberId"] ?: senderUid
+                    val messageId = data["messageId"] ?: data["id"] ?: data["message_id"] ?: remoteMessage.messageId ?: ""
+                    val timestamp = try {
+                        data["timestamp"]?.toLongOrNull() ?: remoteMessage.sentTime
+                    } catch (e: Exception) {
+                        remoteMessage.sentTime
+                    }
+
+                    val resolvedTitle = TalklyNotificationHelper.resolveSenderDisplayName(
+                        context = applicationContext,
+                        candidateSenderName = rawTitle,
+                        chatMemberId = chatMemberId,
+                        senderUid = senderUid,
+                        senderPhone = senderPhone
+                    )
+
                     TalklyNotificationHelper.postIncomingMessageNotification(
                         context = applicationContext,
-                        senderName = title,
-                        messageText = body
+                        senderName = resolvedTitle,
+                        messageText = body,
+                        chatMemberId = chatMemberId,
+                        senderUid = senderUid,
+                        senderPhone = senderPhone,
+                        messageId = messageId,
+                        timestamp = timestamp
                     )
                 }
             }

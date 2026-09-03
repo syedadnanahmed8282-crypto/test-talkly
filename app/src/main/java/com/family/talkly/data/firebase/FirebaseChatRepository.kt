@@ -1911,13 +1911,23 @@ class FirebaseChatRepository(private val context: Context) {
                 MessageType.VOICE_NOTE -> "🎵 Voice message"
                 MessageType.CALL_LOG -> "📞 Call"
             }
+            val resolvedSender = if (finalMessage.senderName.isNotBlank() && finalMessage.senderName != "Talkly User" && !finalMessage.senderName.equals("Member", ignoreCase = true)) {
+                finalMessage.senderName
+            } else {
+                _familyMembers.value.firstOrNull {
+                    it.id == canonicalOtherPartyId ||
+                    it.firebaseUid == finalMessage.senderId ||
+                    it.id == finalMessage.senderId
+                }?.name?.takeIf { it.isNotBlank() && !it.equals("Member", ignoreCase = true) && it != "Talkly User" } ?: "New Message"
+            }
             com.family.talkly.util.TalklyNotificationHelper.postIncomingMessageNotification(
                 context = context,
-                senderName = if (finalMessage.senderName.isNotBlank() && finalMessage.senderName != "Talkly User") finalMessage.senderName else "New Message",
+                senderName = resolvedSender,
                 messageText = displayContent,
                 chatMemberId = canonicalOtherPartyId,
                 senderUid = finalMessage.senderId,
-                messageId = finalMessage.id
+                messageId = finalMessage.id,
+                timestamp = finalMessage.timestamp
             )
         }
 
@@ -2056,7 +2066,7 @@ class FirebaseChatRepository(private val context: Context) {
             return
         }
 
-        val validFallback = if (!fallbackName.isNullOrBlank() && fallbackName != "Talkly User" && fallbackName != "You") fallbackName else null
+        val validFallback = if (!fallbackName.isNullOrBlank() && fallbackName != "Talkly User" && fallbackName != "You" && !fallbackName.equals("Member", ignoreCase = true)) fallbackName else null
 
         val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
         val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
