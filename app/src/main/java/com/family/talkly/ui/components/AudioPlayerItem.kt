@@ -222,28 +222,28 @@ fun AudioPlayerItem(
     val isDarkTheme = LocalIsDarkTheme.current
 
     val bubbleShape = RoundedCornerShape(
-        topStart = 16.dp,
-        topEnd = 16.dp,
-        bottomStart = if (isSelf) 16.dp else 4.dp,
-        bottomEnd = if (isSelf) 4.dp else 16.dp
+        topStart = 18.dp,
+        topEnd = 18.dp,
+        bottomStart = if (isSelf) 18.dp else 6.dp,
+        bottomEnd = if (isSelf) 6.dp else 18.dp
     )
 
     Surface(
         shape = bubbleShape,
-        color = if (isSelf) Color(0xFF0E3E4F) else TalklyCard,
-        shadowElevation = 1.dp,
+        color = if (isSelf) Color(0xFF0F3846) else TalklyCard,
+        shadowElevation = 2.dp,
         border = BorderStroke(
-            width = 0.5.dp,
+            width = 1.dp,
             color = if (isSelf) TalklyCyan.copy(alpha = 0.35f) else TalklyElevated
         ),
         modifier = modifier
-            .widthIn(min = 180.dp, max = 245.dp)
-            .padding(vertical = 1.dp)
+            .widthIn(min = 210.dp, max = 280.dp)
+            .height(54.dp)
     ) {
         Row(
             modifier = Modifier
-                .padding(horizontal = 8.dp, vertical = 6.dp)
-                .fillMaxWidth(),
+                .fillMaxSize()
+                .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Slim Play / Pause Button
@@ -251,7 +251,7 @@ fun AudioPlayerItem(
                 shape = CircleShape,
                 color = if (isSelf) TalklyCyan else TalklyElevated,
                 modifier = Modifier
-                    .size(32.dp)
+                    .size(34.dp)
                     .clickable {
                         if (!isPrepared) return@clickable
                         try {
@@ -272,23 +272,23 @@ fun AudioPlayerItem(
                         imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (isPlaying) "Pause" else "Play",
                         tint = if (isSelf) Color(0xFF080B10) else TalklyCyan,
-                        modifier = Modifier.size(17.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.width(7.dp))
+            Spacer(modifier = Modifier.width(8.dp))
 
             // Compact Waveform
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .height(20.dp)
+                    .height(24.dp)
             ) {
                 AudioWaveformBar(
                     progress = progress,
                     isPlaying = isPlaying,
-                    barCount = 24,
+                    barCount = 28,
                     seed = message.id.hashCode(),
                     activeColor = if (isSelf) TalklyCyan else TalklyMint,
                     inactiveColor = if (isSelf) TalklyCyan.copy(alpha = 0.25f) else TalklyTextSecondary.copy(alpha = 0.3f),
@@ -306,14 +306,14 @@ fun AudioPlayerItem(
                 )
             }
 
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(8.dp))
 
             // Duration
             Text(
                 text = formatTimeMs(if (isPlaying || currentPositionMs > 0) currentPositionMs else durationMs),
-                fontSize = 10.5.sp,
-                fontWeight = FontWeight.Medium,
-                color = if (isSelf) TalklyTextPrimary.copy(alpha = 0.9f) else TalklyTextSecondary
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (isSelf) TalklyTextPrimary else TalklyTextSecondary
             )
         }
     }

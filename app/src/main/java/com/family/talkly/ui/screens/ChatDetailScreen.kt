@@ -157,11 +157,14 @@ import com.family.talkly.data.models.ChatMessage
 import com.family.talkly.data.models.FamilyMember
 import com.family.talkly.data.models.MessageRequest
 import com.family.talkly.data.models.MessageType
+import androidx.compose.foundation.layout.navigationBarsPadding
 import com.family.talkly.data.models.ReactionUtils
 import com.family.talkly.data.models.UserProfile
+import com.family.talkly.ui.components.AudioPlayerItem
 import com.family.talkly.ui.components.ContactProfileDetailsDialog
 import com.family.talkly.ui.components.FullMediaViewerDialog
 import com.family.talkly.ui.components.MediaAttachmentDialog
+import com.family.talkly.ui.components.MediaGroupCluster
 import com.family.talkly.ui.components.MediaMessageItem
 import com.family.talkly.ui.components.MessageLoadingState
 import com.family.talkly.ui.components.OnlinePresenceIndicator
@@ -176,6 +179,24 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+
+sealed interface ChatUiItem {
+    val id: String
+    val timestamp: Long
+    val primaryMessage: ChatMessage
+
+    data class SingleMessage(val message: ChatMessage) : ChatUiItem {
+        override val id: String get() = message.id
+        override val timestamp: Long get() = message.timestamp
+        override val primaryMessage: ChatMessage get() = message
+    }
+
+    data class MediaCluster(val messages: List<ChatMessage>) : ChatUiItem {
+        override val id: String get() = "cluster_${messages.first().id}"
+        override val timestamp: Long get() = messages.last().timestamp
+        override val primaryMessage: ChatMessage get() = messages.last()
+    }
+}
 
 // TALKLY COLOR SYSTEM
 private val TalklyChatBg = Color(0xFF080B10)
@@ -1397,13 +1418,14 @@ fun ChatDetailScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 4.dp)
                 ) {
                     Surface(
-                        shape = RoundedCornerShape(22.dp),
-                        color = TalklySurface.copy(alpha = 0.95f),
-                        border = BorderStroke(1.dp, TalklyElevated.copy(alpha = 0.85f)),
-                        shadowElevation = 6.dp,
+                        shape = RoundedCornerShape(28.dp),
+                        color = TalklySurface.copy(alpha = 0.72f),
+                        border = BorderStroke(1.dp, TalklyCyan.copy(alpha = 0.22f)),
+                        shadowElevation = 8.dp,
+                        tonalElevation = 4.dp,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
@@ -2015,6 +2037,51 @@ fun ChatDetailScreen(
                             .weight(1f)
                             .fillMaxWidth()
                     ) {
+                        val uiItems = remember(displayedMessages, simulatedTimeOffsetMs) {
+                            val items = mutableListOf<ChatUiItem>()
+                            var i = 0
+                            while (i < displayedMessages.size) {
+                                val msg = displayedMessages[i]
+                                val isVisualMedia = (msg.messageType == MessageType.IMAGE || msg.messageType == MessageType.VIDEO) &&
+                                        !msg.isDeletedForEveryone &&
+                                        (msg.mediaUrl != null || msg.isMediaExpired(simulatedTimeOffsetMs))
+
+                                if (isVisualMedia) {
+                                    val group = mutableListOf(msg)
+                                    var j = i + 1
+                                    while (j < displayedMessages.size) {
+                                        val nextMsg = displayedMessages[j]
+                                        val isNextVisualMedia = (nextMsg.messageType == MessageType.IMAGE || nextMsg.messageType == MessageType.VIDEO) &&
+                                                !nextMsg.isDeletedForEveryone &&
+                                                (nextMsg.mediaUrl != null || nextMsg.isMediaExpired(simulatedTimeOffsetMs))
+
+                                        if (isNextVisualMedia &&
+                                            nextMsg.senderId == msg.senderId &&
+                                            nextMsg.replyToSenderName == null &&
+                                            msg.replyToSenderName == null &&
+                                            kotlin.math.abs(nextMsg.timestamp - msg.timestamp) <= 60_000L
+                                        ) {
+                                            group.add(nextMsg)
+                                            j++
+                                        } else {
+                                            break
+                                        }
+                                    }
+                                    if (group.size > 1) {
+                                        items.add(ChatUiItem.MediaCluster(group))
+                                        i = j
+                                    } else {
+                                        items.add(ChatUiItem.SingleMessage(msg))
+                                        i++
+                                    }
+                                } else {
+                                    items.add(ChatUiItem.SingleMessage(msg))
+                                    i++
+                                }
+                            }
+                            items
+                        }
+
                         LazyColumn(
                             state = listState,
                             modifier = Modifier
@@ -2024,7 +2091,8 @@ fun ChatDetailScreen(
                         ) {
                         item { Spacer(modifier = Modifier.height(6.dp)) }
 
-                        items(displayedMessages, key = { it.id }) { msg ->
+                        items(uiItems, key = { it.id }) { item ->
+                            val msg = item.primaryMessage
                             val memberSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone)
                             val senderSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(msg.senderId)
                             val isMemberSender = (msg.senderId == member.id) ||
@@ -2037,16 +2105,16 @@ fun ChatDetailScreen(
                             var showReadDetails by remember { mutableStateOf(false) }
 
                             // Check if this message needs a date header separator
-                            val currentMsgIndex = displayedMessages.indexOf(msg)
+                            val currentMsgIndex = uiItems.indexOf(item)
                             val showDateHeader = if (currentMsgIndex == 0) {
                                 true
                             } else {
-                                val prevMsg = displayedMessages[currentMsgIndex - 1]
-                                !isSameDay(prevMsg.timestamp, msg.timestamp)
+                                val prevItem = uiItems[currentMsgIndex - 1]
+                                !isSameDay(prevItem.timestamp, item.timestamp)
                             }
 
                             if (showDateHeader) {
-                                val dateLabel = formatTalklyDateSeparator(msg.timestamp)
+                                val dateLabel = formatTalklyDateSeparator(item.timestamp)
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -2073,7 +2141,7 @@ fun ChatDetailScreen(
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .pointerInput(msg.id) {
+                                    .pointerInput(item.id) {
                                         detectHorizontalDragGestures(
                                             onDragEnd = {
                                                 if (offsetX > 60f) {
@@ -2123,8 +2191,116 @@ fun ChatDetailScreen(
                                     horizontalArrangement = if (isSelf) Arrangement.End else Arrangement.Start
                                 ) {
                                     Box {
-                                        // MESSAGE BUBBLE
-                                        Card(
+                                        when (item) {
+                                            is ChatUiItem.MediaCluster -> {
+                                                MediaGroupCluster(
+                                                    messages = item.messages,
+                                                    isSelf = isSelf,
+                                                    simulatedTimeOffsetMs = simulatedTimeOffsetMs,
+                                                    onMediaClick = { clickedMsg ->
+                                                        if (!clickedMsg.isMediaExpired(simulatedTimeOffsetMs)) {
+                                                            fullMediaViewerMessage = clickedMsg
+                                                        }
+                                                    },
+                                                    onRetryUpload = { retryMsg ->
+                                                        if (!retryMsg.mediaUrl.isNullOrBlank()) {
+                                                            val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository(context)
+                                                            val canonicalId = chatRepo.getCanonicalMemberId(member.id)
+                                                            com.family.talkly.util.MediaUploadManager.enqueueMediaUpload(
+                                                                context = context,
+                                                                messageId = retryMsg.id,
+                                                                chatKey = canonicalId,
+                                                                recipientId = member.id,
+                                                                senderUid = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE).getString("user_uid", null),
+                                                                senderName = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE).getString("user_name", null),
+                                                                messageType = retryMsg.messageType,
+                                                                localMediaUrl = retryMsg.mediaUrl,
+                                                                textContent = retryMsg.textContent,
+                                                                replyToId = retryMsg.replyToMessageId,
+                                                                replyToName = retryMsg.replyToSenderName,
+                                                                replyToText = retryMsg.replyToText
+                                                            )
+                                                        }
+                                                    },
+                                                    modifier = Modifier
+                                                        .onGloballyPositioned { coords ->
+                                                            itemYInWindow = coords.positionInWindow().y
+                                                        }
+                                                        .combinedClickable(
+                                                            onClick = { showReadDetails = !showReadDetails },
+                                                            onLongClick = {
+                                                                selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
+                                                                reactionDialogMessage = msg
+                                                            }
+                                                        )
+                                                )
+                                            }
+                                            is ChatUiItem.SingleMessage -> {
+                                                val isVoiceNote = msg.messageType == MessageType.VOICE_NOTE
+                                                val hasMedia = (msg.messageType == MessageType.IMAGE || msg.messageType == MessageType.VIDEO) &&
+                                                        (msg.mediaUrl != null || msg.isMediaExpired(simulatedTimeOffsetMs))
+
+                                                if (isVoiceNote) {
+                                                    AudioPlayerItem(
+                                                        message = msg,
+                                                        isSelf = isSelf,
+                                                        modifier = Modifier
+                                                            .onGloballyPositioned { coords ->
+                                                                itemYInWindow = coords.positionInWindow().y
+                                                            }
+                                                            .combinedClickable(
+                                                                onClick = { showReadDetails = !showReadDetails },
+                                                                onLongClick = {
+                                                                    selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
+                                                                    reactionDialogMessage = msg
+                                                                }
+                                                            )
+                                                    )
+                                                } else if (hasMedia) {
+                                                    MediaMessageItem(
+                                                        message = msg,
+                                                        isSelf = isSelf,
+                                                        simulatedTimeOffsetMs = simulatedTimeOffsetMs,
+                                                        onMediaClick = {
+                                                            if (!msg.isMediaExpired(simulatedTimeOffsetMs)) {
+                                                                fullMediaViewerMessage = msg
+                                                            }
+                                                        },
+                                                        onRetryUpload = {
+                                                            if (!msg.mediaUrl.isNullOrBlank()) {
+                                                                val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository(context)
+                                                                val canonicalId = chatRepo.getCanonicalMemberId(member.id)
+                                                                com.family.talkly.util.MediaUploadManager.enqueueMediaUpload(
+                                                                    context = context,
+                                                                    messageId = msg.id,
+                                                                    chatKey = canonicalId,
+                                                                    recipientId = member.id,
+                                                                    senderUid = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE).getString("user_uid", null),
+                                                                    senderName = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE).getString("user_name", null),
+                                                                    messageType = msg.messageType,
+                                                                    localMediaUrl = msg.mediaUrl,
+                                                                    textContent = msg.textContent,
+                                                                    replyToId = msg.replyToMessageId,
+                                                                    replyToName = msg.replyToSenderName,
+                                                                    replyToText = msg.replyToText
+                                                                )
+                                                            }
+                                                        },
+                                                        modifier = Modifier
+                                                            .onGloballyPositioned { coords ->
+                                                                itemYInWindow = coords.positionInWindow().y
+                                                            }
+                                                            .combinedClickable(
+                                                                onClick = { showReadDetails = !showReadDetails },
+                                                                onLongClick = {
+                                                                    selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
+                                                                    reactionDialogMessage = msg
+                                                                }
+                                                            )
+                                                    )
+                                                } else {
+                                                    // MESSAGE BUBBLE
+                                                    Card(
                                             colors = CardDefaults.cardColors(containerColor = bubbleContainerColor),
                                             border = if (isSingleEmoji || isVoiceNote) null else BorderStroke(
                                                 width = 0.5.dp,
@@ -2511,6 +2687,9 @@ fun ChatDetailScreen(
                                                 }
                                             }
                                         }
+                                    }
+                                }
+                            }
 
                                         // REACTION BADGE OVERLAY
                                         msg.reaction?.let { reactEmoji ->
@@ -3038,22 +3217,24 @@ fun ChatDetailScreen(
                         }
                     }
                 } else {
-                    // TALKLY FLOATING MESSAGE COMPOSER
-                    Surface(
-                        color = TalklySurface,
-                        border = BorderStroke(1.dp, TalklyElevated),
-                        modifier = Modifier.fillMaxWidth()
+                    // TALKLY THREE-PART FLOATING MESSAGE COMPOSER
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 8.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        // 1. Standalone Floating Attachment Button
+                        Surface(
+                            shape = CircleShape,
+                            color = TalklyCard,
+                            border = BorderStroke(1.dp, TalklyElevated),
+                            shadowElevation = 4.dp,
+                            modifier = Modifier.size(44.dp)
                         ) {
-                            // Attachment Action
                             IconButton(
                                 onClick = { showAttachmentDialog = true },
-                                modifier = Modifier.size(40.dp)
+                                modifier = Modifier.fillMaxSize()
                             ) {
                                 Icon(
                                     imageVector = Icons.Outlined.AttachFile,
@@ -3062,16 +3243,18 @@ fun ChatDetailScreen(
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
+                        }
 
-                            // Text Input Field Container
-                            Surface(
-                                shape = RoundedCornerShape(24.dp),
-                                color = TalklyCard,
-                                border = BorderStroke(1.dp, TalklyElevated),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(horizontal = 4.dp)
-                            ) {
+                        // 2. Standalone Floating Text Input Capsule
+                        Surface(
+                            shape = RoundedCornerShape(24.dp),
+                            color = TalklyCard,
+                            border = BorderStroke(1.dp, TalklyElevated),
+                            shadowElevation = 4.dp,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 8.dp)
+                        ) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -3195,7 +3378,6 @@ fun ChatDetailScreen(
             }
         }
     }
-}
 
 private fun isSameDay(timestamp1: Long, timestamp2: Long): Boolean {
     val cal1 = Calendar.getInstance().apply { timeInMillis = timestamp1 }
