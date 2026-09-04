@@ -26,6 +26,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.UUID
 
 /**
  * Service managing Contacts, Online Presence (via Supabase Realtime Presence),
@@ -485,7 +486,9 @@ class SupabaseSocialService(private val context: Context) {
         viewerAvatarUrl: String?
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            if (viewerUserId.isBlank() || viewerUserId == "self") return@withContext Result.success(Unit)
+            if (viewerUserId.isBlank() || viewerUserId == "self") {
+                return@withContext Result.success(Unit)
+            }
 
             val existing = try {
                 postgrest.from(TABLE_STATUS_VIEWERS)
@@ -503,23 +506,26 @@ class SupabaseSocialService(private val context: Context) {
 
             if (existing.isEmpty()) {
                 val viewer = SupabaseStatusViewer(
+                    id = UUID.randomUUID().toString(),
                     statusId = statusId,
                     viewerId = viewerUserId,
                     viewerName = viewerName,
                     viewerAvatarUrl = viewerAvatarUrl,
-                    viewedAt = SupabaseMessage.millisToIsoTimestamp(System.currentTimeMillis())
+                    viewedAt = SupabaseMessage.millisToIsoTimestamp(
+                        System.currentTimeMillis()
+                    )
                 )
 
-                try {
-                    postgrest.from(TABLE_STATUS_VIEWERS).insert(viewer)
-                } catch (_: Exception) {
-                    postgrest.from(TABLE_STATUS_VIEWERS).upsert(viewer)
-                }
+                postgrest.from(TABLE_STATUS_VIEWERS)
+                    .insert(viewer)
             }
 
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.w(TAG, "markStatusViewed warning: ${e.localizedMessage}")
+            Log.w(
+                TAG,
+                "markStatusViewed failed for status=$statusId, viewer=$viewerUserId: ${e.localizedMessage}"
+            )
             Result.failure(e)
         }
     }
@@ -534,9 +540,10 @@ class SupabaseSocialService(private val context: Context) {
         userAvatarUrl: String?
     ): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
-            if (userId.isBlank() || userId == "self") return@withContext Result.success(false)
+            if (userId.isBlank() || userId == "self") {
+                return@withContext Result.success(false)
+            }
 
-            // Check if already liked
             val existing = postgrest.from(TABLE_STATUS_LIKES)
                 .select {
                     filter {
@@ -548,7 +555,6 @@ class SupabaseSocialService(private val context: Context) {
                 .decodeList<SupabaseStatusLike>()
 
             if (existing.isNotEmpty()) {
-                // Unlike: delete row
                 postgrest.from(TABLE_STATUS_LIKES)
                     .delete {
                         filter {
@@ -556,23 +562,30 @@ class SupabaseSocialService(private val context: Context) {
                             eq("user_id", userId)
                         }
                     }
+
                 Result.success(false)
             } else {
-                // Like: insert row
                 val newLike = SupabaseStatusLike(
+                    id = UUID.randomUUID().toString(),
                     statusId = statusId,
                     userId = userId,
                     userName = userName,
                     userAvatarUrl = userAvatarUrl,
-                    createdAt = SupabaseMessage.millisToIsoTimestamp(System.currentTimeMillis())
+                    createdAt = SupabaseMessage.millisToIsoTimestamp(
+                        System.currentTimeMillis()
+                    )
                 )
+
                 postgrest.from(TABLE_STATUS_LIKES)
                     .insert(newLike)
 
                 Result.success(true)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "toggleStatusLike failed: ${e.localizedMessage}")
+            Log.e(
+                TAG,
+                "toggleStatusLike failed for status=$statusId, user=$userId: ${e.localizedMessage}"
+            )
             Result.failure(e)
         }
     }

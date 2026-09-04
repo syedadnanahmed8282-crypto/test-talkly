@@ -1392,37 +1392,44 @@ fun ChatDetailScreen(
                     }
                 }
             } else {
-                // TALKLY FLOATING/ELEVATED CONVERSATION HEADER
-                Surface(
-                    color = TalklySurface,
-                    border = BorderStroke(1.dp, TalklyElevated),
-                    shadowElevation = 8.dp,
-                    modifier = Modifier.statusBarsPadding()
+                // TALKLY FLOATING GLASS CAPSULE CONVERSATION HEADER
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Surface(
+                        shape = RoundedCornerShape(22.dp),
+                        color = TalklySurface.copy(alpha = 0.95f),
+                        border = BorderStroke(1.dp, TalklyElevated.copy(alpha = 0.85f)),
+                        shadowElevation = 6.dp,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        // Back Arrow
-                        IconButton(
-                            onClick = {
-                                keyboardController?.hide()
-                                focusManager.clearFocus()
-                                onBack()
-                            },
-                            modifier = Modifier.size(38.dp)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 6.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = TalklyTextPrimary,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
+                            // Back Arrow
+                            IconButton(
+                                onClick = {
+                                    keyboardController?.hide()
+                                    focusManager.clearFocus()
+                                    onBack()
+                                },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back",
+                                    tint = TalklyTextPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
 
-                        Spacer(modifier = Modifier.width(4.dp))
+                            Spacer(modifier = Modifier.width(3.dp))
 
                         // Contact Avatar & Info (clickable to view profile)
                         Row(
@@ -1434,12 +1441,12 @@ fun ChatDetailScreen(
                         ) {
                             // Avatar with gradient ring and online indicator
                             Box(
-                                modifier = Modifier.size(42.dp),
+                                modifier = Modifier.size(38.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(42.dp)
+                                        .size(38.dp)
                                         .clip(CircleShape)
                                         .background(
                                             Brush.sweepGradient(
@@ -1460,7 +1467,7 @@ fun ChatDetailScreen(
                                                 imageVector = Icons.Default.Lock,
                                                 contentDescription = "Masked Profile",
                                                 tint = TalklyCyan,
-                                                modifier = Modifier.size(18.dp)
+                                                modifier = Modifier.size(16.dp)
                                             )
                                         } else if (!member.avatarUrl.isNullOrBlank()) {
                                             val mediaModel = remember(member.avatarUrl) {
@@ -1477,7 +1484,7 @@ fun ChatDetailScreen(
                                                 text = member.name.take(2).uppercase(),
                                                 color = TalklyCyan,
                                                 fontWeight = FontWeight.Bold,
-                                                fontSize = 15.sp
+                                                fontSize = 14.sp
                                             )
                                         }
                                     }
@@ -1487,7 +1494,7 @@ fun ChatDetailScreen(
                                 if (member.isRecentlyActive() && isMutualContact && !isBlocked) {
                                     OnlinePresenceIndicator(
                                         member = member,
-                                        size = 11.dp,
+                                        size = 10.dp,
                                         borderColor = TalklySurface,
                                         borderWidth = 1.5.dp,
                                         greenColor = TalklySuccess,
@@ -1496,15 +1503,15 @@ fun ChatDetailScreen(
                                 }
                             }
 
-                            Spacer(modifier = Modifier.width(10.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
 
                             Column(modifier = Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     val displayName = member.firstName
                                     val nameFontSize = when {
                                         displayName.length > 20 -> 12.sp
-                                        displayName.length > 14 -> 14.sp
-                                        else -> 15.sp
+                                        displayName.length > 14 -> 13.5.sp
+                                        else -> 14.5.sp
                                     }
                                     Text(
                                         text = displayName,
@@ -1520,7 +1527,7 @@ fun ChatDetailScreen(
                                             imageVector = Icons.Default.VolumeMute,
                                             contentDescription = "Muted",
                                             tint = TalklyTextSecondary,
-                                            modifier = Modifier.size(14.dp)
+                                            modifier = Modifier.size(13.dp)
                                         )
                                     }
                                 }
@@ -1535,7 +1542,7 @@ fun ChatDetailScreen(
                                 }
                                 Text(
                                     text = statusSubtext,
-                                    fontSize = 11.sp,
+                                    fontSize = 10.5.sp,
                                     fontWeight = if (member.isTyping && !isBlocked) FontWeight.Bold else FontWeight.Normal,
                                     color = if (!isMutualContact || !member.isRegisteredOnTalkly || isBlocked) TalklyError
                                     else if (member.isTyping) TalklyMint
@@ -1550,18 +1557,18 @@ fun ChatDetailScreen(
                         // Right Action Buttons
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            horizontalArrangement = Arrangement.spacedBy(1.dp)
                         ) {
                             // Search Action
                             IconButton(
                                 onClick = { isSearchActive = true },
-                                modifier = Modifier.size(36.dp)
+                                modifier = Modifier.size(34.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Search,
                                     contentDescription = "Search",
                                     tint = TalklyTextSecondary,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
 
@@ -1576,11 +1583,11 @@ fun ChatDetailScreen(
                                         Toast.makeText(context, "User not registered on Talkly", Toast.LENGTH_SHORT).show()
                                     }
                                 },
-                                modifier = Modifier.size(36.dp)
+                                modifier = Modifier.size(34.dp)
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(32.dp)
+                                        .size(30.dp)
                                         .background(TalklyCard, CircleShape)
                                         .border(0.5.dp, TalklyElevated, CircleShape),
                                     contentAlignment = Alignment.Center
@@ -1589,7 +1596,7 @@ fun ChatDetailScreen(
                                         imageVector = Icons.Default.Call,
                                         contentDescription = "Audio Call",
                                         tint = if (member.isRegisteredOnTalkly && isMutualContact) TalklyCyan else TalklyTextSecondary.copy(alpha = 0.4f),
-                                        modifier = Modifier.size(16.dp)
+                                        modifier = Modifier.size(15.dp)
                                     )
                                 }
                             }
@@ -1606,11 +1613,11 @@ fun ChatDetailScreen(
                                         Toast.makeText(context, "User not registered on Talkly", Toast.LENGTH_SHORT).show()
                                     }
                                 },
-                                modifier = Modifier.size(36.dp)
+                                modifier = Modifier.size(34.dp)
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(32.dp)
+                                        .size(30.dp)
                                         .background(TalklyCard, CircleShape)
                                         .border(0.5.dp, TalklyElevated, CircleShape),
                                     contentAlignment = Alignment.Center
@@ -1619,7 +1626,7 @@ fun ChatDetailScreen(
                                         imageVector = Icons.Default.Videocam,
                                         contentDescription = "Video Call",
                                         tint = if (member.isRegisteredOnTalkly && isMutualContact) TalklyCyan else TalklyTextSecondary.copy(alpha = 0.4f),
-                                        modifier = Modifier.size(16.dp)
+                                        modifier = Modifier.size(15.dp)
                                     )
                                 }
                             }
@@ -1628,13 +1635,13 @@ fun ChatDetailScreen(
                             Box {
                                 IconButton(
                                     onClick = { showMenu = true },
-                                    modifier = Modifier.size(36.dp)
+                                    modifier = Modifier.size(34.dp)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.MoreVert,
                                         contentDescription = "More options",
                                         tint = TalklyTextPrimary,
-                                        modifier = Modifier.size(20.dp)
+                                        modifier = Modifier.size(19.dp)
                                     )
                                 }
 
@@ -1756,6 +1763,7 @@ fun ChatDetailScreen(
                             }
                         }
                     }
+                }
                 }
             }
         }
@@ -2011,10 +2019,10 @@ fun ChatDetailScreen(
                             state = listState,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(horizontal = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                .padding(horizontal = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                        item { Spacer(modifier = Modifier.height(8.dp)) }
+                        item { Spacer(modifier = Modifier.height(6.dp)) }
 
                         items(displayedMessages, key = { it.id }) { msg ->
                             val memberSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone)
@@ -2042,21 +2050,21 @@ fun ChatDetailScreen(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(vertical = 10.dp),
+                                        .padding(vertical = 6.dp),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Surface(
-                                        shape = RoundedCornerShape(14.dp),
-                                        color = TalklyCard,
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = TalklyCard.copy(alpha = 0.9f),
                                         border = BorderStroke(0.5.dp, TalklyElevated),
-                                        shadowElevation = 2.dp
+                                        shadowElevation = 1.dp
                                     ) {
                                         Text(
                                             text = dateLabel,
-                                            fontSize = 11.sp,
+                                            fontSize = 10.5.sp,
                                             fontWeight = FontWeight.SemiBold,
                                             color = TalklyTextSecondary,
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
                                         )
                                     }
                                 }
@@ -2128,9 +2136,9 @@ fun ChatDetailScreen(
                                                 bottomStart = if (isSelf) 16.dp else 4.dp,
                                                 bottomEnd = if (isSelf) 4.dp else 16.dp
                                             ),
-                                            elevation = CardDefaults.cardElevation(defaultElevation = if (isSingleEmoji || isVoiceNote) 0.dp else 2.dp),
+                                            elevation = CardDefaults.cardElevation(defaultElevation = if (isSingleEmoji || isVoiceNote) 0.dp else 1.5.dp),
                                             modifier = Modifier
-                                                .widthIn(min = if (isSingleEmoji) 0.dp else 90.dp, max = 290.dp)
+                                                .widthIn(min = 0.dp, max = 275.dp)
                                                 .then(
                                                     if (isSelf && !isSingleEmoji && !isVoiceNote) {
                                                         Modifier.background(
@@ -2155,222 +2163,351 @@ fun ChatDetailScreen(
                                                     }
                                                 )
                                         ) {
-                                            Column(modifier = Modifier.padding(if (isSingleEmoji) 2.dp else if (isVoiceNote) 0.dp else 10.dp)) {
-                                                if (msg.isDeletedForEveryone) {
+                                            val isShortSingleLine = !hasMedia && !hasReply && !msg.isDeletedForEveryone &&
+                                                    !isVoiceNote && !isSingleEmoji &&
+                                                    !msg.textContent.contains('\n') && msg.textContent.length <= 26
+
+                                            if (isShortSingleLine) {
+                                                // Ultra-slim single-line bubble (text + inline timestamp)
+                                                Column(modifier = Modifier.padding(start = 9.dp, end = 7.dp, top = 5.dp, bottom = 4.dp)) {
                                                     Row(
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        modifier = Modifier.padding(vertical = 4.dp)
+                                                        verticalAlignment = Alignment.Bottom,
+                                                        horizontalArrangement = Arrangement.Start
                                                     ) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.Block,
-                                                            contentDescription = "Deleted",
-                                                            tint = TalklyTextSecondary,
-                                                            modifier = Modifier.size(16.dp)
-                                                        )
-                                                        Spacer(modifier = Modifier.width(6.dp))
-                                                        Text(
-                                                            text = "This message was deleted",
-                                                            style = MaterialTheme.typography.bodyMedium.copy(
-                                                                color = TalklyTextSecondary,
-                                                                fontStyle = FontStyle.Italic,
-                                                                fontSize = 13.sp
-                                                            )
-                                                        )
-                                                    }
-                                                } else {
-                                                    // Quoted Reply Preview inside Bubble
-                                                    if (msg.replyToSenderName != null) {
-                                                        Surface(
-                                                            shape = RoundedCornerShape(8.dp),
-                                                            color = if (isSelf) Color.Black.copy(alpha = 0.25f) else TalklyElevated,
-                                                            border = BorderStroke(0.5.dp, TalklyCyan.copy(alpha = 0.2f)),
-                                                            modifier = Modifier
-                                                                .fillMaxWidth()
-                                                                .padding(bottom = 6.dp)
-                                                        ) {
-                                                            Row(modifier = Modifier.padding(6.dp)) {
-                                                                Box(
-                                                                    modifier = Modifier
-                                                                        .width(3.dp)
-                                                                        .height(28.dp)
-                                                                        .background(TalklyCyan, RoundedCornerShape(2.dp))
-                                                                )
-                                                                Spacer(modifier = Modifier.width(6.dp))
-                                                                Column {
-                                                                    Text(
-                                                                        text = msg.replyToSenderName,
-                                                                        fontSize = 11.sp,
-                                                                        fontWeight = FontWeight.Bold,
-                                                                        color = TalklyCyan
-                                                                    )
-                                                                    Text(
-                                                                        text = msg.replyToText ?: "Media message",
-                                                                        fontSize = 11.sp,
-                                                                        color = TalklyTextSecondary,
-                                                                        maxLines = 1,
-                                                                        overflow = TextOverflow.Ellipsis
-                                                                    )
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-
-                                                    // Media Content
-                                                    if (msg.mediaUrl != null || msg.isMediaExpired(simulatedTimeOffsetMs)) {
-                                                        MediaMessageItem(
-                                                            message = msg,
-                                                            isSelf = isSelf,
-                                                            simulatedTimeOffsetMs = simulatedTimeOffsetMs,
-                                                            onMediaClick = {
-                                                                if (!msg.isMediaExpired(simulatedTimeOffsetMs)) {
-                                                                    fullMediaViewerMessage = msg
-                                                                }
-                                                            },
-                                                            onRetryUpload = {
-                                                                if (!msg.mediaUrl.isNullOrBlank()) {
-                                                                    val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository(context)
-                                                                    val canonicalId = chatRepo.getCanonicalMemberId(member.id)
-                                                                    com.family.talkly.util.MediaUploadManager.enqueueMediaUpload(
-                                                                        context = context,
-                                                                        messageId = msg.id,
-                                                                        chatKey = canonicalId,
-                                                                        recipientId = member.id,
-                                                                        senderUid = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE).getString("user_uid", null),
-                                                                        senderName = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE).getString("user_name", null),
-                                                                        messageType = msg.messageType,
-                                                                        localMediaUrl = msg.mediaUrl,
-                                                                        textContent = msg.textContent,
-                                                                        replyToId = msg.replyToMessageId,
-                                                                        replyToName = msg.replyToSenderName,
-                                                                        replyToText = msg.replyToText
-                                                                    )
-                                                                }
-                                                            }
-                                                        )
-                                                    }
-
-                                                    // Text Content
-                                                    if (msg.textContent.isNotEmpty() && !isVoiceNote) {
                                                         Text(
                                                             text = msg.textContent,
                                                             style = MaterialTheme.typography.bodyMedium.copy(
                                                                 color = TalklyTextPrimary,
-                                                                fontSize = if (isSingleEmoji) 44.sp else 15.sp
+                                                                fontSize = 14.5.sp
                                                             )
                                                         )
-                                                    }
-                                                }
-
-                                                Spacer(modifier = Modifier.height(4.dp))
-
-                                                // Timestamp & Delivery Status
-                                                Row(
-                                                    modifier = Modifier.align(Alignment.End),
-                                                    horizontalArrangement = Arrangement.End,
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    if (msg.isStarred) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.Star,
-                                                            contentDescription = "Starred",
-                                                            tint = Color(0xFFFFB300),
-                                                            modifier = Modifier.size(12.dp)
-                                                        )
-                                                        Spacer(modifier = Modifier.width(3.dp))
-                                                    }
-                                                    if (msg.isPinned) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.PushPin,
-                                                            contentDescription = "Pinned",
-                                                            tint = TalklyCyan,
-                                                            modifier = Modifier.size(12.dp)
-                                                        )
-                                                        Spacer(modifier = Modifier.width(3.dp))
-                                                    }
-                                                    Text(
-                                                        text = if (msg.isEdited) "${msg.formattedTime} • Edited" else msg.formattedTime,
-                                                        fontSize = 10.sp,
-                                                        color = TalklyTextSecondary
-                                                    )
-                                                    if (isSelf) {
-                                                        Spacer(modifier = Modifier.width(4.dp))
-                                                        val isPendingMsg = msg.isPending || msg.id.startsWith("temp_") ||
-                                                                (!msg.mediaUrl.isNullOrEmpty() && (msg.mediaUrl.startsWith("content://") || msg.mediaUrl.startsWith("file://") || msg.mediaUrl.startsWith("/")))
-                                                        val statusState = when {
-                                                            isPendingMsg -> 3
-                                                            msg.isRead -> 2
-                                                            msg.isDelivered -> 1
-                                                            else -> 0
-                                                        }
-                                                        Crossfade(
-                                                            targetState = statusState,
-                                                            animationSpec = tween(durationMillis = 300),
-                                                            label = "StatusFadeAnimation"
-                                                        ) { state ->
-                                                            when (state) {
-                                                                3 -> {
-                                                                    if (!isNetworkConnected) {
-                                                                        Icon(
-                                                                            imageVector = Icons.Default.AccessTime,
-                                                                            contentDescription = "Queued",
-                                                                            tint = Color(0xFFF59E0B),
-                                                                            modifier = Modifier.size(13.dp)
-                                                                        )
-                                                                    } else {
-                                                                        CircularProgressIndicator(
-                                                                            strokeWidth = 1.5.dp,
-                                                                            color = TalklyCyan,
-                                                                            modifier = Modifier.size(13.dp)
-                                                                        )
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            modifier = Modifier.padding(bottom = 0.5.dp)
+                                                        ) {
+                                                            if (msg.isStarred) {
+                                                                Icon(
+                                                                    imageVector = Icons.Default.Star,
+                                                                    contentDescription = "Starred",
+                                                                    tint = Color(0xFFFFB300),
+                                                                    modifier = Modifier.size(11.dp)
+                                                                )
+                                                                Spacer(modifier = Modifier.width(2.dp))
+                                                            }
+                                                            if (msg.isPinned) {
+                                                                Icon(
+                                                                    imageVector = Icons.Default.PushPin,
+                                                                    contentDescription = "Pinned",
+                                                                    tint = TalklyCyan,
+                                                                    modifier = Modifier.size(11.dp)
+                                                                )
+                                                                Spacer(modifier = Modifier.width(2.dp))
+                                                            }
+                                                            Text(
+                                                                text = if (msg.isEdited) "${msg.formattedTime} • Edited" else msg.formattedTime,
+                                                                fontSize = 9.5.sp,
+                                                                color = if (isSelf) TalklyTextSecondary.copy(alpha = 0.85f) else TalklyTextSecondary.copy(alpha = 0.7f)
+                                                            )
+                                                            if (isSelf) {
+                                                                Spacer(modifier = Modifier.width(3.dp))
+                                                                val isPendingMsg = msg.isPending || msg.id.startsWith("temp_")
+                                                                val statusState = when {
+                                                                    isPendingMsg -> 3
+                                                                    msg.isRead -> 2
+                                                                    msg.isDelivered -> 1
+                                                                    else -> 0
+                                                                }
+                                                                Crossfade(
+                                                                    targetState = statusState,
+                                                                    animationSpec = tween(durationMillis = 300),
+                                                                    label = "StatusFadeInline"
+                                                                ) { state ->
+                                                                    when (state) {
+                                                                        3 -> {
+                                                                            if (!isNetworkConnected) {
+                                                                                Icon(
+                                                                                    imageVector = Icons.Default.AccessTime,
+                                                                                    contentDescription = "Queued",
+                                                                                    tint = Color(0xFFF59E0B),
+                                                                                    modifier = Modifier.size(12.dp)
+                                                                                )
+                                                                            } else {
+                                                                                CircularProgressIndicator(
+                                                                                    strokeWidth = 1.2.dp,
+                                                                                    color = TalklyCyan,
+                                                                                    modifier = Modifier.size(12.dp)
+                                                                                )
+                                                                            }
+                                                                        }
+                                                                        2 -> {
+                                                                            Icon(
+                                                                                imageVector = Icons.Default.DoneAll,
+                                                                                contentDescription = "Seen",
+                                                                                tint = TalklyCyan,
+                                                                                modifier = Modifier.size(14.dp)
+                                                                            )
+                                                                        }
+                                                                        1 -> {
+                                                                            Icon(
+                                                                                imageVector = Icons.Default.DoneAll,
+                                                                                contentDescription = "Delivered",
+                                                                                tint = TalklyTextPrimary.copy(alpha = 0.7f),
+                                                                                modifier = Modifier.size(14.dp)
+                                                                            )
+                                                                        }
+                                                                        else -> {
+                                                                            Icon(
+                                                                                imageVector = Icons.Default.Done,
+                                                                                contentDescription = "Sent",
+                                                                                tint = TalklyTextSecondary,
+                                                                                modifier = Modifier.size(14.dp)
+                                                                            )
+                                                                        }
                                                                     }
-                                                                }
-                                                                2 -> {
-                                                                    // SEEN/READ (Cyan Double Check)
-                                                                    Icon(
-                                                                        imageVector = Icons.Default.DoneAll,
-                                                                        contentDescription = "Seen",
-                                                                        tint = TalklyCyan,
-                                                                        modifier = Modifier.size(15.dp)
-                                                                    )
-                                                                }
-                                                                1 -> {
-                                                                    // DELIVERED (White Double Check)
-                                                                    Icon(
-                                                                        imageVector = Icons.Default.DoneAll,
-                                                                        contentDescription = "Delivered",
-                                                                        tint = TalklyTextPrimary.copy(alpha = 0.7f),
-                                                                        modifier = Modifier.size(15.dp)
-                                                                    )
-                                                                }
-                                                                else -> {
-                                                                    // SENT (Single Check)
-                                                                    Icon(
-                                                                        imageVector = Icons.Default.Done,
-                                                                        contentDescription = "Sent",
-                                                                        tint = TalklyTextSecondary,
-                                                                        modifier = Modifier.size(15.dp)
-                                                                    )
                                                                 }
                                                             }
                                                         }
                                                     }
-                                                }
 
-                                                if (showReadDetails) {
-                                                    Spacer(modifier = Modifier.height(2.dp))
-                                                    val detailsText = if (msg.isRead) {
-                                                        "Seen at ${msg.formattedReadTime}"
-                                                    } else if (msg.isDelivered) {
-                                                        "Delivered ${msg.formattedTime}"
-                                                    } else {
-                                                        "Sent ${msg.formattedTime}"
+                                                    if (showReadDetails) {
+                                                        Spacer(modifier = Modifier.height(2.dp))
+                                                        val detailsText = if (msg.isRead) {
+                                                            "Seen at ${msg.formattedReadTime}"
+                                                        } else if (msg.isDelivered) {
+                                                            "Delivered ${msg.formattedTime}"
+                                                        } else {
+                                                            "Sent ${msg.formattedTime}"
+                                                        }
+                                                        Text(
+                                                            text = detailsText,
+                                                            fontSize = 9.sp,
+                                                            color = TalklyCyan,
+                                                            modifier = Modifier.align(Alignment.End)
+                                                        )
                                                     }
-                                                    Text(
-                                                        text = detailsText,
-                                                        fontSize = 9.sp,
-                                                        color = TalklyCyan,
-                                                        modifier = Modifier.align(Alignment.End)
-                                                    )
+                                                }
+                                            } else {
+                                                // Standard compact multi-line / media / voice bubble
+                                                Column(modifier = Modifier.padding(if (isSingleEmoji) 2.dp else if (isVoiceNote) 0.dp else 7.dp)) {
+                                                    if (msg.isDeletedForEveryone) {
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            modifier = Modifier.padding(vertical = 3.dp, horizontal = 2.dp)
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Block,
+                                                                contentDescription = "Deleted",
+                                                                tint = TalklyTextSecondary,
+                                                                modifier = Modifier.size(15.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(5.dp))
+                                                            Text(
+                                                                text = "This message was deleted",
+                                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                                    color = TalklyTextSecondary,
+                                                                    fontStyle = FontStyle.Italic,
+                                                                    fontSize = 12.5.sp
+                                                                )
+                                                            )
+                                                        }
+                                                    } else {
+                                                        // Quoted Reply Preview inside Bubble
+                                                        if (msg.replyToSenderName != null) {
+                                                            Surface(
+                                                                shape = RoundedCornerShape(7.dp),
+                                                                color = if (isSelf) Color.Black.copy(alpha = 0.25f) else TalklyElevated,
+                                                                border = BorderStroke(0.5.dp, TalklyCyan.copy(alpha = 0.2f)),
+                                                                modifier = Modifier
+                                                                    .widthIn(max = 240.dp)
+                                                                    .padding(bottom = 5.dp)
+                                                            ) {
+                                                                Row(modifier = Modifier.padding(5.dp)) {
+                                                                    Box(
+                                                                        modifier = Modifier
+                                                                            .width(2.5.dp)
+                                                                            .height(26.dp)
+                                                                            .background(TalklyCyan, RoundedCornerShape(1.5.dp))
+                                                                    )
+                                                                    Spacer(modifier = Modifier.width(5.dp))
+                                                                    Column {
+                                                                        Text(
+                                                                            text = msg.replyToSenderName,
+                                                                            fontSize = 10.5.sp,
+                                                                            fontWeight = FontWeight.Bold,
+                                                                            color = TalklyCyan
+                                                                        )
+                                                                        Text(
+                                                                            text = msg.replyToText ?: "Media message",
+                                                                            fontSize = 10.5.sp,
+                                                                            color = TalklyTextSecondary,
+                                                                            maxLines = 1,
+                                                                            overflow = TextOverflow.Ellipsis
+                                                                        )
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                        // Media Content
+                                                        if (msg.mediaUrl != null || msg.isMediaExpired(simulatedTimeOffsetMs)) {
+                                                            MediaMessageItem(
+                                                                message = msg,
+                                                                isSelf = isSelf,
+                                                                simulatedTimeOffsetMs = simulatedTimeOffsetMs,
+                                                                onMediaClick = {
+                                                                    if (!msg.isMediaExpired(simulatedTimeOffsetMs)) {
+                                                                        fullMediaViewerMessage = msg
+                                                                    }
+                                                                },
+                                                                onRetryUpload = {
+                                                                    if (!msg.mediaUrl.isNullOrBlank()) {
+                                                                        val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository(context)
+                                                                        val canonicalId = chatRepo.getCanonicalMemberId(member.id)
+                                                                        com.family.talkly.util.MediaUploadManager.enqueueMediaUpload(
+                                                                            context = context,
+                                                                            messageId = msg.id,
+                                                                            chatKey = canonicalId,
+                                                                            recipientId = member.id,
+                                                                            senderUid = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE).getString("user_uid", null),
+                                                                            senderName = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE).getString("user_name", null),
+                                                                            messageType = msg.messageType,
+                                                                            localMediaUrl = msg.mediaUrl,
+                                                                            textContent = msg.textContent,
+                                                                            replyToId = msg.replyToMessageId,
+                                                                            replyToName = msg.replyToSenderName,
+                                                                            replyToText = msg.replyToText
+                                                                        )
+                                                                    }
+                                                                }
+                                                            )
+                                                        }
+
+                                                        // Text Content
+                                                        if (msg.textContent.isNotEmpty() && !isVoiceNote) {
+                                                            Text(
+                                                                text = msg.textContent,
+                                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                                    color = TalklyTextPrimary,
+                                                                    fontSize = if (isSingleEmoji) 42.sp else 14.5.sp
+                                                                )
+                                                            )
+                                                        }
+                                                    }
+
+                                                    if (!isVoiceNote) {
+                                                        Spacer(modifier = Modifier.height(2.dp))
+
+                                                        // Timestamp & Delivery Status
+                                                        Row(
+                                                            modifier = Modifier.align(Alignment.End),
+                                                            horizontalArrangement = Arrangement.End,
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            if (msg.isStarred) {
+                                                                Icon(
+                                                                    imageVector = Icons.Default.Star,
+                                                                    contentDescription = "Starred",
+                                                                    tint = Color(0xFFFFB300),
+                                                                    modifier = Modifier.size(11.dp)
+                                                                )
+                                                                Spacer(modifier = Modifier.width(2.dp))
+                                                            }
+                                                            if (msg.isPinned) {
+                                                                Icon(
+                                                                    imageVector = Icons.Default.PushPin,
+                                                                    contentDescription = "Pinned",
+                                                                    tint = TalklyCyan,
+                                                                    modifier = Modifier.size(11.dp)
+                                                                )
+                                                                Spacer(modifier = Modifier.width(2.dp))
+                                                            }
+                                                            Text(
+                                                                text = if (msg.isEdited) "${msg.formattedTime} • Edited" else msg.formattedTime,
+                                                                fontSize = 9.5.sp,
+                                                                color = TalklyTextSecondary
+                                                            )
+                                                            if (isSelf) {
+                                                                Spacer(modifier = Modifier.width(3.dp))
+                                                                val isPendingMsg = msg.isPending || msg.id.startsWith("temp_") ||
+                                                                        (!msg.mediaUrl.isNullOrEmpty() && (msg.mediaUrl.startsWith("content://") || msg.mediaUrl.startsWith("file://") || msg.mediaUrl.startsWith("/")))
+                                                                val statusState = when {
+                                                                    isPendingMsg -> 3
+                                                                    msg.isRead -> 2
+                                                                    msg.isDelivered -> 1
+                                                                    else -> 0
+                                                                }
+                                                                Crossfade(
+                                                                    targetState = statusState,
+                                                                    animationSpec = tween(durationMillis = 300),
+                                                                    label = "StatusFadeAnimation"
+                                                                ) { state ->
+                                                                    when (state) {
+                                                                        3 -> {
+                                                                            if (!isNetworkConnected) {
+                                                                                Icon(
+                                                                                    imageVector = Icons.Default.AccessTime,
+                                                                                    contentDescription = "Queued",
+                                                                                    tint = Color(0xFFF59E0B),
+                                                                                    modifier = Modifier.size(12.dp)
+                                                                                )
+                                                                            } else {
+                                                                                CircularProgressIndicator(
+                                                                                    strokeWidth = 1.2.dp,
+                                                                                    color = TalklyCyan,
+                                                                                    modifier = Modifier.size(12.dp)
+                                                                                )
+                                                                            }
+                                                                        }
+                                                                        2 -> {
+                                                                            // SEEN/READ (Cyan Double Check)
+                                                                            Icon(
+                                                                                imageVector = Icons.Default.DoneAll,
+                                                                                contentDescription = "Seen",
+                                                                                tint = TalklyCyan,
+                                                                                modifier = Modifier.size(14.dp)
+                                                                            )
+                                                                        }
+                                                                        1 -> {
+                                                                            // DELIVERED (White Double Check)
+                                                                            Icon(
+                                                                                imageVector = Icons.Default.DoneAll,
+                                                                                contentDescription = "Delivered",
+                                                                                tint = TalklyTextPrimary.copy(alpha = 0.7f),
+                                                                                modifier = Modifier.size(14.dp)
+                                                                            )
+                                                                        }
+                                                                        else -> {
+                                                                            // SENT (Single Check)
+                                                                            Icon(
+                                                                                imageVector = Icons.Default.Done,
+                                                                                contentDescription = "Sent",
+                                                                                tint = TalklyTextSecondary,
+                                                                                modifier = Modifier.size(14.dp)
+                                                                            )
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                        if (showReadDetails) {
+                                                            Spacer(modifier = Modifier.height(2.dp))
+                                                            val detailsText = if (msg.isRead) {
+                                                                "Seen at ${msg.formattedReadTime}"
+                                                            } else if (msg.isDelivered) {
+                                                                "Delivered ${msg.formattedTime}"
+                                                            } else {
+                                                                "Sent ${msg.formattedTime}"
+                                                            }
+                                                            Text(
+                                                                text = detailsText,
+                                                                fontSize = 9.sp,
+                                                                color = TalklyCyan,
+                                                                modifier = Modifier.align(Alignment.End)
+                                                            )
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }

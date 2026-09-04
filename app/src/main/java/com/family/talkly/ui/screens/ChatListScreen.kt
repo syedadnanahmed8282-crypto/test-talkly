@@ -1299,22 +1299,22 @@ private fun TalklyMomentsCarousel(
         }
 
         LazyRow(
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // First Card: "Your Story"
             item {
                 Surface(
                     modifier = Modifier
-                        .width(155.dp)
-                        .height(115.dp)
+                        .width(78.dp)
+                        .height(102.dp)
                         .clickable {
                             val selfIdx = if (selfGroup != null) statusGroups.indexOf(selfGroup) else -1
                             onMyStatusClick(hasMyStatus, selfIdx)
                         },
                     color = SurfaceCard,
-                    shape = RoundedCornerShape(18.dp),
+                    shape = RoundedCornerShape(14.dp),
                     border = BorderStroke(
                         1.2.dp,
                         if (hasMyStatus) ElectricCyan.copy(alpha = 0.5f) else BorderElevated
@@ -1338,23 +1338,23 @@ private fun TalklyMomentsCarousel(
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(12.dp),
+                                .padding(7.dp),
                             verticalArrangement = Arrangement.SpaceBetween
                         ) {
                             // Top: Avatar with add badge
                             Box(
-                                modifier = Modifier.size(42.dp),
+                                modifier = Modifier.size(32.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(40.dp)
+                                        .size(30.dp)
                                         .clip(CircleShape)
                                         .background(
                                             if (hasMyStatus) Brush.sweepGradient(listOf(ElectricCyan, MintAccent, DeepAqua, ElectricCyan))
-                                            else SolidColor(Color(0xFF24303E))
+                                             else SolidColor(Color(0xFF24303E))
                                         )
-                                        .padding(2.dp)
+                                        .padding(1.5.dp)
                                 ) {
                                     Box(
                                         modifier = Modifier
@@ -1378,7 +1378,7 @@ private fun TalklyMomentsCarousel(
                                                 text = (currentUserProfile?.name?.take(1) ?: "U").uppercase(),
                                                 color = ElectricCyan,
                                                 fontWeight = FontWeight.Bold,
-                                                fontSize = 15.sp
+                                                fontSize = 12.sp
                                             )
                                         }
                                     }
@@ -1387,10 +1387,10 @@ private fun TalklyMomentsCarousel(
                                 if (!hasMyStatus) {
                                     Box(
                                         modifier = Modifier
-                                            .size(16.dp)
+                                            .size(13.dp)
                                             .clip(CircleShape)
                                             .background(ElectricCyan)
-                                            .border(1.5.dp, BackgroundDark, CircleShape)
+                                            .border(1.dp, BackgroundDark, CircleShape)
                                             .align(Alignment.BottomEnd),
                                         contentAlignment = Alignment.Center
                                     ) {
@@ -1398,7 +1398,7 @@ private fun TalklyMomentsCarousel(
                                             imageVector = Icons.Default.Add,
                                             contentDescription = null,
                                             tint = Color(0xFF040E14),
-                                            modifier = Modifier.size(11.dp)
+                                            modifier = Modifier.size(9.dp)
                                         )
                                     }
                                 }
@@ -1409,15 +1409,17 @@ private fun TalklyMomentsCarousel(
                                 Text(
                                     text = "Your Story",
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
+                                    fontSize = 10.5.sp,
                                     color = TextPrimary,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     text = if (hasMyStatus) "${selfGroup?.statuses?.size ?: 0} active" else "Tap to add",
-                                    fontSize = 11.sp,
+                                    fontSize = 8.5.sp,
                                     color = if (hasMyStatus) ElectricCyan else TextSecondary,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
@@ -1443,14 +1445,14 @@ private fun TalklyMomentsCarousel(
 
                 Surface(
                     modifier = Modifier
-                        .width(155.dp)
-                        .height(115.dp)
+                        .width(78.dp)
+                        .height(102.dp)
                         .clickable {
                             val idx = statusGroups.indexOf(group)
                             if (idx >= 0) onContactStatusClick(idx)
                         },
                     color = SurfaceCard,
-                    shape = RoundedCornerShape(18.dp),
+                    shape = RoundedCornerShape(14.dp),
                     border = BorderStroke(
                         1.2.dp,
                         if (hasUnseen) ElectricCyan.copy(alpha = 0.6f) else BorderElevated
@@ -1501,23 +1503,23 @@ private fun TalklyMomentsCarousel(
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(10.dp),
+                                .padding(7.dp),
                             verticalArrangement = Arrangement.SpaceBetween
                         ) {
                             // Top: Mini Avatar with Status Ring
                             Box(
-                                modifier = Modifier.size(34.dp),
+                                modifier = Modifier.size(28.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(32.dp)
+                                        .size(26.dp)
                                         .clip(CircleShape)
                                         .background(
                                             if (hasUnseen) Brush.sweepGradient(listOf(ElectricCyan, MintAccent, DeepAqua, ElectricCyan))
                                             else SolidColor(Color(0xFF24303E))
                                         )
-                                        .padding(1.5.dp)
+                                        .padding(1.2.dp)
                                 ) {
                                     Box(
                                         modifier = Modifier
@@ -1542,7 +1544,7 @@ private fun TalklyMomentsCarousel(
                                                 text = group.userName.take(2).uppercase(),
                                                 color = ElectricCyan,
                                                 fontWeight = FontWeight.Bold,
-                                                fontSize = 12.sp
+                                                fontSize = 9.5.sp
                                             )
                                         }
                                     }
@@ -1551,7 +1553,7 @@ private fun TalklyMomentsCarousel(
                                 if (hasUnseen) {
                                     Box(
                                         modifier = Modifier
-                                            .size(8.dp)
+                                            .size(6.dp)
                                             .background(ElectricCyan, CircleShape)
                                             .align(Alignment.TopEnd)
                                     )
@@ -1563,17 +1565,18 @@ private fun TalklyMomentsCarousel(
                                 Text(
                                     text = group.userName,
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
+                                    fontSize = 10.5.sp,
                                     color = Color.White,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     text = formattedTime,
-                                    fontSize = 10.sp,
+                                    fontSize = 8.5.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = if (hasUnseen) MintAccent else TextSecondary,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }

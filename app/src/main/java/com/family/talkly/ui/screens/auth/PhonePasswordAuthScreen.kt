@@ -111,30 +111,28 @@ import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 
 // =========================================================================
-// TALKLY THEME DERIVED PALETTE (DARK NEUMORPHIC AUTHENTICATION INTERFACE)
-// Derived directly from Talkly's PrimaryDarkPurple & SecondaryLightSage
+// TALKLY THEME PALETTE (DARK NAVY / BLACK + CYAN / BLUE VISUAL IDENTITY)
+// Matches Talkly's existing visual identity throughout the application
 // =========================================================================
-private val AuthDarkCanvas = Color(0xFF0C0911)        // Deep atmospheric obsidian
-private val AuthCardSurface = Color(0xFF16101E)       // Dark neumorphic base
-private val AuthCardInner = Color(0xFF110C17)         // Deep recessed inner card
-private val AuthFieldBg = Color(0xFF0D0913)           // Recessed input bed
-private val AuthFieldFocusedBg = Color(0xFF191223)    // Elevated active input bed
+private val AuthDarkCanvas = Color(0xFF080B10)        // Deep atmospheric dark navy / near-black
+private val AuthCardSurface = Color(0xFF141C26)       // Dark navy base surface
+private val AuthCardInner = Color(0xFF0E141D)         // Deep recessed inner card
+private val AuthFieldBg = Color(0xFF090D13)           // Recessed input bed
+private val AuthFieldFocusedBg = Color(0xFF101720)    // Elevated active input bed
 
-private val TalklyPrimary = Color(0xFF321C3B)         // Talkly Primary Dark Purple
-private val TalklyElectricPlum = Color(0xFF7E3B94)    // Glowing electric plum border
-private val TalklySage = Color(0xFFACC7B4)            // Talkly Secondary Light Sage
-private val TalklySageElectric = Color(0xFFC4E8CE)    // Moving electric border highlight
-private val TalklySageDeep = Color(0xFF6B8766)        // Sender bubble / deep sage
+private val ElectricCyan = Color(0xFF22D3EE)         // Talkly Primary Brand Accent (Bright Cyan)
+private val DeepAqua = Color(0xFF0EA5A4)             // Talkly Secondary Accent (Deep Aqua/Blue)
+private val TalklyBlue = Color(0xFF0284C7)           // Talkly Blue Accent
 
-private val AuthTextPrimary = Color(0xFFF9F7FB)       // High-contrast clean white
-private val AuthTextSecondary = Color(0xFFAAA0B0)     // Muted lavender-gray
-private val AuthTextMuted = Color(0xFF66596D)         // Input placeholder & subtle icons
-private val AuthBorderSubtle = Color(0xFF281E31)      // Deep card contour
-private val AuthBorderElevated = Color(0xFF3B2D46)    // Lifted border
+private val AuthTextPrimary = Color(0xFFF8FAFC)       // High-contrast clean white
+private val AuthTextSecondary = Color(0xFFA7B0BA)     // Muted blue-gray
+private val AuthTextMuted = Color(0xFF64748B)         // Input placeholder & subtle icons
+private val AuthBorderSubtle = Color(0xFF1E293B)      // Deep card contour / subtle border
+private val AuthBorderElevated = Color(0xFF24303E)    // Lifted border
 
 private val AuthErrorRed = Color(0xFFF43F5E)
 private val AuthErrorBg = Color(0x22F43F5E)
-private val AuthSuccessGreen = Color(0xFF10B981)
+private val AuthSuccessGreen = Color(0xFF22C55E)
 
 data class CountryCode(val country: String, val code: String, val flag: String)
 
@@ -265,7 +263,9 @@ fun PhonePasswordAuthScreen(
         // =========================================================================
         // ATMOSPHERIC BACKGROUND: SOFT BRAND COLOR BLUR LIGHT SOURCES
         // =========================================================================
-        // Upper-Left atmospheric light source (Talkly Primary Deep Plum)
+        // ATMOSPHERIC BACKGROUND: SOFT BRAND COLOR BLUR LIGHT SOURCES
+        // =========================================================================
+        // Upper-Left atmospheric light source (Talkly Cyan / Blue)
         Box(
             modifier = Modifier
                 .size(360.dp)
@@ -274,15 +274,15 @@ fun PhonePasswordAuthScreen(
                 .background(
                     Brush.radialGradient(
                         colors = listOf(
-                            TalklyElectricPlum.copy(alpha = 0.18f),
-                            TalklyPrimary.copy(alpha = 0.08f),
+                            ElectricCyan.copy(alpha = 0.12f),
+                            DeepAqua.copy(alpha = 0.05f),
                             Color.Transparent
                         )
                     )
                 )
         )
 
-        // Lower-Right atmospheric light source (Talkly Sage Accent)
+        // Lower-Right atmospheric light source (Talkly Blue / Aqua Accent)
         Box(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -292,8 +292,8 @@ fun PhonePasswordAuthScreen(
                 .background(
                     Brush.radialGradient(
                         colors = listOf(
-                            TalklySage.copy(alpha = 0.14f),
-                            TalklySageDeep.copy(alpha = 0.05f),
+                            DeepAqua.copy(alpha = 0.10f),
+                            TalklyBlue.copy(alpha = 0.04f),
                             Color.Transparent
                         )
                     )
@@ -309,7 +309,7 @@ fun PhonePasswordAuthScreen(
                 .background(
                     Brush.radialGradient(
                         colors = listOf(
-                            TalklyElectricPlum.copy(alpha = 0.06f),
+                            ElectricCyan.copy(alpha = 0.04f),
                             Color.Transparent
                         )
                     )
@@ -348,8 +348,8 @@ fun PhonePasswordAuthScreen(
                         .background(
                             Brush.radialGradient(
                                 colors = listOf(
-                                    TalklySage.copy(alpha = auraPulseAlpha * 0.4f),
-                                    TalklyElectricPlum.copy(alpha = auraPulseAlpha * 0.2f),
+                                    ElectricCyan.copy(alpha = auraPulseAlpha * 0.35f),
+                                    DeepAqua.copy(alpha = auraPulseAlpha * 0.15f),
                                     Color.Transparent
                                 )
                             )
@@ -364,15 +364,15 @@ fun PhonePasswordAuthScreen(
                         .shadow(
                             elevation = 16.dp,
                             shape = RoundedCornerShape(22.dp),
-                            ambientColor = TalklyElectricPlum,
-                            spotColor = TalklySage
+                            ambientColor = DeepAqua,
+                            spotColor = ElectricCyan
                         )
                         .clip(RoundedCornerShape(22.dp))
                         .background(
                             Brush.linearGradient(
                                 colors = listOf(
-                                    Color(0xFF24152C),
-                                    Color(0xFF140D1B)
+                                    Color(0xFF16202C),
+                                    Color(0xFF0F1722)
                                 )
                             )
                         )
@@ -380,8 +380,8 @@ fun PhonePasswordAuthScreen(
                             width = 1.5.dp,
                             brush = Brush.linearGradient(
                                 colors = listOf(
-                                    TalklySage.copy(alpha = 0.85f),
-                                    TalklyElectricPlum.copy(alpha = 0.45f),
+                                    ElectricCyan.copy(alpha = 0.85f),
+                                    DeepAqua.copy(alpha = 0.45f),
                                     Color.Transparent
                                 )
                             ),
@@ -391,7 +391,7 @@ fun PhonePasswordAuthScreen(
                     Icon(
                         imageVector = Icons.Default.Forum,
                         contentDescription = "Talkly Logo",
-                        tint = TalklySage,
+                        tint = ElectricCyan,
                         modifier = Modifier.size(32.dp)
                     )
                 }
@@ -461,8 +461,8 @@ fun PhonePasswordAuthScreen(
                         .background(
                             Brush.radialGradient(
                                 colors = listOf(
-                                    TalklyElectricPlum.copy(alpha = auraPulseAlpha * 0.35f),
-                                    TalklySage.copy(alpha = auraPulseAlpha * 0.15f),
+                                    ElectricCyan.copy(alpha = auraPulseAlpha * 0.25f),
+                                    DeepAqua.copy(alpha = auraPulseAlpha * 0.10f),
                                     Color.Transparent
                                 )
                             )
@@ -481,10 +481,10 @@ fun PhonePasswordAuthScreen(
                                     brush = Brush.sweepGradient(
                                         0.0f to Color.Transparent,
                                         0.55f to Color.Transparent,
-                                        0.70f to TalklyElectricPlum.copy(alpha = 0.25f),
-                                        0.82f to TalklyElectricPlum,
-                                        0.92f to TalklySage,
-                                        0.97f to TalklySageElectric,
+                                        0.70f to TalklyBlue.copy(alpha = 0.25f),
+                                        0.82f to DeepAqua,
+                                        0.92f to ElectricCyan,
+                                        0.97f to Color.White.copy(alpha = 0.90f),
                                         1.0f to Color.Transparent
                                     ),
                                     radius = size.maxDimension * 0.9f
@@ -599,7 +599,7 @@ fun PhonePasswordAuthScreen(
                                     Surface(
                                         color = AuthFieldBg,
                                         shape = RoundedCornerShape(14.dp),
-                                        border = BorderStroke(1.dp, if (isPhoneFocused) TalklySage.copy(alpha = 0.5f) else AuthBorderSubtle),
+                                        border = BorderStroke(1.dp, if (isPhoneFocused) ElectricCyan.copy(alpha = 0.5f) else AuthBorderSubtle),
                                         modifier = Modifier
                                             .height(52.dp)
                                             .clickable { dropdownExpanded = true }
@@ -619,7 +619,7 @@ fun PhonePasswordAuthScreen(
                                             Icon(
                                                 imageVector = Icons.Default.ArrowDropDown,
                                                 contentDescription = "Select country code",
-                                                tint = if (isPhoneFocused) TalklySage else AuthTextSecondary,
+                                                tint = if (isPhoneFocused) ElectricCyan else AuthTextSecondary,
                                                 modifier = Modifier.size(18.dp)
                                             )
                                         }
@@ -649,7 +649,7 @@ fun PhonePasswordAuthScreen(
                                                             text = item.code,
                                                             fontSize = 13.sp,
                                                             fontWeight = FontWeight.Bold,
-                                                            color = TalklySage
+                                                            color = ElectricCyan
                                                         )
                                                     }
                                                 },
@@ -677,7 +677,7 @@ fun PhonePasswordAuthScreen(
                                         .border(
                                             width = if (isPhoneFocused) 1.5.dp else 1.dp,
                                             brush = if (isPhoneFocused) {
-                                                Brush.horizontalGradient(listOf(TalklySage, TalklyElectricPlum))
+                                                Brush.horizontalGradient(listOf(ElectricCyan, DeepAqua))
                                             } else {
                                                 SolidColor(AuthBorderSubtle)
                                             },
@@ -693,7 +693,7 @@ fun PhonePasswordAuthScreen(
                                         Icon(
                                             imageVector = Icons.Default.Phone,
                                             contentDescription = null,
-                                            tint = if (isPhoneFocused) TalklySage else AuthTextMuted,
+                                            tint = if (isPhoneFocused) ElectricCyan else AuthTextMuted,
                                             modifier = Modifier.size(18.dp)
                                         )
                                         Spacer(modifier = Modifier.width(10.dp))
@@ -715,7 +715,7 @@ fun PhonePasswordAuthScreen(
                                                 keyboardType = KeyboardType.Number,
                                                 imeAction = ImeAction.Next
                                             ),
-                                            cursorBrush = SolidColor(TalklySage),
+                                            cursorBrush = SolidColor(ElectricCyan),
                                             modifier = Modifier
                                                 .weight(1f)
                                                 .onFocusChanged { isPhoneFocused = it.isFocused }
@@ -811,7 +811,7 @@ fun PhonePasswordAuthScreen(
                                             text = "Forgot password?",
                                             fontSize = 13.sp,
                                             fontWeight = FontWeight.SemiBold,
-                                            color = TalklySage
+                                            color = ElectricCyan
                                         )
                                     }
                                 }
@@ -919,7 +919,7 @@ fun PhonePasswordAuthScreen(
                     text = if (selectedTab == 0) "Create account" else "Login",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
-                    color = TalklySage,
+                    color = ElectricCyan,
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
                         .clickable {
@@ -1056,7 +1056,7 @@ fun PhonePasswordAuthScreen(
                                     ),
                                     singleLine = true,
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                    cursorBrush = SolidColor(TalklySage),
+                                    cursorBrush = SolidColor(ElectricCyan),
                                     modifier = Modifier.fillMaxWidth(),
                                     decorationBox = { innerTextField ->
                                         if (forgotPhoneInput.isEmpty()) {
@@ -1158,12 +1158,12 @@ fun PhonePasswordAuthScreen(
                         },
                         enabled = !isSendingReset,
                         shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = TalklySage)
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan)
                     ) {
                         if (isSendingReset) {
-                            CircularProgressIndicator(color = AuthDarkCanvas, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            CircularProgressIndicator(color = Color(0xFF040E14), modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         } else {
-                            Text("Send Reset Link", color = AuthDarkCanvas, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text("Send Reset Link", color = Color(0xFF040E14), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
                     }
                 },
@@ -1206,7 +1206,7 @@ private fun CustomFloatingAuthSelector(
             label = "LoginBg"
         )
         val loginTextColor by animateColorAsState(
-            targetValue = if (isLogin) TalklySage else AuthTextSecondary,
+            targetValue = if (isLogin) ElectricCyan else AuthTextSecondary,
             animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
             label = "LoginText"
         )
@@ -1220,8 +1220,8 @@ private fun CustomFloatingAuthSelector(
                 .then(
                     if (isLogin) {
                         Modifier
-                            .border(1.dp, TalklySage.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
-                            .shadow(4.dp, RoundedCornerShape(14.dp), ambientColor = TalklySage, spotColor = TalklySage)
+                            .border(1.dp, ElectricCyan.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+                            .shadow(4.dp, RoundedCornerShape(14.dp), ambientColor = ElectricCyan, spotColor = DeepAqua)
                     } else {
                         Modifier
                     }
@@ -1247,7 +1247,7 @@ private fun CustomFloatingAuthSelector(
             label = "RegisterBg"
         )
         val registerTextColor by animateColorAsState(
-            targetValue = if (isRegister) TalklySage else AuthTextSecondary,
+            targetValue = if (isRegister) ElectricCyan else AuthTextSecondary,
             animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
             label = "RegisterText"
         )
@@ -1261,8 +1261,8 @@ private fun CustomFloatingAuthSelector(
                 .then(
                     if (isRegister) {
                         Modifier
-                            .border(1.dp, TalklySage.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
-                            .shadow(4.dp, RoundedCornerShape(14.dp), ambientColor = TalklySage, spotColor = TalklySage)
+                            .border(1.dp, ElectricCyan.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+                            .shadow(4.dp, RoundedCornerShape(14.dp), ambientColor = ElectricCyan, spotColor = DeepAqua)
                     } else {
                         Modifier
                     }
@@ -1310,7 +1310,7 @@ private fun NeumorphicInputField(
     )
 
     val borderBrush = if (isFocused) {
-        Brush.horizontalGradient(listOf(TalklySage, TalklyElectricPlum))
+        Brush.horizontalGradient(listOf(ElectricCyan, DeepAqua))
     } else {
         SolidColor(AuthBorderSubtle)
     }
@@ -1349,7 +1349,7 @@ private fun NeumorphicInputField(
                 Icon(
                     imageVector = leadingIcon,
                     contentDescription = null,
-                    tint = if (isFocused) TalklySage else AuthTextMuted,
+                    tint = if (isFocused) ElectricCyan else AuthTextMuted,
                     modifier = Modifier.size(18.dp)
                 )
 
@@ -1373,7 +1373,7 @@ private fun NeumorphicInputField(
                         onDone = { onImeAction?.invoke() },
                         onNext = { onImeAction?.invoke() }
                     ),
-                    cursorBrush = SolidColor(TalklySage),
+                    cursorBrush = SolidColor(ElectricCyan),
                     modifier = Modifier
                         .weight(1f)
                         .onFocusChanged { isFocused = it.isFocused }
@@ -1398,7 +1398,7 @@ private fun NeumorphicInputField(
                         Icon(
                             imageVector = if (isPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
                             contentDescription = if (isPasswordVisible) "Hide password" else "Show password",
-                            tint = if (isPasswordVisible) TalklySage else AuthTextMuted,
+                            tint = if (isPasswordVisible) ElectricCyan else AuthTextMuted,
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -1448,24 +1448,24 @@ private fun CustomTactileAuthButton(
             .shadow(
                 elevation = if (isEnabled && !isPressed) 14.dp else 2.dp,
                 shape = RoundedCornerShape(16.dp),
-                ambientColor = TalklyElectricPlum,
-                spotColor = TalklySage
+                ambientColor = DeepAqua,
+                spotColor = ElectricCyan
             )
             .clip(RoundedCornerShape(16.dp))
             .background(
                 if (isEnabled) {
                     Brush.horizontalGradient(
                         colors = listOf(
-                            TalklyElectricPlum,
-                            TalklyPrimary,
-                            TalklySageDeep
+                            ElectricCyan,
+                            DeepAqua,
+                            TalklyBlue
                         )
                     )
                 } else {
                     Brush.horizontalGradient(
                         colors = listOf(
-                            TalklyElectricPlum.copy(alpha = 0.35f),
-                            TalklySageDeep.copy(alpha = 0.35f)
+                            ElectricCyan.copy(alpha = 0.35f),
+                            DeepAqua.copy(alpha = 0.35f)
                         )
                     )
                 }
@@ -1477,7 +1477,7 @@ private fun CustomTactileAuthButton(
         ) {
             if (isLoading) {
                 CircularProgressIndicator(
-                    color = TalklySage,
+                    color = Color(0xFF040E14),
                     strokeWidth = 2.5.dp,
                     modifier = Modifier.size(24.dp)
                 )
@@ -1486,7 +1486,7 @@ private fun CustomTactileAuthButton(
                     text = text,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
-                    color = AuthTextPrimary,
+                    color = Color(0xFF040E14),
                     letterSpacing = 0.6.sp
                 )
             }

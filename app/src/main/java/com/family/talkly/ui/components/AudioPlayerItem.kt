@@ -51,6 +51,7 @@ import com.family.talkly.ui.theme.WhatsappGreen
 import com.family.talkly.ui.theme.WhatsappLightGreen
 import com.family.talkly.ui.theme.WhatsappTeal
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.widthIn
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -58,6 +59,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.input.pointer.pointerInput
 import java.io.File
 import java.util.Locale
+
+// Talkly Palette for Audio Bubble
+private val TalklyCyan = Color(0xFF22D3EE)
+private val TalklyMint = Color(0xFF5EEAD4)
+private val TalklyCard = Color(0xFF18212B)
+private val TalklyElevated = Color(0xFF202B36)
+private val TalklyTextPrimary = Color(0xFFF8FAFC)
+private val TalklyTextSecondary = Color(0xFFA7B0BA)
 
 @Composable
 fun AudioWaveformBar(
@@ -212,58 +221,37 @@ fun AudioPlayerItem(
 
     val isDarkTheme = LocalIsDarkTheme.current
 
-    // Sage Green / Laurel Green theme color
-    val sageGreen = Color(0xFF6B8766)
-
-    // Pure white background for voice note container as requested
-    val containerColor = Color.White
-    val titleColor = sageGreen
-    val subTextColor = Color(0xFF6B7280)
+    val bubbleShape = RoundedCornerShape(
+        topStart = 16.dp,
+        topEnd = 16.dp,
+        bottomStart = if (isSelf) 16.dp else 4.dp,
+        bottomEnd = if (isSelf) 4.dp else 16.dp
+    )
 
     Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = containerColor,
+        shape = bubbleShape,
+        color = if (isSelf) Color(0xFF0E3E4F) else TalklyCard,
         shadowElevation = 1.dp,
         border = BorderStroke(
-            width = 1.dp,
-            color = Color(0xFFE2E8F0)
+            width = 0.5.dp,
+            color = if (isSelf) TalklyCyan.copy(alpha = 0.35f) else TalklyElevated
         ),
         modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp)
+            .widthIn(min = 180.dp, max = 245.dp)
+            .padding(vertical = 1.dp)
     ) {
         Row(
             modifier = Modifier
-                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .padding(horizontal = 8.dp, vertical = 6.dp)
                 .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Mic Avatar Badge
-            Box(
-                modifier = Modifier
-                    .size(38.dp)
-                    .background(
-                        sageGreen.copy(alpha = 0.12f),
-                        CircleShape
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Mic,
-                    contentDescription = "Voice Note",
-                    tint = sageGreen,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            // Play / Pause Button in Sage Green / Laurel Green
+            // Slim Play / Pause Button
             Surface(
                 shape = CircleShape,
-                color = sageGreen,
+                color = if (isSelf) TalklyCyan else TalklyElevated,
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(32.dp)
                     .clickable {
                         if (!isPrepared) return@clickable
                         try {
@@ -283,42 +271,27 @@ fun AudioPlayerItem(
                     Icon(
                         imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (isPlaying) "Pause" else "Play",
-                        tint = Color.White,
-                        modifier = Modifier.size(22.dp)
+                        tint = if (isSelf) Color(0xFF080B10) else TalklyCyan,
+                        modifier = Modifier.size(17.dp)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(7.dp))
 
-            // Waveform / Progress bar & duration
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Voice Message",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = titleColor
-                    )
-                    Text(
-                        text = formatTimeMs(if (isPlaying || currentPositionMs > 0) currentPositionMs else durationMs),
-                        fontSize = 11.sp,
-                        color = subTextColor
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
+            // Compact Waveform
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(20.dp)
+            ) {
                 AudioWaveformBar(
                     progress = progress,
                     isPlaying = isPlaying,
+                    barCount = 24,
                     seed = message.id.hashCode(),
-                    activeColor = sageGreen,
-                    inactiveColor = sageGreen.copy(alpha = 0.22f),
+                    activeColor = if (isSelf) TalklyCyan else TalklyMint,
+                    inactiveColor = if (isSelf) TalklyCyan.copy(alpha = 0.25f) else TalklyTextSecondary.copy(alpha = 0.3f),
                     onSeek = { clickedRatio ->
                         if (isPrepared && durationMs > 0) {
                             val seekMs = (clickedRatio * durationMs).toLong()
@@ -332,6 +305,16 @@ fun AudioPlayerItem(
                     }
                 )
             }
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            // Duration
+            Text(
+                text = formatTimeMs(if (isPlaying || currentPositionMs > 0) currentPositionMs else durationMs),
+                fontSize = 10.5.sp,
+                fontWeight = FontWeight.Medium,
+                color = if (isSelf) TalklyTextPrimary.copy(alpha = 0.9f) else TalklyTextSecondary
+            )
         }
     }
 }

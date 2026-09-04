@@ -10,9 +10,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.HourglassDisabled
@@ -76,42 +79,44 @@ fun MediaMessageItem(
             colors = CardDefaults.cardColors(containerColor = ExpiredBgLight),
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 6.dp)
+                .widthIn(min = 160.dp, max = 240.dp)
+                .padding(bottom = 4.dp)
                 .border(1.dp, ExpiredBorder, RoundedCornerShape(12.dp))
         ) {
             Row(
                 modifier = Modifier
-                    .padding(12.dp)
+                    .padding(10.dp)
                     .fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
-                        .background(Color(0xFFFFC107).copy(alpha = 0.2f), RoundedCornerShape(20.dp)),
+                        .size(34.dp)
+                        .background(Color(0xFFFFC107).copy(alpha = 0.2f), RoundedCornerShape(17.dp)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.HourglassDisabled,
                         contentDescription = "Expired",
                         tint = ExpiredTextDark,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(20.dp)
                     )
                 }
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Column {
                     Text(
                         text = "Media expired after 48h",
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontWeight = FontWeight.Bold,
-                            color = ExpiredTextDark
+                            color = ExpiredTextDark,
+                            fontSize = 12.sp
                         )
                     )
                     Text(
-                        text = "The ${message.messageType.name.lowercase()} file was automatically removed per 48h family retention policy.",
+                        text = "The ${message.messageType.name.lowercase()} file was automatically removed.",
                         style = MaterialTheme.typography.labelSmall.copy(
-                            color = ExpiredTextDark.copy(alpha = 0.8f)
+                            color = ExpiredTextDark.copy(alpha = 0.8f),
+                            fontSize = 10.sp
                         )
                     )
                 }
@@ -123,10 +128,10 @@ fun MediaMessageItem(
         // Active Media Display
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(200.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color.Black.copy(alpha = 0.05f))
+                .widthIn(min = 160.dp, max = 240.dp)
+                .heightIn(min = 130.dp, max = 220.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0xFF080B10))
                 .clickable {
                     message.mediaUrl?.let { onMediaClick(it) }
                 }
@@ -136,22 +141,27 @@ fun MediaMessageItem(
                     bitmap = videoThumbnail!!.asImageBitmap(),
                     contentDescription = message.textContent,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxWidth().height(200.dp)
+                    modifier = Modifier
+                        .widthIn(min = 160.dp, max = 240.dp)
+                        .heightIn(min = 130.dp, max = 220.dp)
                 )
             } else {
                 AsyncImage(
                     model = com.family.talkly.util.PhoneUtils.getCoilMediaModel(message.mediaUrl),
                     contentDescription = message.textContent,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxWidth().height(200.dp)
+                    modifier = Modifier
+                        .widthIn(min = 160.dp, max = 240.dp)
+                        .heightIn(min = 130.dp, max = 220.dp)
                 )
             }
 
             if (message.messageType == MessageType.VIDEO) {
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(24.dp))
+                        .size(38.dp)
+                        .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                        .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape)
                         .align(Alignment.Center),
                     contentAlignment = Alignment.Center
                 ) {
@@ -159,7 +169,7 @@ fun MediaMessageItem(
                         imageVector = Icons.Default.PlayArrow,
                         contentDescription = "Play Video",
                         tint = Color.White,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(24.dp)
                     )
                 }
             }
@@ -235,22 +245,22 @@ fun MediaMessageItem(
             Row(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(8.dp)
-                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .padding(6.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = Icons.Default.Schedule,
                     contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.9f),
-                    modifier = Modifier.size(12.dp)
+                    tint = Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.size(11.dp)
                 )
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(3.dp))
                 Text(
                     text = "Expires in 48h",
                     color = Color.White,
-                    fontSize = 10.sp,
+                    fontSize = 9.5.sp,
                     fontWeight = FontWeight.Medium
                 )
             }
