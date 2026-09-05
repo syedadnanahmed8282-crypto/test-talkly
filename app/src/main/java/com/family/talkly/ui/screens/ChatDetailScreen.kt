@@ -391,7 +391,7 @@ fun ChatDetailScreen(
 
     val combinedMessages = remember(activeMessages, localPendingMessages) {
         val serverIds = activeMessages.map { it.id }.toSet()
-        activeMessages + localPendingMessages.filter { it.id !in serverIds }
+        (activeMessages + localPendingMessages.filter { it.id !in serverIds }).sortedBy { it.timestamp }
     }
 
     val displayedMessages = remember(combinedMessages, isSearchActive, searchQuery) {
@@ -418,7 +418,7 @@ fun ChatDetailScreen(
         localMediaUrl: String?
     ) {
         if (localMediaUrl.isNullOrBlank()) return
-        val tempId = "temp_${System.currentTimeMillis()}_${(1000..9999).random()}"
+        val tempId = java.util.UUID.randomUUID().toString()
         val replyId = replyingToMessage?.id
         val replyName = replyingToMessage?.senderName
         val replyText = replyingToMessage?.textContent?.ifEmpty { "Media/Voice Message" }
@@ -2040,6 +2040,16 @@ fun ChatDetailScreen(
                         val uiItems = remember(displayedMessages, simulatedTimeOffsetMs) {
                             val items = mutableListOf<ChatUiItem>()
                             var i = 0
+                            val memberSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone)
+
+                            fun isMsgFromMember(m: ChatMessage): Boolean {
+                                val sSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(m.senderId)
+                                return (m.senderId == member.id) ||
+                                        (!member.firebaseUid.isNullOrBlank() && m.senderId == member.firebaseUid) ||
+                                        (member.phone.isNotBlank() && m.senderId == member.phone) ||
+                                        (memberSuffix.isNotBlank() && memberSuffix == sSuffix)
+                            }
+
                             while (i < displayedMessages.size) {
                                 val msg = displayedMessages[i]
                                 val isVisualMedia = (msg.messageType == MessageType.IMAGE || msg.messageType == MessageType.VIDEO) &&
@@ -2055,11 +2065,14 @@ fun ChatDetailScreen(
                                                 !nextMsg.isDeletedForEveryone &&
                                                 (nextMsg.mediaUrl != null || nextMsg.isMediaExpired(simulatedTimeOffsetMs))
 
+                                        val sameSender = (msg.senderId == nextMsg.senderId) || (isMsgFromMember(msg) == isMsgFromMember(nextMsg))
+                                        val timeDiff = kotlin.math.abs(nextMsg.timestamp - group.last().timestamp)
+
                                         if (isNextVisualMedia &&
-                                            nextMsg.senderId == msg.senderId &&
+                                            sameSender &&
                                             nextMsg.replyToSenderName == null &&
                                             msg.replyToSenderName == null &&
-                                            kotlin.math.abs(nextMsg.timestamp - msg.timestamp) <= 60_000L
+                                            timeDiff <= 120_000L
                                         ) {
                                             group.add(nextMsg)
                                             j++
@@ -2202,6 +2215,10 @@ fun ChatDetailScreen(
                                                             fullMediaViewerMessage = clickedMsg
                                                         }
                                                     },
+                                                    onLongClick = { targetMsg ->
+                                                        selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
+                                                        reactionDialogMessage = targetMsg
+                                                    },
                                                     onRetryUpload = { retryMsg ->
                                                         if (!retryMsg.mediaUrl.isNullOrBlank()) {
                                                             val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository(context)
@@ -2226,13 +2243,6 @@ fun ChatDetailScreen(
                                                         .onGloballyPositioned { coords ->
                                                             itemYInWindow = coords.positionInWindow().y
                                                         }
-                                                        .combinedClickable(
-                                                            onClick = { showReadDetails = !showReadDetails },
-                                                            onLongClick = {
-                                                                selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
-                                                                reactionDialogMessage = msg
-                                                            }
-                                                        )
                                                 )
                                             }
                                             is ChatUiItem.SingleMessage -> {
@@ -2244,17 +2254,15 @@ fun ChatDetailScreen(
                                                     AudioPlayerItem(
                                                         message = msg,
                                                         isSelf = isSelf,
+                                                        onLongClick = {
+                                                            selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
+                                                            reactionDialogMessage = msg
+                                                        },
+                                                        onClick = { showReadDetails = !showReadDetails },
                                                         modifier = Modifier
                                                             .onGloballyPositioned { coords ->
                                                                 itemYInWindow = coords.positionInWindow().y
                                                             }
-                                                            .combinedClickable(
-                                                                onClick = { showReadDetails = !showReadDetails },
-                                                                onLongClick = {
-                                                                    selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
-                                                                    reactionDialogMessage = msg
-                                                                }
-                                                            )
                                                     )
                                                 } else if (hasMedia) {
                                                     MediaMessageItem(
@@ -2265,6 +2273,10 @@ fun ChatDetailScreen(
                                                             if (!msg.isMediaExpired(simulatedTimeOffsetMs)) {
                                                                 fullMediaViewerMessage = msg
                                                             }
+                                                        },
+                                                        onLongClick = {
+                                                            selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
+                                                            reactionDialogMessage = msg
                                                         },
                                                         onRetryUpload = {
                                                             if (!msg.mediaUrl.isNullOrBlank()) {
@@ -2290,13 +2302,6 @@ fun ChatDetailScreen(
                                                             .onGloballyPositioned { coords ->
                                                                 itemYInWindow = coords.positionInWindow().y
                                                             }
-                                                            .combinedClickable(
-                                                                onClick = { showReadDetails = !showReadDetails },
-                                                                onLongClick = {
-                                                                    selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
-                                                                    reactionDialogMessage = msg
-                                                                }
-                                                            )
                                                     )
                                                 } else {
                                                     // MESSAGE BUBBLE

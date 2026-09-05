@@ -58,14 +58,14 @@ class AuthManager(private val context: Context) {
             val cleanNumber = PhoneUtils.cleanPhoneNumber(phoneNumber).ifBlank { phoneNumber.replace("+", "").trim() }
             return "${cleanNumber}@talkly.app"
         }
+
+        @Volatile
+        var isLoggingOut = false
     }
 
     private val auth = SupabaseClientProvider.client.auth
     private val postgrest = SupabaseClientProvider.client.postgrest
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-
-    @Volatile
-    private var isLoggingOut = false
 
     private val _authState = MutableStateFlow<AuthState>(AuthState.InitialCheck)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
@@ -81,7 +81,8 @@ class AuthManager(private val context: Context) {
     }
 
     /**
-     * Checks local session and Supabase Auth session to resume user session
+     * Checks Supabase Auth session to resume user session.
+     * Supabase Auth session is the SINGLE source of truth.
      */
     fun checkCurrentSession() {
         if (isLoggingOut) {
@@ -91,77 +92,96 @@ class AuthManager(private val context: Context) {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val isLoggedIn = prefs.getBoolean(KEY_IS_LOGGED_IN, false)
-                val savedUid = prefs.getString(KEY_UID, null)
-
-                // If user was previously logged in, ensure Supabase Auth finishes restoring/refreshing session from storage
-                if (isLoggedIn || !savedUid.isNullOrEmpty()) {
-                    try {
-                        withTimeoutOrNull(3000L) {
-                            auth.sessionStatus.first { it !is SessionStatus.Initializing }
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Auth session restoration wait note: ${e.message}")
-                    }
-
-                    // Ensure token is refreshed if session exists
-                    try {
-                        val currentSession = auth.currentSessionOrNull()
-                        if (currentSession != null) {
-                            auth.refreshCurrentSession()
-                            Log.d(TAG, "Supabase Auth session refreshed successfully")
-                        }
-                    } catch (refreshEx: Exception) {
-                        Log.w(TAG, "Supabase Auth session refresh note: ${refreshEx.localizedMessage}")
-                    }
-                }
-
-                val session = auth.currentSessionOrNull()
-                val user = auth.currentUserOrNull()
-
-                if (user != null || (session != null && !savedUid.isNullOrEmpty()) || (isLoggedIn && !savedUid.isNullOrEmpty())) {
-                    val effectiveUid = user?.id ?: savedUid ?: ""
-                    val cachedName = prefs.getString(KEY_NAME, "") ?: ""
-                    val cachedPhone = prefs.getString(KEY_PHONE, "") ?: (user?.phone ?: "")
-                    var cachedPic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
-                    val cachedCover = prefs.getString(KEY_COVER_PHOTO, "") ?: ""
-                    val cachedBio = prefs.getString(KEY_BIO, "Available on Talkly 💬") ?: "Available on Talkly 💬"
-
-                    // Check if pic is a content:// URI and convert to persistent internal avatar file if available
-                    if (cachedPic.startsWith("content://") || cachedPic.isBlank()) {
-                        val avatarDir = File(context.filesDir, "profile_avatars")
-                        val internalFile = File(avatarDir, "avatar_${effectiveUid}.jpg")
-                        if (internalFile.exists()) {
-                            cachedPic = Uri.fromFile(internalFile).toString()
-                        }
-                    }
-
-                    if (cachedName.isNotBlank() && effectiveUid.isNotBlank()) {
-                        val cachedProfile = UserProfile(
-                            uid = effectiveUid,
-                            name = cachedName,
-                            phoneNumber = cachedPhone,
-                            phoneSuffix = PhoneUtils.extractPhoneSuffix(cachedPhone),
-                            profilePicUrl = cachedPic,
-                            coverPhotoUrl = cachedCover,
-                            bio = cachedBio
-                        )
-                        withContext(Dispatchers.Main) {
-                            _authState.value = AuthState.Authenticated(cachedProfile)
-                        }
-                    } else if (effectiveUid.isNotBlank()) {
-                        withContext(Dispatchers.Main) {
-                            _authState.value = AuthState.ProfileSetupRequired(effectiveUid, cachedPhone)
-                        }
-                    }
-
-                    // Sync latest profile from Supabase in background
-                    syncProfileFromSupabase(effectiveUid, cachedPhone)
-                } else {
+                if (isLoggingOut) {
                     withContext(Dispatchers.Main) {
                         _authState.value = AuthState.Unauthenticated
                     }
+                    return@launch
                 }
+
+                // Wait for Supabase Auth session restoration from storage if initializing
+                try {
+                    withTimeoutOrNull(2500L) {
+                        auth.sessionStatus.first { it !is SessionStatus.Initializing }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Auth session restoration wait note: ${e.message}")
+                }
+
+                if (isLoggingOut) {
+                    withContext(Dispatchers.Main) {
+                        _authState.value = AuthState.Unauthenticated
+                    }
+                    return@launch
+                }
+
+                val currentSession = auth.currentSessionOrNull()
+                val currentUser = auth.currentUserOrNull() ?: currentSession?.user
+
+                // If no valid Supabase session/user exists, user is strictly unauthenticated.
+                // Never inspect saved UID or local preferences to authenticate!
+                if (currentUser == null || currentSession == null) {
+                    Log.d(TAG, "No active Supabase Auth session or user found -> AuthState.Unauthenticated")
+                    withContext(Dispatchers.Main) {
+                        _authState.value = AuthState.Unauthenticated
+                    }
+                    return@launch
+                }
+
+                // If a valid Supabase user exists, use ONLY user.id as the effective UID
+                val effectiveUid = currentUser.id
+                if (effectiveUid.isBlank()) {
+                    Log.w(TAG, "Supabase user exists but user.id is blank -> AuthState.Unauthenticated")
+                    withContext(Dispatchers.Main) {
+                        _authState.value = AuthState.Unauthenticated
+                    }
+                    return@launch
+                }
+
+                // Ensure token is refreshed if session exists
+                try {
+                    auth.refreshCurrentSession()
+                    Log.d(TAG, "Supabase Auth session refreshed successfully for UID: $effectiveUid")
+                } catch (refreshEx: Exception) {
+                    Log.w(TAG, "Supabase Auth session refresh note: ${refreshEx.localizedMessage}")
+                }
+
+                // Only inspect local cached profile IF it belongs to this exact authenticated Supabase UID
+                val savedUid = prefs.getString(KEY_UID, null)
+                val cachedName = if (savedUid == effectiveUid) prefs.getString(KEY_NAME, "") ?: "" else ""
+                val cachedPhone = if (savedUid == effectiveUid) prefs.getString(KEY_PHONE, "") ?: (currentUser.phone ?: "") else (currentUser.phone ?: "")
+                var cachedPic = if (savedUid == effectiveUid) prefs.getString(KEY_PROFILE_PIC, "") ?: "" else ""
+                val cachedCover = if (savedUid == effectiveUid) prefs.getString(KEY_COVER_PHOTO, "") ?: "" else ""
+                val cachedBio = if (savedUid == effectiveUid) prefs.getString(KEY_BIO, "Available on Talkly 💬") ?: "Available on Talkly 💬" else "Available on Talkly 💬"
+
+                // Check if pic is a content:// URI and convert to persistent internal avatar file if available
+                if (cachedPic.startsWith("content://") || cachedPic.isBlank()) {
+                    val avatarDir = File(context.filesDir, "profile_avatars")
+                    val internalFile = File(avatarDir, "avatar_${effectiveUid}.jpg")
+                    if (internalFile.exists()) {
+                        cachedPic = Uri.fromFile(internalFile).toString()
+                    }
+                }
+
+                if (cachedName.isNotBlank()) {
+                    val cachedProfile = UserProfile(
+                        uid = effectiveUid,
+                        name = cachedName,
+                        phoneNumber = cachedPhone,
+                        phoneSuffix = PhoneUtils.extractPhoneSuffix(cachedPhone),
+                        profilePicUrl = cachedPic,
+                        coverPhotoUrl = cachedCover,
+                        bio = cachedBio
+                    )
+                    withContext(Dispatchers.Main) {
+                        if (!isLoggingOut && (auth.currentUserOrNull()?.id ?: auth.currentSessionOrNull()?.user?.id) == effectiveUid) {
+                            _authState.value = AuthState.Authenticated(cachedProfile)
+                        }
+                    }
+                }
+
+                // Sync latest profile from Supabase in background
+                syncProfileFromSupabase(effectiveUid, cachedPhone)
             } catch (e: Exception) {
                 Log.e(TAG, "Error checking Supabase session: ${e.message}")
                 withContext(Dispatchers.Main) {
@@ -422,14 +442,29 @@ class AuthManager(private val context: Context) {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                if (isLoggingOut) return@launch
+                val currentAuthUid = auth.currentUserOrNull()?.id ?: auth.currentSessionOrNull()?.user?.id
+                if (currentAuthUid == null || currentAuthUid != uid) {
+                    Log.w(TAG, "syncProfileFromSupabase aborted: current active Supabase UID ($currentAuthUid) does not match target ($uid)")
+                    return@launch
+                }
+
                 val profileDto = postgrest.from("profiles")
                     .select { filter { eq("id", uid) } }
                     .decodeSingleOrNull<SupabaseProfile>()
 
+                if (isLoggingOut) return@launch
+                val activeUidAfterFetch = auth.currentUserOrNull()?.id ?: auth.currentSessionOrNull()?.user?.id
+                if (activeUidAfterFetch == null || activeUidAfterFetch != uid) {
+                    Log.w(TAG, "syncProfileFromSupabase aborted after fetch: active Supabase UID changed/cleared")
+                    return@launch
+                }
+
                 if (profileDto != null && profileDto.name.isNotBlank()) {
                     val phone = if (profileDto.phone.isNotBlank()) profileDto.phone else fallbackPhone
                     val suffix = if (profileDto.phoneSuffix.isNotBlank()) profileDto.phoneSuffix else PhoneUtils.extractPhoneSuffix(phone)
-                    val localSavedPic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
+                    val savedUid = prefs.getString(KEY_UID, null)
+                    val localSavedPic = if (savedUid == uid) prefs.getString(KEY_PROFILE_PIC, "") ?: "" else ""
                     val effectivePic = if (profileDto.avatarUrl.isNotBlank()) {
                         profileDto.avatarUrl
                     } else if (localSavedPic.isNotBlank() && !localSavedPic.startsWith("content://")) {
@@ -437,7 +472,7 @@ class AuthManager(private val context: Context) {
                     } else {
                         ""
                     }
-                    val localSavedCover = prefs.getString(KEY_COVER_PHOTO, "") ?: ""
+                    val localSavedCover = if (savedUid == uid) prefs.getString(KEY_COVER_PHOTO, "") ?: "" else ""
                     val effectiveCover = if (profileDto.coverPhotoUrl.isNotBlank()) {
                         profileDto.coverPhotoUrl
                     } else if (localSavedCover.isNotBlank() && !localSavedCover.startsWith("content://")) {
@@ -459,15 +494,19 @@ class AuthManager(private val context: Context) {
                     saveLocalSession(uid, profile.name, profile.phoneNumber, profile.profilePicUrl, profile.bio, profile.coverPhotoUrl)
 
                     withContext(Dispatchers.Main) {
-                        _authState.value = AuthState.Authenticated(profile)
-                        onComplete?.invoke(profile)
+                        if (!isLoggingOut && (auth.currentUserOrNull()?.id ?: auth.currentSessionOrNull()?.user?.id) == uid) {
+                            _authState.value = AuthState.Authenticated(profile)
+                            onComplete?.invoke(profile)
+                        }
                     }
                 } else {
                     handleMissingProfile(uid, fallbackPhone, onComplete)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Error fetching profile from Supabase for $uid: ${e.localizedMessage}")
-                handleMissingProfile(uid, fallbackPhone, onComplete)
+                if (!isLoggingOut) {
+                    handleMissingProfile(uid, fallbackPhone, onComplete)
+                }
             }
         }
     }
@@ -477,12 +516,30 @@ class AuthManager(private val context: Context) {
         fallbackPhone: String,
         onComplete: ((UserProfile) -> Unit)? = null
     ) {
-        val localName = prefs.getString(KEY_NAME, "") ?: ""
+        if (isLoggingOut) {
+            withContext(Dispatchers.Main) {
+                _authState.value = AuthState.Unauthenticated
+            }
+            return
+        }
+
+        val currentAuthUser = auth.currentUserOrNull() ?: auth.currentSessionOrNull()?.user
+        if (currentAuthUser == null || currentAuthUser.id != uid) {
+            Log.w(TAG, "handleMissingProfile: No active Supabase session matching UID $uid. Setting Unauthenticated.")
+            withContext(Dispatchers.Main) {
+                _authState.value = AuthState.Unauthenticated
+            }
+            return
+        }
+
+        val savedUid = prefs.getString(KEY_UID, null)
+        val localName = if (savedUid == uid) prefs.getString(KEY_NAME, "") ?: "" else ""
+
         if (localName.isNotBlank()) {
-            val phone = prefs.getString(KEY_PHONE, fallbackPhone) ?: fallbackPhone
-            val pic = prefs.getString(KEY_PROFILE_PIC, "") ?: ""
-            val cover = prefs.getString(KEY_COVER_PHOTO, "") ?: ""
-            val bio = prefs.getString(KEY_BIO, "Available on Talkly 💬") ?: "Available on Talkly 💬"
+            val phone = if (savedUid == uid) prefs.getString(KEY_PHONE, fallbackPhone) ?: fallbackPhone else fallbackPhone
+            val pic = if (savedUid == uid) prefs.getString(KEY_PROFILE_PIC, "") ?: "" else ""
+            val cover = if (savedUid == uid) prefs.getString(KEY_COVER_PHOTO, "") ?: "" else ""
+            val bio = if (savedUid == uid) prefs.getString(KEY_BIO, "Available on Talkly 💬") ?: "Available on Talkly 💬" else "Available on Talkly 💬"
             val suffix = PhoneUtils.extractPhoneSuffix(phone)
 
             val profile = UserProfile(
@@ -513,13 +570,19 @@ class AuthManager(private val context: Context) {
 
             saveLocalSession(uid, localName, phone, pic, bio, cover)
             withContext(Dispatchers.Main) {
-                _authState.value = AuthState.Authenticated(profile)
-                onComplete?.invoke(profile)
+                if (!isLoggingOut && (auth.currentUserOrNull()?.id ?: auth.currentSessionOrNull()?.user?.id) == uid) {
+                    _authState.value = AuthState.Authenticated(profile)
+                    onComplete?.invoke(profile)
+                }
             }
         } else {
             saveLocalSession(uid, "", fallbackPhone, "", "")
             withContext(Dispatchers.Main) {
-                _authState.value = AuthState.ProfileSetupRequired(uid, fallbackPhone)
+                if (!isLoggingOut && (auth.currentUserOrNull()?.id ?: auth.currentSessionOrNull()?.user?.id) == uid) {
+                    _authState.value = AuthState.ProfileSetupRequired(uid, fallbackPhone)
+                } else {
+                    _authState.value = AuthState.Unauthenticated
+                }
             }
         }
     }
@@ -667,19 +730,28 @@ class AuthManager(private val context: Context) {
         onSuccess: () -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
+        if (isLoggingOut) {
+            val err = "Operation cancelled: logging out"
+            onError(err)
+            return
+        }
+
         val currentState = _authState.value
-        var uid = ""
-        var phone = ""
+        val currentAuthUser = auth.currentUserOrNull() ?: auth.currentSessionOrNull()?.user
+        val authUid = currentAuthUser?.id ?: ""
+
+        val uid: String
+        val phone: String
 
         if (currentState is AuthState.ProfileSetupRequired) {
             uid = currentState.uid
             phone = currentState.phoneNumber
         } else {
-            uid = prefs.getString(KEY_UID, "") ?: (auth.currentUserOrNull()?.id ?: "")
-            phone = prefs.getString(KEY_PHONE, "") ?: ""
+            uid = authUid.ifBlank { prefs.getString(KEY_UID, "") ?: "" }
+            phone = prefs.getString(KEY_PHONE, "") ?: (currentAuthUser?.phone ?: "")
         }
 
-        if (uid.isBlank()) {
+        if (uid.isBlank() || (authUid.isNotBlank() && authUid != uid)) {
             val err = "User session invalid. Please sign in again."
             _authState.value = AuthState.Error(err)
             onError(err)
@@ -689,6 +761,11 @@ class AuthManager(private val context: Context) {
         val phoneSuffix = PhoneUtils.extractPhoneSuffix(phone)
 
         CoroutineScope(Dispatchers.IO).launch {
+            if (isLoggingOut || (auth.currentUserOrNull()?.id ?: auth.currentSessionOrNull()?.user?.id) != uid) {
+                Log.w(TAG, "saveUserProfile coroutine aborted: user logged out or session UID changed")
+                return@launch
+            }
+
             var localPicUrl = profilePicUrl
             var localCoverUrl = coverPhotoUrl
             var localPicFile: File? = null
@@ -728,8 +805,10 @@ class AuthManager(private val context: Context) {
             )
 
             withContext(Dispatchers.Main) {
-                _authState.value = AuthState.Authenticated(profile)
-                onSuccess()
+                if (!isLoggingOut && (auth.currentUserOrNull()?.id ?: auth.currentSessionOrNull()?.user?.id) == uid) {
+                    _authState.value = AuthState.Authenticated(profile)
+                    onSuccess()
+                }
             }
 
             // Asynchronously upload to Cloudinary so remote users get valid web URLs
@@ -781,6 +860,8 @@ class AuthManager(private val context: Context) {
     }
 
     private fun saveLocalSession(uid: String, name: String, phone: String, pic: String, bio: String = "Available on Talkly 💬", coverPic: String = "") {
+        if (isLoggingOut || uid.isBlank()) return
+
         prefs.edit()
             .putBoolean(KEY_IS_LOGGED_IN, true)
             .putString(KEY_UID, uid)
@@ -789,7 +870,7 @@ class AuthManager(private val context: Context) {
             .putString(KEY_PROFILE_PIC, pic)
             .putString(KEY_COVER_PHOTO, coverPic)
             .putString(KEY_BIO, bio)
-            .apply()
+            .commit()
 
         try {
             context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE).edit()
@@ -799,7 +880,7 @@ class AuthManager(private val context: Context) {
                 .putString("user_profile_pic", pic)
                 .putString("user_cover_photo", coverPic)
                 .putString("user_bio", bio)
-                .apply()
+                .commit()
         } catch (e: Exception) {
             Log.w(TAG, "Failed writing talkly_user_session prefs: ${e.message}")
         }
@@ -808,7 +889,34 @@ class AuthManager(private val context: Context) {
     fun logout() {
         isLoggingOut = true
 
+        // 1. Invalidate in-memory auth state immediately
+        _authState.value = AuthState.Unauthenticated
+
+        // 2. Synchronously clear ALL authentication and user session SharedPreferences
+        // Note: talkly_theme_prefs is intentionally excluded to preserve user's theme setting
+        val prefNames = listOf(
+            PREFS_NAME,
+            "talkly_user_session",
+            "talkly_saved_contacts_prefs",
+            "talkly_fcm_prefs",
+            "talkly_call_prefs"
+        )
+        prefNames.forEach { pName ->
+            try {
+                context.getSharedPreferences(pName, Context.MODE_PRIVATE).edit().clear().commit()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed clearing prefs $pName: ${e.message}")
+            }
+        }
+
+        // 3. Asynchronously sign out from Supabase and cleanup FCM / Room DB
         CoroutineScope(Dispatchers.IO).launch {
+            try {
+                auth.signOut()
+            } catch (e: Exception) {
+                Log.w(TAG, "Supabase signOut exception: ${e.localizedMessage}")
+            }
+
             try {
                 com.family.talkly.util.FcmTokenManager.unregisterToken(context)
             } catch (e: Exception) {
@@ -819,31 +927,9 @@ class AuthManager(private val context: Context) {
                 com.family.talkly.data.local.TalklyDatabase.getInstance(context).chatMessageDao().clearAllMessages()
             } catch (e: Exception) {
                 Log.w(TAG, "Error clearing Room database during logout: ${e.localizedMessage}")
-            }
-
-            try {
-                auth.signOut()
-            } catch (e: Exception) {
-                Log.w(TAG, "Supabase signOut exception: ${e.localizedMessage}")
+            } finally {
+                isLoggingOut = false
             }
         }
-
-        val prefNames = listOf(
-            PREFS_NAME,
-            "talkly_user_session",
-            "talkly_saved_contacts_prefs",
-            "talkly_theme_prefs",
-            "talkly_fcm_prefs",
-            "talkly_call_prefs"
-        )
-        prefNames.forEach { pName ->
-            try {
-                context.getSharedPreferences(pName, Context.MODE_PRIVATE).edit().clear().apply()
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed clearing prefs $pName: ${e.message}")
-            }
-        }
-
-        _authState.value = AuthState.Unauthenticated
     }
 }

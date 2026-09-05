@@ -5,6 +5,8 @@ import android.net.Uri
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -77,6 +79,7 @@ fun AudioWaveformBar(
     seed: Int = 0,
     activeColor: Color = WhatsappGreen,
     inactiveColor: Color = Color.Gray.copy(alpha = 0.35f),
+    onLongClick: (() -> Unit)? = null,
     onSeek: ((Float) -> Unit)? = null
 ) {
     val barHeights = remember(seed, barCount) {
@@ -92,12 +95,17 @@ fun AudioWaveformBar(
             .fillMaxWidth()
             .height(24.dp)
             .then(
-                if (onSeek != null) {
-                    Modifier.pointerInput(Unit) {
-                        detectTapGestures { offset ->
-                            val clickedRatio = (offset.x / size.width).coerceIn(0f, 1f)
-                            onSeek(clickedRatio)
-                        }
+                if (onSeek != null || onLongClick != null) {
+                    Modifier.pointerInput(onSeek, onLongClick) {
+                        detectTapGestures(
+                            onTap = { offset ->
+                                val clickedRatio = (offset.x / size.width).coerceIn(0f, 1f)
+                                onSeek?.invoke(clickedRatio)
+                            },
+                            onLongPress = {
+                                onLongClick?.invoke()
+                            }
+                        )
                     }
                 } else Modifier
             ),
@@ -125,10 +133,13 @@ fun AudioWaveformBar(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun AudioPlayerItem(
     message: ChatMessage,
     isSelf: Boolean = message.senderId == "self",
+    onLongClick: (() -> Unit)? = null,
+    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -239,6 +250,10 @@ fun AudioPlayerItem(
         modifier = modifier
             .widthIn(min = 210.dp, max = 280.dp)
             .height(54.dp)
+            .combinedClickable(
+                onClick = { onClick?.invoke() },
+                onLongClick = { onLongClick?.invoke() }
+            )
     ) {
         Row(
             modifier = Modifier
@@ -252,20 +267,25 @@ fun AudioPlayerItem(
                 color = if (isSelf) TalklyCyan else TalklyElevated,
                 modifier = Modifier
                     .size(34.dp)
-                    .clickable {
-                        if (!isPrepared) return@clickable
-                        try {
-                            if (isPlaying) {
-                                mediaPlayer.pause()
-                                isPlaying = false
-                            } else {
-                                mediaPlayer.start()
-                                isPlaying = true
+                    .combinedClickable(
+                        onClick = {
+                            if (!isPrepared) return@combinedClickable
+                            try {
+                                if (isPlaying) {
+                                    mediaPlayer.pause()
+                                    isPlaying = false
+                                } else {
+                                    mediaPlayer.start()
+                                    isPlaying = true
+                                }
+                            } catch (e: Exception) {
+                                Log.e("AudioPlayerItem", "Error toggling playback: ${e.localizedMessage}")
                             }
-                        } catch (e: Exception) {
-                            Log.e("AudioPlayerItem", "Error toggling playback: ${e.localizedMessage}")
+                        },
+                        onLongClick = {
+                            onLongClick?.invoke()
                         }
-                    }
+                    )
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
@@ -292,6 +312,7 @@ fun AudioPlayerItem(
                     seed = message.id.hashCode(),
                     activeColor = if (isSelf) TalklyCyan else TalklyMint,
                     inactiveColor = if (isSelf) TalklyCyan.copy(alpha = 0.25f) else TalklyTextSecondary.copy(alpha = 0.3f),
+                    onLongClick = onLongClick,
                     onSeek = { clickedRatio ->
                         if (isPrepared && durationMs > 0) {
                             val seekMs = (clickedRatio * durationMs).toLong()

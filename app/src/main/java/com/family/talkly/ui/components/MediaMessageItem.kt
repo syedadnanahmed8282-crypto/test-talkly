@@ -1,10 +1,12 @@
 package com.family.talkly.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -63,12 +65,14 @@ private val TalklyCyan = Color(0xFF22D3EE)
 private val TalklyCard = Color(0xFF18212B)
 private val TalklyElevated = Color(0xFF222F3E)
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MediaMessageItem(
     message: ChatMessage,
     isSelf: Boolean = false,
     simulatedTimeOffsetMs: Long,
     onMediaClick: (String) -> Unit,
+    onLongClick: (() -> Unit)? = null,
     onRetryUpload: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -93,6 +97,10 @@ fun MediaMessageItem(
             modifier = modifier
                 .widthIn(min = 160.dp, max = 260.dp)
                 .border(1.dp, ExpiredBorder, RoundedCornerShape(14.dp))
+                .combinedClickable(
+                    onClick = { /* info */ },
+                    onLongClick = { onLongClick?.invoke() }
+                )
         ) {
             Row(
                 modifier = Modifier
@@ -134,7 +142,7 @@ fun MediaMessageItem(
             }
         }
     } else if (message.messageType == MessageType.VOICE_NOTE) {
-        AudioPlayerItem(message = message, isSelf = isSelf, modifier = modifier)
+        AudioPlayerItem(message = message, isSelf = isSelf, onLongClick = onLongClick, modifier = modifier)
     } else {
         // Active Media Display - Compact, adaptive, thin 1dp border, no giant outer bubble
         Surface(
@@ -144,14 +152,19 @@ fun MediaMessageItem(
             shadowElevation = 2.dp,
             modifier = modifier
                 .widthIn(min = 160.dp, max = 280.dp)
-                .heightIn(min = 140.dp, max = 310.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .clickable {
-                        message.mediaUrl?.let { onMediaClick(it) }
-                    }
-            ) {
+            Column {
+                Box(
+                    modifier = Modifier
+                        .combinedClickable(
+                            onClick = {
+                                message.mediaUrl?.let { onMediaClick(it) }
+                            },
+                            onLongClick = {
+                                onLongClick?.invoke()
+                            }
+                        )
+                ) {
                 if (message.messageType == MessageType.VIDEO && videoThumbnail != null) {
                     Image(
                         bitmap = videoThumbnail!!.asImageBitmap(),
@@ -300,17 +313,41 @@ fun MediaMessageItem(
                         }
                     }
                 }
+
+                // Text Caption if present
+                if (message.textContent.isNotBlank()) {
+                    Text(
+                        text = message.textContent,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = Color(0xFFF8FAFC),
+                            fontSize = 14.sp
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                            .combinedClickable(
+                                onClick = {
+                                    message.mediaUrl?.let { onMediaClick(it) }
+                                },
+                                onLongClick = {
+                                    onLongClick?.invoke()
+                                }
+                            )
+                    )
+                }
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MediaGroupCluster(
     messages: List<ChatMessage>,
     isSelf: Boolean = false,
     simulatedTimeOffsetMs: Long = 0L,
     onMediaClick: (ChatMessage) -> Unit,
+    onLongClick: ((ChatMessage) -> Unit)? = null,
     onRetryUpload: ((ChatMessage) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -325,88 +362,24 @@ fun MediaGroupCluster(
         shadowElevation = 2.dp,
         modifier = modifier.width(268.dp)
     ) {
-        Box {
-            when (messages.size) {
-                2 -> {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(150.dp),
-                        horizontalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .clickable { onMediaClick(messages[0]) }
-                        ) {
-                            MediaTile(messages[0], simulatedTimeOffsetMs)
-                        }
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .clickable { onMediaClick(messages[1]) }
-                        ) {
-                            MediaTile(messages[1], simulatedTimeOffsetMs)
-                        }
-                    }
-                }
-                3 -> {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(130.dp)
-                                .clickable { onMediaClick(messages[0]) }
-                        ) {
-                            MediaTile(messages[0], simulatedTimeOffsetMs)
-                        }
+        Column {
+            Box {
+                when (messages.size) {
+                    2 -> {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(105.dp),
+                                .height(150.dp),
                             horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
                                     .fillMaxHeight()
-                                    .clickable { onMediaClick(messages[1]) }
-                            ) {
-                                MediaTile(messages[1], simulatedTimeOffsetMs)
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
-                                    .clickable { onMediaClick(messages[2]) }
-                            ) {
-                                MediaTile(messages[2], simulatedTimeOffsetMs)
-                            }
-                        }
-                    }
-                }
-                else -> {
-                    // 4 or more items collage
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(115.dp),
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
-                                    .clickable { onMediaClick(messages[0]) }
+                                    .combinedClickable(
+                                        onClick = { onMediaClick(messages[0]) },
+                                        onLongClick = { onLongClick?.invoke(messages[0]) }
+                                    )
                             ) {
                                 MediaTile(messages[0], simulatedTimeOffsetMs)
                             }
@@ -414,52 +387,144 @@ fun MediaGroupCluster(
                                 modifier = Modifier
                                     .weight(1f)
                                     .fillMaxHeight()
-                                    .clickable { onMediaClick(messages[1]) }
+                                    .combinedClickable(
+                                        onClick = { onMediaClick(messages[1]) },
+                                        onLongClick = { onLongClick?.invoke(messages[1]) }
+                                    )
                             ) {
                                 MediaTile(messages[1], simulatedTimeOffsetMs)
                             }
                         }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(115.dp),
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    }
+                    3 -> {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
-                                    .clickable { onMediaClick(messages[2]) }
+                                    .fillMaxWidth()
+                                    .height(130.dp)
+                                    .combinedClickable(
+                                        onClick = { onMediaClick(messages[0]) },
+                                        onLongClick = { onLongClick?.invoke(messages[0]) }
+                                    )
                             ) {
-                                MediaTile(messages[2], simulatedTimeOffsetMs)
+                                MediaTile(messages[0], simulatedTimeOffsetMs)
                             }
-                            Box(
+                            Row(
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
-                                    .clickable { onMediaClick(messages[3]) }
+                                    .fillMaxWidth()
+                                    .height(105.dp),
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
-                                MediaTile(messages[3], simulatedTimeOffsetMs)
-                                if (messages.size > 4) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .background(Color.Black.copy(alpha = 0.65f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = "+${messages.size - 3}",
-                                            color = Color.White,
-                                            fontSize = 20.sp,
-                                            fontWeight = FontWeight.Bold
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .combinedClickable(
+                                            onClick = { onMediaClick(messages[1]) },
+                                            onLongClick = { onLongClick?.invoke(messages[1]) }
                                         )
+                                ) {
+                                    MediaTile(messages[1], simulatedTimeOffsetMs)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .combinedClickable(
+                                            onClick = { onMediaClick(messages[2]) },
+                                            onLongClick = { onLongClick?.invoke(messages[2]) }
+                                        )
+                                ) {
+                                    MediaTile(messages[2], simulatedTimeOffsetMs)
+                                }
+                            }
+                        }
+                    }
+                    else -> {
+                        // 4 or more items collage
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(115.dp),
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .combinedClickable(
+                                            onClick = { onMediaClick(messages[0]) },
+                                            onLongClick = { onLongClick?.invoke(messages[0]) }
+                                        )
+                                ) {
+                                    MediaTile(messages[0], simulatedTimeOffsetMs)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .combinedClickable(
+                                            onClick = { onMediaClick(messages[1]) },
+                                            onLongClick = { onLongClick?.invoke(messages[1]) }
+                                        )
+                                ) {
+                                    MediaTile(messages[1], simulatedTimeOffsetMs)
+                                }
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(115.dp),
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .combinedClickable(
+                                            onClick = { onMediaClick(messages[2]) },
+                                            onLongClick = { onLongClick?.invoke(messages[2]) }
+                                        )
+                                ) {
+                                    MediaTile(messages[2], simulatedTimeOffsetMs)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .combinedClickable(
+                                            onClick = { onMediaClick(messages[3]) },
+                                            onLongClick = { onLongClick?.invoke(messages[3]) }
+                                        )
+                                ) {
+                                    MediaTile(messages[3], simulatedTimeOffsetMs)
+                                    if (messages.size > 4) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(Color.Black.copy(alpha = 0.65f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "+${messages.size - 3}",
+                                                color = Color.White,
+                                                fontSize = 20.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
-            }
 
             // Timestamp & Delivery status badge on cluster
             Surface(
@@ -505,7 +570,27 @@ fun MediaGroupCluster(
                 }
             }
         }
+
+        // Cluster Caption if present
+        val clusterCaption = messages.firstOrNull { it.textContent.isNotBlank() }?.textContent
+        if (!clusterCaption.isNullOrBlank()) {
+            Text(
+                text = clusterCaption,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    color = Color(0xFFF8FAFC),
+                    fontSize = 13.5.sp
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .combinedClickable(
+                        onClick = { onMediaClick(messages.first()) },
+                        onLongClick = { onLongClick?.invoke(messages.first()) }
+                    )
+            )
+        }
     }
+}
 }
 
 @Composable
