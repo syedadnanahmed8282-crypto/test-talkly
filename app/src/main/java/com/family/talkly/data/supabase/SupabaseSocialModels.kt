@@ -108,7 +108,9 @@ data class SupabaseStatusLike(
 
 fun FamilyMember.toSupabaseContact(ownerUserId: String): SupabaseContact {
     val phoneSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(phone)
+    val nowIso = SupabaseMessage.millisToIsoTimestamp(System.currentTimeMillis())
     return SupabaseContact(
+        id = java.util.UUID.randomUUID().toString(),
         userId = ownerUserId,
         contactUserId = firebaseUid,
         contactName = name,
@@ -117,7 +119,9 @@ fun FamilyMember.toSupabaseContact(ownerUserId: String): SupabaseContact {
         relation = relation,
         isPinned = isPinned,
         isMutual = false,
-        status = "ACCEPTED"
+        status = "ACCEPTED",
+        createdAt = nowIso,
+        updatedAt = nowIso
     )
 }
 

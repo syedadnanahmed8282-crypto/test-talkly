@@ -372,7 +372,7 @@ data class SupabaseMessageRequest(
 
 @Serializable
 data class SupabaseContact(
-    val id: String? = null,
+    val id: String = UUID.randomUUID().toString(),
     @SerialName("user_id")
     val userId: String,
     @SerialName("contact_user_id")
@@ -390,10 +390,22 @@ data class SupabaseContact(
     val isMutual: Boolean = false,
     val status: String = "ACCEPTED",
     @SerialName("created_at")
-    val createdAt: String? = null,
+    val createdAt: String? = SupabaseMessage.millisToIsoTimestamp(System.currentTimeMillis()),
     @SerialName("updated_at")
-    val updatedAt: String? = null
-)
+    val updatedAt: String? = SupabaseMessage.millisToIsoTimestamp(System.currentTimeMillis())
+) {
+    fun ensureValidForInsert(): SupabaseContact {
+        val validId = if (id.isBlank()) UUID.randomUUID().toString() else id
+        val nowIso = SupabaseMessage.millisToIsoTimestamp(System.currentTimeMillis())
+        val validCreatedAt = if (createdAt.isNullOrBlank()) nowIso else createdAt
+        val validUpdatedAt = if (updatedAt.isNullOrBlank()) nowIso else updatedAt
+        return this.copy(
+            id = validId,
+            createdAt = validCreatedAt,
+            updatedAt = validUpdatedAt
+        )
+    }
+}
 
 fun ChatMessage.toSupabaseMessage(
     conversationId: String? = null,

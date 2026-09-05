@@ -21,6 +21,7 @@ import com.family.talkly.data.models.MessageType
 import com.family.talkly.util.MediaCompressorAndUploader
 import java.io.File
 import java.io.FileOutputStream
+import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -458,6 +459,11 @@ class FirebaseChatRepository(private val context: Context) {
         }
 
         repositoryScope.launch(Dispatchers.IO) {
+            if (currentUid.isBlank() || currentUid == "self") {
+                Log.e(TAG, "addNewContact: Cannot persist contact to Supabase because currentUid is invalid ('$currentUid')")
+                return@launch
+            }
+
             val searchRes = socialService.searchUserByPhone(cleanPhone)
             val matchedProfile = searchRes.getOrNull()
 
@@ -468,52 +474,78 @@ class FirebaseChatRepository(private val context: Context) {
 
             val contactId = if (!targetUid.isNullOrBlank() && !targetUid.startsWith("contact_")) targetUid else "contact_${phoneSuffix.ifBlank { cleanPhone.replace("+", "").replace(" ", "") }}"
 
-            unmarkContactAsDeleted(listOf(contactId, cleanPhone, phoneSuffix, targetUid ?: ""))
-
-            val newMember = FamilyMember(
-                id = contactId,
-                name = realName,
+            val nowIso = SupabaseMessage.millisToIsoTimestamp(System.currentTimeMillis())
+            val supabaseContact = SupabaseContact(
+                id = UUID.randomUUID().toString(),
+                userId = currentUid,
+                contactUserId = targetUid,
+                contactName = realName,
+                contactPhone = cleanPhone,
+                contactPhoneSuffix = phoneSuffix,
                 relation = relation.ifBlank { "Family Member" },
-                avatarUrl = realAvatar,
-                status = realBio ?: "Available on Talkly 💬",
-                phone = cleanPhone,
-                isOnline = true,
-                isTyping = false,
-                lastSeen = "Online",
-                unreadCount = 0,
                 isPinned = false,
-                isRegisteredOnTalkly = !targetUid.isNullOrBlank(),
-                firebaseUid = if (!targetUid.isNullOrBlank() && !targetUid.startsWith("contact_")) targetUid else null
+                isMutual = false,
+                status = "ACCEPTED",
+                createdAt = nowIso,
+                updatedAt = nowIso
             )
 
-            withContext(Dispatchers.Main) {
-                val currentList = _familyMembers.value.toMutableList()
-                currentList.removeAll { 
-                    it.id == contactId || 
-                    it.phone == cleanPhone ||
-                    (!targetUid.isNullOrBlank() && (it.id == targetUid || it.firebaseUid == targetUid)) ||
-                    (phoneSuffix.isNotBlank() && PhoneUtils.extractPhoneSuffix(it.phone) == phoneSuffix)
-                }
-                currentList.add(0, newMember)
-                setFamilyMembersWithDeduplication(currentList)
-                saveContactsToPrefs()
-                onComplete?.invoke(newMember)
-            }
+            Log.d(
+                TAG,
+                "addNewContact: Saving contact to Supabase: currentUid=$currentUid, phone=$cleanPhone, " +
+                        "suffix=$phoneSuffix, name=$realName, candidateId=${supabaseContact.id}"
+            )
 
-            // Persist contact in Supabase `contacts` table
-            if (currentUid.isNotBlank() && currentUid != "self") {
-                val supabaseContact = SupabaseContact(
-                    userId = currentUid,
-                    contactUserId = targetUid,
-                    contactName = realName,
-                    contactPhone = cleanPhone,
-                    contactPhoneSuffix = phoneSuffix,
-                    relation = relation.ifBlank { "Family Member" },
-                    isPinned = false,
-                    isMutual = false,
-                    status = "ACCEPTED"
+            val saveResult = socialService.saveContact(supabaseContact)
+
+            if (saveResult.isSuccess) {
+                val savedRow = saveResult.getOrNull()
+                Log.d(
+                    TAG,
+                    "addNewContact: Supabase persistence succeeded: returned contact id=${savedRow?.id}, " +
+                            "userId=${savedRow?.userId}, phone=${savedRow?.contactPhone}, suffix=${savedRow?.contactPhoneSuffix}"
                 )
-                socialService.saveContact(supabaseContact)
+
+                unmarkContactAsDeleted(listOf(contactId, cleanPhone, phoneSuffix, targetUid ?: ""))
+
+                val newMember = FamilyMember(
+                    id = contactId,
+                    name = realName,
+                    relation = relation.ifBlank { "Family Member" },
+                    avatarUrl = realAvatar,
+                    status = realBio ?: "Available on Talkly 💬",
+                    phone = cleanPhone,
+                    isOnline = true,
+                    isTyping = false,
+                    lastSeen = "Online",
+                    unreadCount = 0,
+                    isPinned = false,
+                    isRegisteredOnTalkly = !targetUid.isNullOrBlank(),
+                    firebaseUid = if (!targetUid.isNullOrBlank() && !targetUid.startsWith("contact_")) targetUid else null
+                )
+
+                withContext(Dispatchers.Main) {
+                    val currentList = _familyMembers.value.toMutableList()
+                    currentList.removeAll { 
+                        it.id == contactId || 
+                        it.phone == cleanPhone ||
+                        (!targetUid.isNullOrBlank() && (it.id == targetUid || it.firebaseUid == targetUid)) ||
+                        (phoneSuffix.isNotBlank() && PhoneUtils.extractPhoneSuffix(it.phone) == phoneSuffix)
+                    }
+                    currentList.add(0, newMember)
+                    setFamilyMembersWithDeduplication(currentList)
+                    saveContactsToPrefs()
+                    onComplete?.invoke(newMember)
+                }
+            } else {
+                val failureReason = saveResult.exceptionOrNull()
+                Log.e(
+                    TAG,
+                    "addNewContact: Supabase persistence failed for currentUid=$currentUid, " +
+                            "phone=$cleanPhone, suffix=$phoneSuffix: ${failureReason?.localizedMessage}",
+                    failureReason
+                )
+                // Do NOT pretend the contact was permanently added. Keep local and UI state consistent with backend state.
             }
         }
     }
@@ -669,63 +701,77 @@ class FirebaseChatRepository(private val context: Context) {
         repositoryScope.launch(Dispatchers.IO) {
             try {
                 val contactsResult = socialService.loadContacts(currentUserId)
-                val contacts = contactsResult.getOrDefault(emptyList())
+                if (contactsResult.isFailure) {
+                    val err = contactsResult.exceptionOrNull()
+                    Log.w(
+                        TAG,
+                        "syncContactsFromSupabase: Failed to load contacts from Supabase for userId=$currentUserId: " +
+                                "${err?.localizedMessage}. Preserving existing local contacts."
+                    )
+                    return@launch
+                }
 
-                if (contacts.isNotEmpty()) {
-                    val currentMap = _familyMembers.value.associateBy { it.phone }.toMutableMap()
-                    val deletedSet = _deletedContactIds.value
+                val contacts = contactsResult.getOrNull()
+                if (contacts == null) {
+                    Log.w(TAG, "syncContactsFromSupabase: Received null contacts list for userId=$currentUserId. Preserving local contacts.")
+                    return@launch
+                }
 
-                    // Batch fetch fresh profiles for all contact user IDs
-                    val contactUserIds = contacts.mapNotNull { it.contactUserId }.filter { it.isNotBlank() }
-                    val profilesMap = if (contactUserIds.isNotEmpty()) {
-                        try {
-                            SupabaseClientProvider.client.postgrest["profiles"]
-                                .select {
-                                    filter {
-                                        isIn("id", contactUserIds)
-                                    }
+                Log.d(TAG, "syncContactsFromSupabase: Successfully loaded ${contacts.size} contacts from Supabase for userId=$currentUserId")
+
+                val currentMap = _familyMembers.value.associateBy { it.phone }.toMutableMap()
+                val deletedSet = _deletedContactIds.value
+
+                // Batch fetch fresh profiles for all contact user IDs
+                val contactUserIds = contacts.mapNotNull { it.contactUserId }.filter { it.isNotBlank() }
+                val profilesMap = if (contactUserIds.isNotEmpty()) {
+                    try {
+                        SupabaseClientProvider.client.postgrest["profiles"]
+                            .select {
+                                filter {
+                                    isIn("id", contactUserIds)
                                 }
-                                .decodeList<SupabaseProfile>()
-                                .associateBy { it.id }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed batch fetching profiles: ${e.localizedMessage}")
-                            emptyMap()
-                        }
-                    } else emptyMap()
-
-                    val updatedList = contacts.mapNotNull { c ->
-                        val suffix = c.contactPhoneSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(c.contactPhone) }
-                        if (c.contactPhone in deletedSet || suffix in deletedSet) return@mapNotNull null
-
-                        val existing = currentMap[c.contactPhone]
-                        val profile = if (!c.contactUserId.isNullOrBlank()) profilesMap[c.contactUserId] else null
-                        val parsedLastSeen = profile?.lastSeenAt?.let { SupabaseMessage.parseIsoTimestampToMillis(it) } ?: 0L
-                        val effectiveLastActive = if (parsedLastSeen > 0L) parsedLastSeen else (existing?.lastActiveTimestamp ?: 0L)
-                        val effectiveLastSeen = if (existing?.isOnline == true) "Online" else if (effectiveLastActive > 0L) PhoneUtils.formatLastSeenTime(effectiveLastActive) else (existing?.lastSeen ?: "Recently")
-
-                        FamilyMember(
-                            id = if (!c.contactUserId.isNullOrBlank()) c.contactUserId else "contact_${suffix}",
-                            name = profile?.name?.ifBlank { c.contactName } ?: c.contactName,
-                            relation = c.relation,
-                            avatarUrl = profile?.avatarUrl?.ifBlank { existing?.avatarUrl } ?: existing?.avatarUrl,
-                            coverPhotoUrl = profile?.coverPhotoUrl?.ifBlank { existing?.coverPhotoUrl } ?: existing?.coverPhotoUrl,
-                            status = profile?.bio?.ifBlank { existing?.status ?: "Available on Talkly 💬" } ?: existing?.status ?: "Available on Talkly 💬",
-                            phone = c.contactPhone,
-                            isOnline = existing?.isOnline ?: false,
-                            isTyping = false,
-                            lastSeen = effectiveLastSeen,
-                            lastActiveTimestamp = effectiveLastActive,
-                            unreadCount = existing?.unreadCount ?: 0,
-                            isPinned = c.isPinned,
-                            isRegisteredOnTalkly = !c.contactUserId.isNullOrBlank(),
-                            firebaseUid = c.contactUserId
-                        )
+                            }
+                            .decodeList<SupabaseProfile>()
+                            .associateBy { it.id }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed batch fetching profiles: ${e.localizedMessage}")
+                        emptyMap()
                     }
+                } else emptyMap()
 
-                    withContext(Dispatchers.Main) {
-                        setFamilyMembersWithDeduplication(updatedList)
-                        saveContactsToPrefs()
-                    }
+                val updatedList = contacts.mapNotNull { c ->
+                    val suffix = c.contactPhoneSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(c.contactPhone) }
+                    if (c.contactPhone in deletedSet || suffix in deletedSet) return@mapNotNull null
+
+                    val existing = currentMap[c.contactPhone]
+                    val profile = if (!c.contactUserId.isNullOrBlank()) profilesMap[c.contactUserId] else null
+                    val parsedLastSeen = profile?.lastSeenAt?.let { SupabaseMessage.parseIsoTimestampToMillis(it) } ?: 0L
+                    val effectiveLastActive = if (parsedLastSeen > 0L) parsedLastSeen else (existing?.lastActiveTimestamp ?: 0L)
+                    val effectiveLastSeen = if (existing?.isOnline == true) "Online" else if (effectiveLastActive > 0L) PhoneUtils.formatLastSeenTime(effectiveLastActive) else (existing?.lastSeen ?: "Recently")
+
+                    FamilyMember(
+                        id = if (!c.contactUserId.isNullOrBlank()) c.contactUserId else "contact_${suffix}",
+                        name = profile?.name?.ifBlank { c.contactName } ?: c.contactName,
+                        relation = c.relation,
+                        avatarUrl = profile?.avatarUrl?.ifBlank { existing?.avatarUrl } ?: existing?.avatarUrl,
+                        coverPhotoUrl = profile?.coverPhotoUrl?.ifBlank { existing?.coverPhotoUrl } ?: existing?.coverPhotoUrl,
+                        status = profile?.bio?.ifBlank { existing?.status ?: "Available on Talkly 💬" } ?: existing?.status ?: "Available on Talkly 💬",
+                        phone = c.contactPhone,
+                        isOnline = existing?.isOnline ?: false,
+                        isTyping = false,
+                        lastSeen = effectiveLastSeen,
+                        lastActiveTimestamp = effectiveLastActive,
+                        unreadCount = existing?.unreadCount ?: 0,
+                        isPinned = c.isPinned,
+                        isRegisteredOnTalkly = !c.contactUserId.isNullOrBlank(),
+                        firebaseUid = c.contactUserId
+                    )
+                }
+
+                withContext(Dispatchers.Main) {
+                    setFamilyMembersWithDeduplication(updatedList)
+                    saveContactsToPrefs()
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Error syncing contacts from Supabase: ${e.localizedMessage}")

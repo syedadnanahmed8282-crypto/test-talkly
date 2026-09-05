@@ -138,19 +138,52 @@ class SupabaseSocialService(private val context: Context) {
     suspend fun saveContact(contact: SupabaseContact): Result<SupabaseContact> = withContext(Dispatchers.IO) {
         try {
             if (contact.userId.isBlank() || contact.userId == "self") {
-                return@withContext Result.failure(IllegalArgumentException("Invalid owner userId"))
+                val err = IllegalArgumentException("Invalid owner userId: '${contact.userId}'")
+                Log.e(TAG, "saveContact failed: ${err.message}")
+                return@withContext Result.failure(err)
+            }
+            if (contact.contactPhone.isBlank()) {
+                val err = IllegalArgumentException("Invalid contactPhone: phone cannot be blank")
+                Log.e(TAG, "saveContact failed: ${err.message}")
+                return@withContext Result.failure(err)
             }
 
+            val contactToSave = contact.ensureValidForInsert()
+            val phoneSuffix = contactToSave.contactPhoneSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(contactToSave.contactPhone) }
+            val finalContact = if (contactToSave.contactPhoneSuffix.isBlank() && phoneSuffix.isNotBlank()) {
+                contactToSave.copy(contactPhoneSuffix = phoneSuffix)
+            } else {
+                contactToSave
+            }
+
+            Log.d(
+                TAG,
+                "saveContact: Persisting contact in '$TABLE_CONTACTS': userId=${finalContact.userId}, " +
+                        "phone=${finalContact.contactPhone}, suffix=${finalContact.contactPhoneSuffix}, " +
+                        "name=${finalContact.contactName}, candidateId=${finalContact.id}"
+            )
+
             val result = postgrest.from(TABLE_CONTACTS)
-                .upsert(contact) {
+                .upsert(finalContact) {
+                    onConflict = "user_id,contact_phone"
                     select()
                 }
                 .decodeSingle<SupabaseContact>()
 
-            Log.d(TAG, "Contact saved successfully: ${result.contactName} (${result.contactPhone})")
+            Log.d(
+                TAG,
+                "saveContact: Successfully saved contact in Supabase: id=${result.id}, " +
+                        "userId=${result.userId}, phone=${result.contactPhone}, suffix=${result.contactPhoneSuffix}, " +
+                        "name=${result.contactName}"
+            )
             Result.success(result)
         } catch (e: Exception) {
-            Log.e(TAG, "saveContact failed: ${e.localizedMessage}")
+            Log.e(
+                TAG,
+                "saveContact failed for userId='${contact.userId}', phone='${contact.contactPhone}', " +
+                        "suffix='${contact.contactPhoneSuffix}', name='${contact.contactName}': ${e.localizedMessage}",
+                e
+            )
             Result.failure(e)
         }
     }
