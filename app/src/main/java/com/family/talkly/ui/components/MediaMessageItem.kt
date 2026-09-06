@@ -313,31 +313,32 @@ fun MediaMessageItem(
                         }
                     }
                 }
+            }
 
-                // Text Caption if present
-                if (message.textContent.isNotBlank()) {
-                    Text(
-                        text = message.textContent,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            color = Color(0xFFF8FAFC),
-                            fontSize = 14.sp
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                            .combinedClickable(
-                                onClick = {
-                                    message.mediaUrl?.let { onMediaClick(it) }
-                                },
-                                onLongClick = {
-                                    onLongClick?.invoke()
-                                }
-                            )
-                    )
-                }
+            // Text Caption if present
+            if (message.textContent.isNotBlank()) {
+                Text(
+                    text = message.textContent,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        color = Color(0xFFF8FAFC),
+                        fontSize = 14.sp
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .combinedClickable(
+                            onClick = {
+                                message.mediaUrl?.let { onMediaClick(it) }
+                            },
+                            onLongClick = {
+                                onLongClick?.invoke()
+                            }
+                        )
+                )
             }
         }
     }
+}
 }
 
 @OptIn(ExperimentalFoundationApi::class)

@@ -48,12 +48,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -1358,76 +1360,142 @@ fun ChatDetailScreen(
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
-            .background(TalklyChatBg)
             .onGloballyPositioned { coords ->
                 chatWindowScreenHeight = coords.size.height.toFloat()
             },
-        containerColor = TalklyChatBg,
-        topBar = {
-            if (isSearchActive) {
-                Surface(
-                    color = TalklySurface,
-                    border = BorderStroke(1.dp, TalklyElevated),
-                    modifier = Modifier.statusBarsPadding()
-                ) {
-                    Row(
+        containerColor = Color.Transparent,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0)
+    ) { _ ->
+        val isWallpaperImage = wallpaperValue.startsWith("http://") ||
+                wallpaperValue.startsWith("https://") ||
+                wallpaperValue.startsWith("content://") ||
+                wallpaperValue.startsWith("file://")
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(TalklyChatBg)
+        ) {
+            // TALKLY CONTINUOUS CHAT BACKGROUND
+            // Draws continuously edge-to-edge behind the status bar, floating header, messages, floating composer, and navigation bar
+            if (isWallpaperImage) {
+                AsyncImage(
+                    model = wallpaperValue,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.55f))
+                )
+            } else {
+                // Subtle Talkly abstract geometric ambient backdrop
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val width = size.width
+                    val height = size.height
+
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(TalklyCyan.copy(alpha = 0.04f), Color.Transparent),
+                            center = Offset(width * 0.85f, height * 0.2f),
+                            radius = width * 0.6f
+                        ),
+                        center = Offset(width * 0.85f, height * 0.2f),
+                        radius = width * 0.6f
+                    )
+
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(TalklyAqua.copy(alpha = 0.035f), Color.Transparent),
+                            center = Offset(width * 0.15f, height * 0.75f),
+                            radius = width * 0.55f
+                        ),
+                        center = Offset(width * 0.15f, height * 0.75f),
+                        radius = width * 0.55f
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .imePadding()
+                    .navigationBarsPadding()
+            ) {
+                if (isSearchActive) {
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .statusBarsPadding()
+                            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 4.dp)
                     ) {
-                        IconButton(onClick = {
-                            isSearchActive = false
-                            searchQuery = ""
-                        }) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Close search",
-                                tint = TalklyTextPrimary
-                            )
-                        }
+                        Surface(
+                            shape = RoundedCornerShape(26.dp),
+                            color = Color(0xCC11161D),
+                            border = BorderStroke(1.dp, Color(0x3322D3EE)),
+                            shadowElevation = 6.dp,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IconButton(onClick = {
+                                    isSearchActive = false
+                                    searchQuery = ""
+                                }) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Close search",
+                                        tint = TalklyTextPrimary
+                                    )
+                                }
 
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            placeholder = { Text("Search messages...", color = TalklyTextSecondary, fontSize = 15.sp) },
-                            singleLine = true,
-                            textStyle = TextStyle(color = TalklyTextPrimary, fontSize = 15.sp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Color.Transparent,
-                                unfocusedBorderColor = Color.Transparent,
-                                cursorColor = TalklyCyan
-                            ),
-                            modifier = Modifier.weight(1f)
-                        )
-
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = "Clear search",
-                                    tint = TalklyTextSecondary
+                                OutlinedTextField(
+                                    value = searchQuery,
+                                    onValueChange = { searchQuery = it },
+                                    placeholder = { Text("Search messages...", color = TalklyTextSecondary, fontSize = 15.sp) },
+                                    singleLine = true,
+                                    textStyle = TextStyle(color = TalklyTextPrimary, fontSize = 15.sp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = Color.Transparent,
+                                        unfocusedBorderColor = Color.Transparent,
+                                        cursorColor = TalklyCyan
+                                    ),
+                                    modifier = Modifier.weight(1f)
                                 )
+
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Clear search",
+                                            tint = TalklyTextSecondary
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
-                }
-            } else {
-                // TALKLY FLOATING GLASS CAPSULE CONVERSATION HEADER
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .statusBarsPadding()
-                        .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 4.dp)
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(28.dp),
-                        color = TalklySurface.copy(alpha = 0.72f),
-                        border = BorderStroke(1.dp, TalklyCyan.copy(alpha = 0.22f)),
-                        shadowElevation = 8.dp,
-                        tonalElevation = 4.dp,
-                        modifier = Modifier.fillMaxWidth()
+                } else {
+                    // TALKLY FLOATING GLASS CAPSULE CONVERSATION HEADER
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 4.dp)
                     ) {
+                        Surface(
+                            shape = RoundedCornerShape(26.dp),
+                            color = Color(0xCC11161D), // Dark translucent glass surface
+                            border = BorderStroke(1.dp, Color(0x3322D3EE)), // Subtle cyan border
+                            shadowElevation = 6.dp,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1786,65 +1854,10 @@ fun ChatDetailScreen(
                         }
                     }
                 }
-                }
             }
         }
-    ) { innerPadding ->
-        val isWallpaperImage = wallpaperValue.startsWith("http://") ||
-                wallpaperValue.startsWith("https://") ||
-                wallpaperValue.startsWith("content://") ||
-                wallpaperValue.startsWith("file://")
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .imePadding()
-                .background(TalklyChatBg)
-        ) {
-            // TALKLY AMBIENT BACKGROUND
-            if (isWallpaperImage) {
-                AsyncImage(
-                    model = wallpaperValue,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.55f))
-                )
-            } else {
-                // Subtle Talkly abstract geometric ambient backdrop
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val width = size.width
-                    val height = size.height
-
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(TalklyCyan.copy(alpha = 0.04f), Color.Transparent),
-                            center = Offset(width * 0.85f, height * 0.2f),
-                            radius = width * 0.6f
-                        ),
-                        center = Offset(width * 0.85f, height * 0.2f),
-                        radius = width * 0.6f
-                    )
-
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(TalklyAqua.copy(alpha = 0.035f), Color.Transparent),
-                            center = Offset(width * 0.15f, height * 0.75f),
-                            radius = width * 0.55f
-                        ),
-                        center = Offset(width * 0.15f, height * 0.75f),
-                        radius = width * 0.55f
-                    )
-                }
-            }
-
-            Column(modifier = Modifier.fillMaxSize()) {
-                // Offline Connection Warning Banner
+        // Offline Connection Warning Banner
                 if (!isNetworkConnected) {
                     Surface(
                         color = TalklyError.copy(alpha = 0.15f),
@@ -3222,20 +3235,21 @@ fun ChatDetailScreen(
                         }
                     }
                 } else {
-                    // TALKLY THREE-PART FLOATING MESSAGE COMPOSER
+                    // TALKLY THREE-PART REAL FLOATING MESSAGE COMPOSER
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 10.dp),
+                            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 1. Standalone Floating Attachment Button
+                        // 1. Standalone Floating Glass Attachment Button
                         Surface(
                             shape = CircleShape,
-                            color = TalklyCard,
-                            border = BorderStroke(1.dp, TalklyElevated),
-                            shadowElevation = 4.dp,
-                            modifier = Modifier.size(44.dp)
+                            color = Color(0xCC18212B),
+                            border = BorderStroke(1.dp, Color(0x3322D3EE)),
+                            shadowElevation = 6.dp,
+                            modifier = Modifier.size(48.dp)
                         ) {
                             IconButton(
                                 onClick = { showAttachmentDialog = true },
@@ -3250,85 +3264,90 @@ fun ChatDetailScreen(
                             }
                         }
 
-                        // 2. Standalone Floating Text Input Capsule
+                        // 2. Standalone Floating Rounded Glass Text Capsule
                         Surface(
                             shape = RoundedCornerShape(24.dp),
-                            color = TalklyCard,
-                            border = BorderStroke(1.dp, TalklyElevated),
-                            shadowElevation = 4.dp,
+                            color = Color(0xCC18212B),
+                            border = BorderStroke(1.dp, Color(0x3322D3EE)),
+                            shadowElevation = 6.dp,
                             modifier = Modifier
                                 .weight(1f)
-                                .padding(horizontal = 8.dp)
+                                .heightIn(min = 48.dp)
                         ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 2.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    OutlinedTextField(
-                                        value = textInput,
-                                        onValueChange = {
-                                            textInput = it
-                                            onTypingStateChanged(it.isNotBlank())
-                                        },
-                                        placeholder = { Text("Type message...", fontSize = 14.sp, color = TalklyTextSecondary) },
-                                        textStyle = TextStyle(
-                                            color = TalklyTextPrimary,
-                                            fontSize = 15.sp,
-                                            fontWeight = FontWeight.Normal
-                                        ),
-                                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                                        keyboardActions = KeyboardActions(
-                                            onSend = {
-                                                if (textInput.isNotBlank()) {
-                                                    if (editingMessage != null) {
-                                                        val success = onEditMessage(editingMessage!!.id, textInput)
-                                                        if (!success) {
-                                                            Toast.makeText(context, "১০ মিনিট পার হয়ে যাওয়ায় এডিট করা সম্ভব নয়", Toast.LENGTH_SHORT).show()
-                                                        }
-                                                        editingMessage = null
-                                                    } else {
-                                                        onSendMessage(
-                                                            textInput, MessageType.TEXT, null,
-                                                            replyingToMessage?.id,
-                                                            replyingToMessage?.senderName,
-                                                            replyingToMessage?.textContent?.ifEmpty { "Media" }
-                                                        )
-                                                        replyingToMessage = null
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = textInput,
+                                    onValueChange = {
+                                        textInput = it
+                                        onTypingStateChanged(it.isNotBlank())
+                                    },
+                                    placeholder = { Text("Type message...", fontSize = 14.sp, color = TalklyTextSecondary) },
+                                    textStyle = TextStyle(
+                                        color = TalklyTextPrimary,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Normal
+                                    ),
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                                    keyboardActions = KeyboardActions(
+                                        onSend = {
+                                            if (textInput.isNotBlank()) {
+                                                if (editingMessage != null) {
+                                                    val success = onEditMessage(editingMessage!!.id, textInput)
+                                                    if (!success) {
+                                                        Toast.makeText(context, "১০ মিনিট পার হয়ে যাওয়ায় এডিট করা সম্ভব নয়", Toast.LENGTH_SHORT).show()
                                                     }
-                                                    textInput = ""
-                                                    onTypingStateChanged(false)
+                                                    editingMessage = null
+                                                } else {
+                                                    onSendMessage(
+                                                        textInput, MessageType.TEXT, null,
+                                                        replyingToMessage?.id,
+                                                        replyingToMessage?.senderName,
+                                                        replyingToMessage?.textContent?.ifEmpty { "Media" }
+                                                    )
+                                                    replyingToMessage = null
                                                 }
+                                                textInput = ""
+                                                onTypingStateChanged(false)
                                             }
-                                        ),
-                                        colors = OutlinedTextFieldDefaults.colors(
-                                            focusedTextColor = TalklyTextPrimary,
-                                            unfocusedTextColor = TalklyTextPrimary,
-                                            focusedContainerColor = Color.Transparent,
-                                            unfocusedContainerColor = Color.Transparent,
-                                            unfocusedBorderColor = Color.Transparent,
-                                            focusedBorderColor = Color.Transparent,
-                                            cursorColor = TalklyCyan
-                                        ),
-                                        modifier = Modifier.weight(1f),
-                                        maxLines = 4
-                                    )
-                                }
+                                        }
+                                    ),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedTextColor = TalklyTextPrimary,
+                                        unfocusedTextColor = TalklyTextPrimary,
+                                        focusedContainerColor = Color.Transparent,
+                                        unfocusedContainerColor = Color.Transparent,
+                                        unfocusedBorderColor = Color.Transparent,
+                                        focusedBorderColor = Color.Transparent,
+                                        cursorColor = TalklyCyan
+                                    ),
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 4
+                                )
                             }
+                        }
 
-                            Spacer(modifier = Modifier.width(6.dp))
-
-                            // Smooth Animated Send / Mic Button
-                            AnimatedContent(
-                                targetState = textInput.isNotBlank(),
-                                transitionSpec = {
-                                    scaleIn(animationSpec = tween(180)) togetherWith scaleOut(animationSpec = tween(180))
-                                },
-                                label = "SendMicTransition"
-                            ) { hasText ->
-                                if (hasText) {
-                                    FloatingActionButton(
+                        // 3. Standalone Floating Glass Send / Mic Button
+                        AnimatedContent(
+                            targetState = textInput.isNotBlank(),
+                            transitionSpec = {
+                                scaleIn(animationSpec = tween(180)) togetherWith scaleOut(animationSpec = tween(180))
+                            },
+                            label = "SendMicTransition"
+                        ) { hasText ->
+                            if (hasText) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = TalklyCyan,
+                                    border = BorderStroke(1.dp, TalklyMint.copy(alpha = 0.5f)),
+                                    shadowElevation = 6.dp,
+                                    modifier = Modifier.size(48.dp)
+                                ) {
+                                    IconButton(
                                         onClick = {
                                             if (editingMessage != null) {
                                                 val success = onEditMessage(editingMessage!!.id, textInput)
@@ -3348,30 +3367,32 @@ fun ChatDetailScreen(
                                             textInput = ""
                                             onTypingStateChanged(false)
                                         },
-                                        containerColor = TalklyCyan,
-                                        contentColor = Color(0xFF080B10),
-                                        shape = CircleShape,
-                                        modifier = Modifier.size(44.dp)
+                                        modifier = Modifier.fillMaxSize()
                                     ) {
                                         Icon(
                                             imageVector = Icons.AutoMirrored.Filled.Send,
                                             contentDescription = "Send",
+                                            tint = Color(0xFF080B10),
                                             modifier = Modifier.size(20.dp)
                                         )
                                     }
-                                } else {
-                                    FloatingActionButton(
+                                }
+                            } else {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = Color(0xCC18212B),
+                                    border = BorderStroke(1.dp, Color(0x3322D3EE)),
+                                    shadowElevation = 6.dp,
+                                    modifier = Modifier.size(48.dp)
+                                ) {
+                                    IconButton(
                                         onClick = { startVoiceRecording() },
-                                        containerColor = TalklyCard,
-                                        contentColor = TalklyCyan,
-                                        shape = CircleShape,
-                                        modifier = Modifier
-                                            .size(44.dp)
-                                            .border(1.dp, TalklyElevated, CircleShape)
+                                        modifier = Modifier.fillMaxSize()
                                     ) {
                                         Icon(
                                             imageVector = Icons.Outlined.Mic,
                                             contentDescription = "Record Voice Note",
+                                            tint = TalklyCyan,
                                             modifier = Modifier.size(22.dp)
                                         )
                                     }
@@ -3383,6 +3404,7 @@ fun ChatDetailScreen(
             }
         }
     }
+}
 
 private fun isSameDay(timestamp1: Long, timestamp2: Long): Boolean {
     val cal1 = Calendar.getInstance().apply { timeInMillis = timestamp1 }
