@@ -1,27 +1,42 @@
 package com.family.talkly.ui.components
 
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
@@ -34,6 +49,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -59,9 +75,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import com.family.talkly.data.models.ChatMessage
 import com.family.talkly.data.models.MessageType
@@ -70,6 +88,7 @@ import com.family.talkly.ui.theme.WhatsappTeal
 import com.family.talkly.util.MediaCompressorAndUploader
 import com.family.talkly.util.PhoneUtils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -83,8 +102,24 @@ fun MediaAttachmentDialog(
     onSendMediaWithTag: (caption: String, type: MessageType, url: String) -> Unit,
     onSendExpiredDemo: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var previewMediaUris by remember { mutableStateOf<List<String>?>(null) }
     var previewMediaType by remember { mutableStateOf(MessageType.IMAGE) }
+
+    var isVisible by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        isVisible = true
+    }
+
+    val dismissWithAnimation: () -> Unit = {
+        coroutineScope.launch {
+            isVisible = false
+            delay(160)
+            onDismiss()
+        }
+    }
 
     // System Media Picker Launchers for Multiple Media
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -105,6 +140,24 @@ fun MediaAttachmentDialog(
         }
     }
 
+    // Camera Capture Launcher
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap: Bitmap? ->
+        if (bitmap != null) {
+            try {
+                val tempFile = File(context.cacheDir, "camera_capture_${System.currentTimeMillis()}.jpg")
+                tempFile.outputStream().use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
+                }
+                previewMediaUris = listOf(Uri.fromFile(tempFile).toString())
+                previewMediaType = MessageType.IMAGE
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
     if (previewMediaUris != null && previewMediaUris!!.isNotEmpty()) {
         MediaPreviewAndTagDialog(
             mediaUris = previewMediaUris!!,
@@ -121,169 +174,303 @@ fun MediaAttachmentDialog(
             }
         )
     } else {
-        Dialog(onDismissRequest = onDismiss) {
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 8.dp
+        val scrimAlpha by animateFloatAsState(
+            targetValue = if (isVisible) 0.52f else 0f,
+            animationSpec = tween(durationMillis = 180),
+            label = "attachmentScrimAlpha"
+        )
+
+        Dialog(
+            onDismissRequest = dismissWithAnimation,
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                dismissOnBackPress = true,
+                dismissOnClickOutside = true
+            )
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = scrimAlpha))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = dismissWithAnimation
+                    ),
+                contentAlignment = Alignment.BottomCenter
             ) {
-                Column(
-                    modifier = Modifier
-                        .padding(20.dp)
-                        .fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                AnimatedVisibility(
+                    visible = isVisible,
+                    enter = slideInVertically(
+                        initialOffsetY = { it },
+                        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing)
+                    ) + fadeIn(animationSpec = tween(durationMillis = 180)),
+                    exit = slideOutVertically(
+                        targetOffsetY = { it },
+                        animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)
+                    ) + fadeOut(animationSpec = tween(durationMillis = 140))
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .widthIn(max = 440.dp)
+                            .padding(horizontal = 14.dp, vertical = 12.dp)
+                            .navigationBarsPadding()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {} // Consume click inside the tray
+                            ),
+                        shape = RoundedCornerShape(22.dp),
+                        color = Color(0xF20F1722),
+                        border = BorderStroke(1.dp, Color(0x3322D3EE)),
+                        shadowElevation = 14.dp
                     ) {
-                        Text(
-                            text = "মিডিয়া যুক্ত করুন",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF111B21)
-                            )
-                        )
-                        IconButton(
-                            onClick = onDismiss,
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Close",
-                                tint = Color.Gray
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Exactly 2 Options: Photo and Video
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        // Photo Button
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFFF3E5F5)),
-                            shape = RoundedCornerShape(20.dp),
+                        Column(
                             modifier = Modifier
-                                .weight(1f)
-                                .height(120.dp)
-                                .clickable {
-                                    photoPickerLauncher.launch("image/*")
-                                }
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Column(
+                            // Subtle drag handle
+                            Box(
                                 modifier = Modifier
-                                    .padding(12.dp)
-                                    .fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
+                                    .width(36.dp)
+                                    .height(4.dp)
+                                    .background(Color(0x33A7B0BA), RoundedCornerShape(2.dp))
+                            )
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Header row with compact title and close button
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
+                                Text(
+                                    text = "Add to chat",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFFF8FAFC)
+                                )
+
+                                IconButton(
+                                    onClick = dismissWithAnimation,
                                     modifier = Modifier
-                                        .size(52.dp)
-                                        .background(Color(0xFF8E24AA), CircleShape),
-                                    contentAlignment = Alignment.Center
+                                        .size(28.dp)
+                                        .background(Color(0x1AFFFFFF), CircleShape)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Image,
-                                        contentDescription = "Photo",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(28.dp)
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Close",
+                                        tint = Color(0xFFA7B0BA),
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "Photo",
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF4A148C)
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Primary Actions: Gallery + Camera
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                PrimaryAttachmentTile(
+                                    title = "Gallery",
+                                    subtitle = "Photos & Videos",
+                                    icon = Icons.Default.Image,
+                                    iconTint = Color(0xFF22D3EE),
+                                    iconBg = Color(0x1F22D3EE),
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        photoPickerLauncher.launch("image/*")
+                                    }
                                 )
-                                Text(
-                                    text = "গ্যালারি থেকে ছবি",
-                                    fontSize = 11.sp,
-                                    color = Color.Gray
+
+                                PrimaryAttachmentTile(
+                                    title = "Camera",
+                                    subtitle = "Take a photo",
+                                    icon = Icons.Default.CameraAlt,
+                                    iconTint = Color(0xFF5EEAD4),
+                                    iconBg = Color(0x1F5EEAD4),
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        cameraLauncher.launch(null)
+                                    }
                                 )
                             }
-                        }
 
-                        // Video Button
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
-                            shape = RoundedCornerShape(20.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(120.dp)
-                                .clickable {
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Subtle Divider
+                            HorizontalDivider(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = Color(0x1422D3EE),
+                                thickness = 0.8.dp
+                            )
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Secondary Action: Video
+                            SecondaryAttachmentRow(
+                                title = "Video",
+                                subtitle = "Share recorded video",
+                                icon = Icons.Default.Videocam,
+                                iconTint = Color(0xFF0EA5A4),
+                                iconBg = Color(0x1F0EA5A4),
+                                onClick = {
                                     videoPickerLauncher.launch("video/*")
                                 }
-                        ) {
-                            Column(
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Privacy / 48-Hour Auto-Expiry Info Badge
+                            Row(
                                 modifier = Modifier
-                                    .padding(12.dp)
-                                    .fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
+                                    .fillMaxWidth()
+                                    .background(Color(0x1222D3EE), RoundedCornerShape(10.dp))
+                                    .border(BorderStroke(1.dp, Color(0x2422D3EE)), RoundedCornerShape(10.dp))
+                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(52.dp)
-                                        .background(Color(0xFFE53935), CircleShape),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Videocam,
-                                        contentDescription = "Video",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(28.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "Video",
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFB71C1C)
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = "Privacy",
+                                    tint = Color(0xFF5EEAD4),
+                                    modifier = Modifier.size(13.dp)
                                 )
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "গ্যালারি থেকে ভিডিও",
+                                    text = "48-Hour Auto-Expiry Tag automatically applied.",
                                     fontSize = 11.sp,
-                                    color = Color.Gray
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFFA7B0BA)
                                 )
                             }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Surface(
-                        color = Color(0xFFE8F5E9),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Lock,
-                                contentDescription = "Privacy",
-                                tint = WhatsappTeal,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "48-Hour Auto-Expiry Tag automatically applied.",
-                                fontSize = 11.sp,
-                                color = WhatsappTeal,
-                                fontWeight = FontWeight.Medium
-                            )
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrimaryAttachmentTile(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    iconTint: Color,
+    iconBg: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier.height(86.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFF16202C),
+        border = BorderStroke(1.dp, Color(0x2E22D3EE))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .background(iconBg, RoundedCornerShape(11.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = title,
+                    tint = iconTint,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = title,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFFF8FAFC),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = subtitle,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Normal,
+                color = Color(0xFFA7B0BA),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun SecondaryAttachmentRow(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    iconTint: Color,
+    iconBg: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier
+            .fillMaxWidth()
+            .height(50.dp),
+        shape = RoundedCornerShape(13.dp),
+        color = Color(0xFF16202C),
+        border = BorderStroke(1.dp, Color(0x2422D3EE))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .background(iconBg, RoundedCornerShape(9.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = title,
+                    tint = iconTint,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = title,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFFF8FAFC)
+                )
+                Text(
+                    text = subtitle,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Normal,
+                    color = Color(0xFFA7B0BA)
+                )
             }
         }
     }
