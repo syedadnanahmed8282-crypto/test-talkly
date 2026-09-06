@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -58,8 +59,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -124,6 +127,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -143,8 +147,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -177,6 +183,7 @@ import com.family.talkly.ui.components.WallpaperSelectionDialog
 import com.family.talkly.util.AudioRecorder
 import com.family.talkly.util.MediaCompressorAndUploader
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -412,13 +419,71 @@ fun ChatDetailScreen(
         }
     }
 
+    val uiItems = remember(displayedMessages, simulatedTimeOffsetMs, member.id, member.phone, member.firebaseUid) {
+        val items = mutableListOf<ChatUiItem>()
+        var i = 0
+        val memberSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone)
+
+        fun isMsgFromMember(m: ChatMessage): Boolean {
+            val sSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(m.senderId)
+            return (m.senderId == member.id) ||
+                    (!member.firebaseUid.isNullOrBlank() && m.senderId == member.firebaseUid) ||
+                    (member.phone.isNotBlank() && m.senderId == member.phone) ||
+                    (memberSuffix.isNotBlank() && memberSuffix == sSuffix)
+        }
+
+        while (i < displayedMessages.size) {
+            val msg = displayedMessages[i]
+            val isVisualMedia = (msg.messageType == MessageType.IMAGE || msg.messageType == MessageType.VIDEO) &&
+                    !msg.isDeletedForEveryone &&
+                    (msg.mediaUrl != null || msg.isMediaExpired(simulatedTimeOffsetMs))
+
+            if (isVisualMedia) {
+                val group = mutableListOf(msg)
+                var j = i + 1
+                while (j < displayedMessages.size) {
+                    val nextMsg = displayedMessages[j]
+                    val isNextVisualMedia = (nextMsg.messageType == MessageType.IMAGE || nextMsg.messageType == MessageType.VIDEO) &&
+                            !nextMsg.isDeletedForEveryone &&
+                            (nextMsg.mediaUrl != null || nextMsg.isMediaExpired(simulatedTimeOffsetMs))
+
+                    val sameSender = (msg.senderId == nextMsg.senderId) || (isMsgFromMember(msg) == isMsgFromMember(nextMsg))
+                    val timeDiff = kotlin.math.abs(nextMsg.timestamp - group.last().timestamp)
+
+                    if (isNextVisualMedia &&
+                        sameSender &&
+                        nextMsg.replyToSenderName == null &&
+                        msg.replyToSenderName == null &&
+                        timeDiff <= 120_000L
+                    ) {
+                        group.add(nextMsg)
+                        j++
+                    } else {
+                        break
+                    }
+                }
+                if (group.size > 1) {
+                    items.add(ChatUiItem.MediaCluster(group))
+                    i = j
+                } else {
+                    items.add(ChatUiItem.SingleMessage(msg))
+                    i++
+                }
+            } else {
+                items.add(ChatUiItem.SingleMessage(msg))
+                i++
+            }
+        }
+        items
+    }
+
     val pinnedMessage = remember(combinedMessages) {
         combinedMessages.lastOrNull { it.isPinned }
     }
 
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    val listState = rememberLazyListState()
+    val listState = rememberSaveable(member.id, saver = LazyListState.Saver) { LazyListState() }
 
     fun sendPendingMediaMessage(
         textContent: String,
@@ -536,9 +601,11 @@ fun ChatDetailScreen(
         onReadMessages()
     }
 
-    // Auto-scroll to latest message whenever new message arrives or user is typing
+    // Auto-scroll and reading position preservation state
     var isInitialScrollDone by remember(member.id) { mutableStateOf(false) }
-    var previousMessageCount by remember(member.id) { mutableStateOf(0) }
+    var previousMessageIds by remember(member.id) { mutableStateOf<Set<String>>(emptySet()) }
+    var previousLastMessageId by remember(member.id) { mutableStateOf<String?>(null) }
+    var wasNearBottomBeforeMessageChange by remember(member.id) { mutableStateOf(true) }
     var lastSeenBottomMessageCount by remember(member.id) { mutableStateOf(0) }
 
     // Check if the user is currently scrolled up away from bottom
@@ -553,7 +620,7 @@ fun ChatDetailScreen(
     // Number of new messages arrived while scrolled away from bottom
     val unreadScrolledCount by remember {
         derivedStateOf {
-            if (isNearBottom) {
+            if (wasNearBottomBeforeMessageChange || isNearBottom) {
                 0
             } else {
                 (displayedMessages.size - lastSeenBottomMessageCount).coerceAtLeast(0)
@@ -561,24 +628,38 @@ fun ChatDetailScreen(
         }
     }
 
-    LaunchedEffect(isNearBottom, displayedMessages.size) {
-        if (isNearBottom) {
-            lastSeenBottomMessageCount = displayedMessages.size
+    // Continuously observe the actual LazyListState to capture scroll position BEFORE any message mutation
+    LaunchedEffect(member.id) {
+        snapshotFlow {
+            val totalItems = listState.layoutInfo.totalItemsCount
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            totalItems == 0 || lastVisible >= totalItems - 3
+        }.collect { nearBottom ->
+            wasNearBottomBeforeMessageChange = nearBottom
+            if (nearBottom) {
+                lastSeenBottomMessageCount = displayedMessages.size
+            }
         }
     }
 
-    // Auto-scroll to latest message based on actual LazyColumn layout item count
-    LaunchedEffect(member.id, displayedMessages.size) {
+    // Manage Initial Scroll and New Message Auto-Scroll
+    LaunchedEffect(member.id, displayedMessages) {
         if (displayedMessages.isEmpty()) {
-            previousMessageCount = 0
+            previousMessageIds = emptySet()
+            previousLastMessageId = null
+            isInitialScrollDone = false
             return@LaunchedEffect
         }
 
+        val currentIds = displayedMessages.map { it.id }.toSet()
+        val currentLastId = displayedMessages.lastOrNull()?.id
+
         if (!isInitialScrollDone) {
-            // Wait until LazyColumn has layouted its items
-            if (listState.layoutInfo.totalItemsCount == 0) {
+            // Initial chat opening: wait until LazyColumn has actually laid out all UI items
+            val expectedMinCount = (uiItems.size + 1).coerceAtLeast(1)
+            if (listState.layoutInfo.totalItemsCount < expectedMinCount) {
                 snapshotFlow { listState.layoutInfo.totalItemsCount }
-                    .filter { it > 0 }
+                    .filter { it >= expectedMinCount }
                     .first()
             }
             yield()
@@ -587,31 +668,47 @@ fun ChatDetailScreen(
                 val lastIndex = (totalItems - 1).coerceAtLeast(0)
                 listState.scrollToItem(lastIndex)
                 isInitialScrollDone = true
+                wasNearBottomBeforeMessageChange = true
                 lastSeenBottomMessageCount = displayedMessages.size
             }
-        } else if (displayedMessages.size > previousMessageCount) {
-            val wasNearBottom = isNearBottom
-            if (wasNearBottom) {
+            previousMessageIds = currentIds
+            previousLastMessageId = currentLastId
+            return@LaunchedEffect
+        }
+
+        // Detect if genuinely NEW messages were added at the bottom
+        // (Do NOT trigger on edits, reactions, read receipts, delivery updates, or identical re-emissions)
+        val hasNewMessageAtBottom = currentLastId != null &&
+                currentLastId != previousLastMessageId &&
+                currentLastId !in previousMessageIds
+
+        if (hasNewMessageAtBottom) {
+            // New message arrived at the bottom of the conversation
+            if (wasNearBottomBeforeMessageChange) {
+                // If THIS SCREEN was already at/near the bottom immediately BEFORE the message arrived:
+                // Wait until LazyColumn has laid out the new rendered item
+                val expectedMinCount = (uiItems.size + 1).coerceAtLeast(1)
+                if (listState.layoutInfo.totalItemsCount < expectedMinCount) {
+                    snapshotFlow { listState.layoutInfo.totalItemsCount }
+                        .filter { it >= expectedMinCount }
+                        .first()
+                }
                 yield()
                 val totalItems = listState.layoutInfo.totalItemsCount
                 if (totalItems > 0) {
                     val lastIndex = (totalItems - 1).coerceAtLeast(0)
                     listState.scrollToItem(lastIndex)
+                    wasNearBottomBeforeMessageChange = true
                     lastSeenBottomMessageCount = displayedMessages.size
                 }
-            }
-        } else if (displayedMessages.size < previousMessageCount) {
-            yield()
-            val totalItems = listState.layoutInfo.totalItemsCount
-            if (totalItems > 0) {
-                val lastIndex = (totalItems - 1).coerceAtLeast(0)
-                val firstVisible = listState.firstVisibleItemIndex
-                if (firstVisible > lastIndex) {
-                    listState.scrollToItem(lastIndex)
-                }
+            } else {
+                // If THIS SCREEN was reading older messages / scrolled upward:
+                // DO NOT scroll. Preserve the user's current reading position.
             }
         }
-        previousMessageCount = displayedMessages.size
+
+        previousMessageIds = currentIds
+        previousLastMessageId = currentLastId
     }
 
     // Attachment Dialog
@@ -1376,6 +1473,24 @@ fun ChatDetailScreen(
         )
     }
 
+    var topHeaderHeightPx by remember { mutableIntStateOf(0) }
+    var bottomComposerHeightPx by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
+    val topPadding = remember(topHeaderHeightPx, density) {
+        if (topHeaderHeightPx > 0) {
+            with(density) { topHeaderHeightPx.toDp() } + 6.dp
+        } else {
+            90.dp
+        }
+    }
+    val bottomPadding = remember(bottomComposerHeightPx, density) {
+        if (bottomComposerHeightPx > 0) {
+            with(density) { bottomComposerHeightPx.toDp() } + 6.dp
+        } else {
+            72.dp
+        }
+    }
+
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
@@ -1437,11 +1552,15 @@ fun ChatDetailScreen(
                 }
             }
 
+            // 2. FLOATING TRANSLUCENT HEADER OVERLAY (TOP)
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .imePadding()
-                    .navigationBarsPadding()
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter)
+                    .zIndex(2f)
+                    .onGloballyPositioned { coords ->
+                        topHeaderHeightPx = coords.size.height
+                    }
             ) {
                 if (isSearchActive) {
                     Box(
@@ -1931,9 +2050,11 @@ fun ChatDetailScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                val idx = displayedMessages.indexOfFirst { it.id == pinned.id }
-                                if (idx >= 0) {
-                                    scope.launch { listState.animateScrollToItem(idx) }
+                                val uiIdx = uiItems.indexOfFirst {
+                                    it.id == pinned.id || (it is ChatUiItem.MediaCluster && it.messages.any { m -> m.id == pinned.id })
+                                }
+                                if (uiIdx >= 0) {
+                                    scope.launch { listState.animateScrollToItem(uiIdx + 1) }
                                 }
                             }
                     ) {
@@ -1986,13 +2107,21 @@ fun ChatDetailScreen(
                         }
                     }
                 }
+            }
 
-                // CHAT MESSAGES LIST OR EMPTY STATE
+            // 3. FULL-SCREEN MESSAGE LIST LAYER (Renders edge-to-edge behind floating header and composer)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .imePadding()
+                    .navigationBarsPadding()
+                    .zIndex(1f)
+            ) {
                 if (isLoadingMessages) {
                     Box(
                         modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth(),
+                            .fillMaxSize()
+                            .padding(top = topPadding, bottom = bottomPadding),
                         contentAlignment = Alignment.Center
                     ) {
                         MessageLoadingState(
@@ -2004,8 +2133,8 @@ fun ChatDetailScreen(
                     // TALKLY EMPTY CONVERSATION STATE
                     Box(
                         modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
+                            .fillMaxSize()
+                            .padding(top = topPadding, bottom = bottomPadding)
                             .padding(24.dp),
                         contentAlignment = Alignment.Center
                     ) {
@@ -2079,77 +2208,18 @@ fun ChatDetailScreen(
                         }
                     }
                 } else {
-                    Box(
+                    LazyColumn(
+                        state = listState,
                         modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
+                            .fillMaxSize()
+                            .padding(horizontal = 8.dp),
+                        contentPadding = PaddingValues(
+                            top = topPadding,
+                            bottom = bottomPadding
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        val uiItems = remember(displayedMessages, simulatedTimeOffsetMs) {
-                            val items = mutableListOf<ChatUiItem>()
-                            var i = 0
-                            val memberSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone)
-
-                            fun isMsgFromMember(m: ChatMessage): Boolean {
-                                val sSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(m.senderId)
-                                return (m.senderId == member.id) ||
-                                        (!member.firebaseUid.isNullOrBlank() && m.senderId == member.firebaseUid) ||
-                                        (member.phone.isNotBlank() && m.senderId == member.phone) ||
-                                        (memberSuffix.isNotBlank() && memberSuffix == sSuffix)
-                            }
-
-                            while (i < displayedMessages.size) {
-                                val msg = displayedMessages[i]
-                                val isVisualMedia = (msg.messageType == MessageType.IMAGE || msg.messageType == MessageType.VIDEO) &&
-                                        !msg.isDeletedForEveryone &&
-                                        (msg.mediaUrl != null || msg.isMediaExpired(simulatedTimeOffsetMs))
-
-                                if (isVisualMedia) {
-                                    val group = mutableListOf(msg)
-                                    var j = i + 1
-                                    while (j < displayedMessages.size) {
-                                        val nextMsg = displayedMessages[j]
-                                        val isNextVisualMedia = (nextMsg.messageType == MessageType.IMAGE || nextMsg.messageType == MessageType.VIDEO) &&
-                                                !nextMsg.isDeletedForEveryone &&
-                                                (nextMsg.mediaUrl != null || nextMsg.isMediaExpired(simulatedTimeOffsetMs))
-
-                                        val sameSender = (msg.senderId == nextMsg.senderId) || (isMsgFromMember(msg) == isMsgFromMember(nextMsg))
-                                        val timeDiff = kotlin.math.abs(nextMsg.timestamp - group.last().timestamp)
-
-                                        if (isNextVisualMedia &&
-                                            sameSender &&
-                                            nextMsg.replyToSenderName == null &&
-                                            msg.replyToSenderName == null &&
-                                            timeDiff <= 120_000L
-                                        ) {
-                                            group.add(nextMsg)
-                                            j++
-                                        } else {
-                                            break
-                                        }
-                                    }
-                                    if (group.size > 1) {
-                                        items.add(ChatUiItem.MediaCluster(group))
-                                        i = j
-                                    } else {
-                                        items.add(ChatUiItem.SingleMessage(msg))
-                                        i++
-                                    }
-                                } else {
-                                    items.add(ChatUiItem.SingleMessage(msg))
-                                    i++
-                                }
-                            }
-                            items
-                        }
-
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                        item { Spacer(modifier = Modifier.height(6.dp)) }
+                        item(key = "top_spacer") { Spacer(modifier = Modifier.height(2.dp)) }
 
                         items(uiItems, key = { it.id }) { item ->
                             val msg = item.primaryMessage
@@ -2823,7 +2893,7 @@ fun ChatDetailScreen(
                         exit = scaleOut(animationSpec = tween(180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(150)),
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .padding(end = 16.dp, bottom = 12.dp)
+                            .padding(end = 16.dp, bottom = bottomPadding + 8.dp)
                     ) {
                         Box(contentAlignment = Alignment.TopEnd) {
                             Surface(
@@ -2837,6 +2907,8 @@ fun ChatDetailScreen(
                                         scope.launch {
                                             val target = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
                                             listState.animateScrollToItem(target)
+                                            lastSeenBottomMessageCount = displayedMessages.size
+                                            wasNearBottomBeforeMessageChange = true
                                         }
                                     }
                             ) {
@@ -2884,7 +2956,19 @@ fun ChatDetailScreen(
                 }
             }
 
-            // EDITING BANNER BAR
+            // 4. FLOATING TRANSLUCENT COMPOSER OVERLAY (BOTTOM)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .imePadding()
+                    .navigationBarsPadding()
+                    .zIndex(2f)
+                    .onGloballyPositioned { coords ->
+                        bottomComposerHeightPx = coords.size.height
+                    }
+            ) {
+                // EDITING BANNER BAR
                 AnimatedVisibility(
                     visible = editingMessage != null,
                     enter = slideInVertically() + fadeIn(),
