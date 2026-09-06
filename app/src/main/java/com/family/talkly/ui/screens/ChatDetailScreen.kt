@@ -63,6 +63,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -135,6 +136,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -1446,52 +1448,65 @@ fun ChatDetailScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .statusBarsPadding()
-                            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 4.dp)
+                            .padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 2.dp)
                     ) {
                         Surface(
-                            shape = RoundedCornerShape(26.dp),
+                            shape = RoundedCornerShape(22.dp),
                             color = Color(0xCC11161D),
-                            border = BorderStroke(1.dp, Color(0x3322D3EE)),
-                            shadowElevation = 6.dp,
+                            border = BorderStroke(0.75.dp, Color(0x3322D3EE)),
+                            shadowElevation = 2.dp,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                    .padding(start = 4.dp, end = 6.dp, top = 3.dp, bottom = 3.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                IconButton(onClick = {
-                                    isSearchActive = false
-                                    searchQuery = ""
-                                }) {
+                                IconButton(
+                                    onClick = {
+                                        isSearchActive = false
+                                        searchQuery = ""
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
                                     Icon(
                                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                         contentDescription = "Close search",
-                                        tint = TalklyTextPrimary
+                                        tint = TalklyTextPrimary,
+                                        modifier = Modifier.size(19.dp)
                                     )
                                 }
 
-                                OutlinedTextField(
+                                BasicTextField(
                                     value = searchQuery,
                                     onValueChange = { searchQuery = it },
-                                    placeholder = { Text("Search messages...", color = TalklyTextSecondary, fontSize = 15.sp) },
                                     singleLine = true,
-                                    textStyle = TextStyle(color = TalklyTextPrimary, fontSize = 15.sp),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = Color.Transparent,
-                                        unfocusedBorderColor = Color.Transparent,
-                                        cursorColor = TalklyCyan
-                                    ),
-                                    modifier = Modifier.weight(1f)
+                                    textStyle = TextStyle(color = TalklyTextPrimary, fontSize = 14.sp),
+                                    cursorBrush = SolidColor(TalklyCyan),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(horizontal = 8.dp),
+                                    decorationBox = { innerTextField ->
+                                        Box(contentAlignment = Alignment.CenterStart) {
+                                            if (searchQuery.isEmpty()) {
+                                                Text("Search messages...", color = TalklyTextSecondary, fontSize = 14.sp)
+                                            }
+                                            innerTextField()
+                                        }
+                                    }
                                 )
 
                                 if (searchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { searchQuery = "" }) {
+                                    IconButton(
+                                        onClick = { searchQuery = "" },
+                                        modifier = Modifier.size(30.dp)
+                                    ) {
                                         Icon(
                                             imageVector = Icons.Default.Close,
                                             contentDescription = "Clear search",
-                                            tint = TalklyTextSecondary
+                                            tint = TalklyTextSecondary,
+                                            modifier = Modifier.size(16.dp)
                                         )
                                     }
                                 }
@@ -1504,19 +1519,19 @@ fun ChatDetailScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .statusBarsPadding()
-                            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 4.dp)
+                            .padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 2.dp)
                     ) {
                         Surface(
-                            shape = RoundedCornerShape(26.dp),
+                            shape = RoundedCornerShape(22.dp),
                             color = Color(0xCC11161D), // Dark translucent glass surface
-                            border = BorderStroke(1.dp, Color(0x3322D3EE)), // Subtle cyan border
-                            shadowElevation = 6.dp,
+                            border = BorderStroke(0.75.dp, Color(0x3322D3EE)), // Subtle cyan border
+                            shadowElevation = 2.dp,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 6.dp, vertical = 6.dp),
+                                .padding(start = 4.dp, end = 6.dp, top = 3.dp, bottom = 3.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             // Back Arrow
@@ -1526,17 +1541,17 @@ fun ChatDetailScreen(
                                     focusManager.clearFocus()
                                     onBack()
                                 },
-                                modifier = Modifier.size(36.dp)
+                                modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                     contentDescription = "Back",
                                     tint = TalklyTextPrimary,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(19.dp)
                                 )
                             }
 
-                            Spacer(modifier = Modifier.width(3.dp))
+                            Spacer(modifier = Modifier.width(2.dp))
 
                         // Contact Avatar & Info (clickable to view profile)
                         Row(
@@ -1544,7 +1559,6 @@ fun ChatDetailScreen(
                             modifier = Modifier
                                 .weight(1f)
                                 .clickable { showContactProfile = true }
-                                .padding(vertical = 2.dp)
                         ) {
                             // Avatar with gradient ring and online indicator
                             Box(
@@ -1591,7 +1605,7 @@ fun ChatDetailScreen(
                                                 text = member.name.take(2).uppercase(),
                                                 color = TalklyCyan,
                                                 fontWeight = FontWeight.Bold,
-                                                fontSize = 14.sp
+                                                fontSize = 13.5.sp
                                             )
                                         }
                                     }
@@ -1601,8 +1615,8 @@ fun ChatDetailScreen(
                                 if (member.isRecentlyActive() && isMutualContact && !isBlocked) {
                                     OnlinePresenceIndicator(
                                         member = member,
-                                        size = 10.dp,
-                                        borderColor = TalklySurface,
+                                        size = 9.dp,
+                                        borderColor = Color(0xFF11161D),
                                         borderWidth = 1.5.dp,
                                         greenColor = TalklySuccess,
                                         modifier = Modifier.align(Alignment.BottomEnd)
@@ -1610,15 +1624,18 @@ fun ChatDetailScreen(
                                 }
                             }
 
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
 
-                            Column(modifier = Modifier.weight(1f)) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.Center
+                            ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     val displayName = member.firstName
                                     val nameFontSize = when {
                                         displayName.length > 20 -> 12.sp
-                                        displayName.length > 14 -> 13.5.sp
-                                        else -> 14.5.sp
+                                        displayName.length > 14 -> 13.sp
+                                        else -> 14.sp
                                     }
                                     Text(
                                         text = displayName,
@@ -1629,12 +1646,12 @@ fun ChatDetailScreen(
                                         color = TalklyTextPrimary
                                     )
                                     if (isMuted) {
-                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Spacer(modifier = Modifier.width(3.dp))
                                         Icon(
                                             imageVector = Icons.Default.VolumeMute,
                                             contentDescription = "Muted",
                                             tint = TalklyTextSecondary,
-                                            modifier = Modifier.size(13.dp)
+                                            modifier = Modifier.size(12.dp)
                                         )
                                     }
                                 }
@@ -1649,7 +1666,7 @@ fun ChatDetailScreen(
                                 }
                                 Text(
                                     text = statusSubtext,
-                                    fontSize = 10.5.sp,
+                                    fontSize = 10.sp,
                                     fontWeight = if (member.isTyping && !isBlocked) FontWeight.Bold else FontWeight.Normal,
                                     color = if (!isMutualContact || !member.isRegisteredOnTalkly || isBlocked) TalklyError
                                     else if (member.isTyping) TalklyMint
@@ -1664,18 +1681,18 @@ fun ChatDetailScreen(
                         // Right Action Buttons
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(1.dp)
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
                             // Search Action
                             IconButton(
                                 onClick = { isSearchActive = true },
-                                modifier = Modifier.size(34.dp)
+                                modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Search,
                                     contentDescription = "Search",
                                     tint = TalklyTextSecondary,
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(17.dp)
                                 )
                             }
 
@@ -1690,13 +1707,13 @@ fun ChatDetailScreen(
                                         Toast.makeText(context, "User not registered on Talkly", Toast.LENGTH_SHORT).show()
                                     }
                                 },
-                                modifier = Modifier.size(34.dp)
+                                modifier = Modifier.size(32.dp)
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(30.dp)
-                                        .background(TalklyCard, CircleShape)
-                                        .border(0.5.dp, TalklyElevated, CircleShape),
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .background(if (member.isRegisteredOnTalkly && isMutualContact) Color(0x1F22D3EE) else Color.Transparent),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
@@ -1720,13 +1737,13 @@ fun ChatDetailScreen(
                                         Toast.makeText(context, "User not registered on Talkly", Toast.LENGTH_SHORT).show()
                                     }
                                 },
-                                modifier = Modifier.size(34.dp)
+                                modifier = Modifier.size(32.dp)
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(30.dp)
-                                        .background(TalklyCard, CircleShape)
-                                        .border(0.5.dp, TalklyElevated, CircleShape),
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .background(if (member.isRegisteredOnTalkly && isMutualContact) Color(0x1F22D3EE) else Color.Transparent),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
@@ -1742,13 +1759,13 @@ fun ChatDetailScreen(
                             Box {
                                 IconButton(
                                     onClick = { showMenu = true },
-                                    modifier = Modifier.size(34.dp)
+                                    modifier = Modifier.size(30.dp)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.MoreVert,
                                         contentDescription = "More options",
                                         tint = TalklyTextPrimary,
-                                        modifier = Modifier.size(19.dp)
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
 
@@ -2875,14 +2892,18 @@ fun ChatDetailScreen(
                 ) {
                     editingMessage?.let { editMsg ->
                         Surface(
-                            color = TalklyCard,
-                            border = BorderStroke(0.5.dp, TalklyMint.copy(alpha = 0.4f)),
-                            modifier = Modifier.fillMaxWidth()
+                            shape = RoundedCornerShape(16.dp),
+                            color = Color(0xCC18212B),
+                            border = BorderStroke(0.75.dp, TalklyMint.copy(alpha = 0.4f)),
+                            shadowElevation = 2.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 2.dp)
                         ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
@@ -2893,20 +2914,20 @@ fun ChatDetailScreen(
                                     Box(
                                         modifier = Modifier
                                             .width(3.dp)
-                                            .height(34.dp)
+                                            .height(28.dp)
                                             .background(TalklyMint, RoundedCornerShape(2.dp))
                                     )
-                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Column {
                                         Text(
                                             text = "Editing Message ✏️",
-                                            fontSize = 12.sp,
+                                            fontSize = 11.5.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = TalklyMint
                                         )
                                         Text(
                                             text = editMsg.textContent,
-                                            fontSize = 12.sp,
+                                            fontSize = 11.5.sp,
                                             color = TalklyTextSecondary,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
@@ -2919,13 +2940,13 @@ fun ChatDetailScreen(
                                         editingMessage = null
                                         textInput = ""
                                     },
-                                    modifier = Modifier.size(28.dp)
+                                    modifier = Modifier.size(26.dp)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Close,
                                         contentDescription = "Cancel edit",
                                         tint = TalklyTextSecondary,
-                                        modifier = Modifier.size(18.dp)
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
                             }
@@ -2941,14 +2962,18 @@ fun ChatDetailScreen(
                 ) {
                     replyingToMessage?.let { replyMsg ->
                         Surface(
-                            color = TalklyCard,
-                            border = BorderStroke(0.5.dp, TalklyCyan.copy(alpha = 0.4f)),
-                            modifier = Modifier.fillMaxWidth()
+                            shape = RoundedCornerShape(16.dp),
+                            color = Color(0xCC18212B),
+                            border = BorderStroke(0.75.dp, TalklyCyan.copy(alpha = 0.4f)),
+                            shadowElevation = 2.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 2.dp)
                         ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
@@ -2959,20 +2984,20 @@ fun ChatDetailScreen(
                                     Box(
                                         modifier = Modifier
                                             .width(3.dp)
-                                            .height(34.dp)
+                                            .height(28.dp)
                                             .background(TalklyCyan, RoundedCornerShape(2.dp))
                                     )
-                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Column {
                                         Text(
                                             text = "Replying to ${replyMsg.senderName}",
-                                            fontSize = 12.sp,
+                                            fontSize = 11.5.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = TalklyCyan
                                         )
                                         Text(
                                             text = replyMsg.textContent.ifEmpty { "Media photo/video" },
-                                            fontSize = 12.sp,
+                                            fontSize = 11.5.sp,
                                             color = TalklyTextSecondary,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
@@ -2982,13 +3007,13 @@ fun ChatDetailScreen(
 
                                 IconButton(
                                     onClick = { replyingToMessage = null },
-                                    modifier = Modifier.size(28.dp)
+                                    modifier = Modifier.size(26.dp)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Close,
                                         contentDescription = "Cancel reply",
                                         tint = TalklyTextSecondary,
-                                        modifier = Modifier.size(18.dp)
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
                             }
@@ -3189,64 +3214,73 @@ fun ChatDetailScreen(
                 } else if (isRecording) {
                     // TALKLY ACTIVE VOICE RECORDING PILL
                     Surface(
-                        color = TalklySurface,
-                        border = BorderStroke(1.dp, TalklyError.copy(alpha = 0.5f)),
-                        shadowElevation = 8.dp,
-                        modifier = Modifier.fillMaxWidth()
+                        shape = RoundedCornerShape(20.dp),
+                        color = Color(0xCC18212B),
+                        border = BorderStroke(0.75.dp, TalklyError.copy(alpha = 0.5f)),
+                        shadowElevation = 2.dp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 10.dp, end = 10.dp, top = 3.dp, bottom = 6.dp)
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(
                                     modifier = Modifier
-                                        .size(10.dp)
+                                        .size(8.dp)
                                         .background(TalklyError, CircleShape)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Icon(
                                     imageVector = Icons.Default.Mic,
                                     contentDescription = null,
                                     tint = TalklyError,
-                                    modifier = Modifier.size(22.dp)
+                                    modifier = Modifier.size(18.dp)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = String.format(Locale.getDefault(), "Recording %d:%02d", recordingDurationSec / 60, recordingDurationSec % 60),
                                     color = TalklyError,
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 15.sp
+                                    fontSize = 13.5.sp
                                 )
                             }
 
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(onClick = { cancelVoicePreview() }) {
+                                IconButton(
+                                    onClick = { cancelVoicePreview() },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
                                     Icon(
                                         imageVector = Icons.Default.Delete,
                                         contentDescription = "Cancel Recording",
                                         tint = TalklyTextSecondary,
-                                        modifier = Modifier.size(24.dp)
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
 
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
 
-                                FloatingActionButton(
-                                    onClick = { stopAndPreparePreview() },
-                                    containerColor = TalklyCyan,
-                                    contentColor = Color(0xFF080B10),
+                                Surface(
                                     shape = CircleShape,
-                                    modifier = Modifier.size(42.dp)
+                                    color = TalklyCyan,
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clickable { stopAndPreparePreview() }
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Done,
-                                        contentDescription = "Finish Recording & Preview",
-                                        modifier = Modifier.size(20.dp)
-                                    )
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.Done,
+                                            contentDescription = "Finish Recording & Preview",
+                                            tint = Color(0xFF080B10),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -3256,17 +3290,17 @@ fun ChatDetailScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            .padding(start = 10.dp, end = 10.dp, top = 3.dp, bottom = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // 1. Standalone Floating Glass Attachment Button
                         Surface(
                             shape = CircleShape,
                             color = Color(0xCC18212B),
-                            border = BorderStroke(1.dp, Color(0x3322D3EE)),
-                            shadowElevation = 6.dp,
-                            modifier = Modifier.size(48.dp)
+                            border = BorderStroke(0.75.dp, Color(0x3322D3EE)),
+                            shadowElevation = 2.dp,
+                            modifier = Modifier.size(40.dp)
                         ) {
                             IconButton(
                                 onClick = { showAttachmentDialog = true },
@@ -3276,39 +3310,39 @@ fun ChatDetailScreen(
                                     imageVector = Icons.Outlined.AttachFile,
                                     contentDescription = "Attach",
                                     tint = TalklyCyan,
-                                    modifier = Modifier.size(22.dp)
+                                    modifier = Modifier.size(19.dp)
                                 )
                             }
                         }
 
                         // 2. Standalone Floating Rounded Glass Text Capsule
                         Surface(
-                            shape = RoundedCornerShape(24.dp),
+                            shape = RoundedCornerShape(20.dp),
                             color = Color(0xCC18212B),
-                            border = BorderStroke(1.dp, Color(0x3322D3EE)),
-                            shadowElevation = 6.dp,
+                            border = BorderStroke(0.75.dp, Color(0x3322D3EE)),
+                            shadowElevation = 2.dp,
                             modifier = Modifier
                                 .weight(1f)
-                                .heightIn(min = 48.dp)
+                                .heightIn(min = 40.dp)
                         ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 14.dp, vertical = 2.dp),
+                                    .padding(horizontal = 14.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                OutlinedTextField(
+                                BasicTextField(
                                     value = textInput,
                                     onValueChange = {
                                         textInput = it
                                         onTypingStateChanged(it.isNotBlank())
                                     },
-                                    placeholder = { Text("Type message...", fontSize = 14.sp, color = TalklyTextSecondary) },
                                     textStyle = TextStyle(
                                         color = TalklyTextPrimary,
-                                        fontSize = 15.sp,
+                                        fontSize = 14.5.sp,
                                         fontWeight = FontWeight.Normal
                                     ),
+                                    cursorBrush = SolidColor(TalklyCyan),
                                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                                     keyboardActions = KeyboardActions(
                                         onSend = {
@@ -3333,17 +3367,20 @@ fun ChatDetailScreen(
                                             }
                                         }
                                     ),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedTextColor = TalklyTextPrimary,
-                                        unfocusedTextColor = TalklyTextPrimary,
-                                        focusedContainerColor = Color.Transparent,
-                                        unfocusedContainerColor = Color.Transparent,
-                                        unfocusedBorderColor = Color.Transparent,
-                                        focusedBorderColor = Color.Transparent,
-                                        cursorColor = TalklyCyan
-                                    ),
                                     modifier = Modifier.weight(1f),
-                                    maxLines = 4
+                                    maxLines = 4,
+                                    decorationBox = { innerTextField ->
+                                        Box(contentAlignment = Alignment.CenterStart) {
+                                            if (textInput.isEmpty()) {
+                                                Text(
+                                                    text = "Type a message...",
+                                                    fontSize = 14.sp,
+                                                    color = TalklyTextSecondary
+                                                )
+                                            }
+                                            innerTextField()
+                                        }
+                                    }
                                 )
                             }
                         }
@@ -3352,7 +3389,7 @@ fun ChatDetailScreen(
                         AnimatedContent(
                             targetState = textInput.isNotBlank(),
                             transitionSpec = {
-                                scaleIn(animationSpec = tween(180)) togetherWith scaleOut(animationSpec = tween(180))
+                                scaleIn(animationSpec = tween(150)) togetherWith scaleOut(animationSpec = tween(150))
                             },
                             label = "SendMicTransition"
                         ) { hasText ->
@@ -3360,9 +3397,9 @@ fun ChatDetailScreen(
                                 Surface(
                                     shape = CircleShape,
                                     color = TalklyCyan,
-                                    border = BorderStroke(1.dp, TalklyMint.copy(alpha = 0.5f)),
-                                    shadowElevation = 6.dp,
-                                    modifier = Modifier.size(48.dp)
+                                    border = BorderStroke(0.75.dp, TalklyMint.copy(alpha = 0.5f)),
+                                    shadowElevation = 2.dp,
+                                    modifier = Modifier.size(40.dp)
                                 ) {
                                     IconButton(
                                         onClick = {
@@ -3390,7 +3427,7 @@ fun ChatDetailScreen(
                                             imageVector = Icons.AutoMirrored.Filled.Send,
                                             contentDescription = "Send",
                                             tint = Color(0xFF080B10),
-                                            modifier = Modifier.size(20.dp)
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
                                 }
@@ -3398,9 +3435,9 @@ fun ChatDetailScreen(
                                 Surface(
                                     shape = CircleShape,
                                     color = Color(0xCC18212B),
-                                    border = BorderStroke(1.dp, Color(0x3322D3EE)),
-                                    shadowElevation = 6.dp,
-                                    modifier = Modifier.size(48.dp)
+                                    border = BorderStroke(0.75.dp, Color(0x3322D3EE)),
+                                    shadowElevation = 2.dp,
+                                    modifier = Modifier.size(40.dp)
                                 ) {
                                     IconButton(
                                         onClick = { startVoiceRecording() },
@@ -3408,9 +3445,9 @@ fun ChatDetailScreen(
                                     ) {
                                         Icon(
                                             imageVector = Icons.Outlined.Mic,
-                                            contentDescription = "Record Voice Note",
+                                            contentDescription = "Record voice note",
                                             tint = TalklyCyan,
-                                            modifier = Modifier.size(22.dp)
+                                            modifier = Modifier.size(20.dp)
                                         )
                                     }
                                 }
@@ -3633,25 +3670,25 @@ fun VoiceNotePreviewBar(
     val progress = if (totalDurationMs.value > 0) (currentPosMs.value.toFloat() / totalDurationMs.value.toFloat()).coerceIn(0f, 1f) else 0f
 
     Surface(
-        color = TalklySurface,
+        color = Color(0xCC18212B),
         shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(1.dp, TalklyCyan.copy(alpha = 0.35f)),
-        shadowElevation = 8.dp,
+        border = BorderStroke(0.75.dp, Color(0x3322D3EE)),
+        shadowElevation = 2.dp,
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .padding(start = 10.dp, end = 10.dp, top = 3.dp, bottom = 6.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Surface(
                 shape = CircleShape,
                 color = TalklyCyan,
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(34.dp)
                     .clickable {
                         if (!isPrepared) return@clickable
                         try {
@@ -3672,12 +3709,12 @@ fun VoiceNotePreviewBar(
                         imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = "Play/Pause Preview",
                         tint = Color(0xFF080B10),
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(8.dp))
 
             Column(modifier = Modifier.weight(1f)) {
                 Row(
@@ -3687,7 +3724,7 @@ fun VoiceNotePreviewBar(
                 ) {
                     Text(
                         text = "Voice Note Preview",
-                        fontSize = 12.sp,
+                        fontSize = 11.5.sp,
                         fontWeight = FontWeight.Bold,
                         color = TalklyCyan
                     )
@@ -3695,12 +3732,12 @@ fun VoiceNotePreviewBar(
                     val secs = (dispMs / 1000).toInt()
                     Text(
                         text = String.format(Locale.getDefault(), "%d:%02d", secs / 60, secs % 60),
-                        fontSize = 11.sp,
+                        fontSize = 10.5.sp,
                         color = TalklyTextSecondary
                     )
                 }
 
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(3.dp))
 
                 com.family.talkly.ui.components.AudioWaveformBar(
                     progress = progress,
@@ -3722,34 +3759,37 @@ fun VoiceNotePreviewBar(
                 )
             }
 
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(8.dp))
 
             IconButton(
                 onClick = onCancel,
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(32.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Delete,
                     contentDescription = "Discard Recording",
                     tint = TalklyTextSecondary,
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(18.dp)
                 )
             }
 
             Spacer(modifier = Modifier.width(4.dp))
 
-            FloatingActionButton(
-                onClick = onSend,
-                containerColor = TalklyCyan,
-                contentColor = Color(0xFF080B10),
+            Surface(
                 shape = CircleShape,
-                modifier = Modifier.size(42.dp)
+                color = TalklyCyan,
+                modifier = Modifier
+                    .size(34.dp)
+                    .clickable { onSend() }
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Send Voice Note",
-                    modifier = Modifier.size(18.dp)
-                )
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Send Voice Note",
+                        tint = Color(0xFF080B10),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
     }
