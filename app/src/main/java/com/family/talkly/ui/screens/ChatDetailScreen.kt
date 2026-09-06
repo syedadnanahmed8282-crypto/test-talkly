@@ -127,6 +127,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -174,7 +175,10 @@ import com.family.talkly.ui.components.WallpaperSelectionDialog
 import com.family.talkly.util.AudioRecorder
 import com.family.talkly.util.MediaCompressorAndUploader
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -448,12 +452,6 @@ fun ChatDetailScreen(
             replyToName = replyName,
             replyToText = replyText
         )
-
-        scope.launch {
-            delay(50)
-            val targetIndex = (displayedMessages.size + 1).coerceAtLeast(0)
-            listState.scrollToItem(targetIndex)
-        }
     }
 
     fun stopAndPreparePreview() {
@@ -542,18 +540,16 @@ fun ChatDetailScreen(
     var lastSeenBottomMessageCount by remember(member.id) { mutableStateOf(0) }
 
     // Check if the user is currently scrolled up away from bottom
-    val isNearBottom by remember(displayedMessages.size, member.isTyping) {
+    val isNearBottom by remember {
         derivedStateOf {
-            if (displayedMessages.isEmpty()) return@derivedStateOf true
             val totalItems = listState.layoutInfo.totalItemsCount
-            if (totalItems <= 1) return@derivedStateOf true
-            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisible >= totalItems - 3
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            totalItems == 0 || lastVisible >= totalItems - 3
         }
     }
 
     // Number of new messages arrived while scrolled away from bottom
-    val unreadScrolledCount by remember(displayedMessages.size, isNearBottom) {
+    val unreadScrolledCount by remember {
         derivedStateOf {
             if (isNearBottom) {
                 0
@@ -569,26 +565,47 @@ fun ChatDetailScreen(
         }
     }
 
-    LaunchedEffect(displayedMessages.size, member.isTyping) {
-        if (displayedMessages.isNotEmpty()) {
-            // Index 0 is the top Spacer, so index displayedMessages.size is the last message item
-            val targetIndex = displayedMessages.size + (if (member.isTyping) 1 else 0)
-            if (targetIndex >= 0) {
-                if (!isInitialScrollDone) {
-                    listState.scrollToItem(targetIndex)
-                    isInitialScrollDone = true
+    // Auto-scroll to latest message based on actual LazyColumn layout item count
+    LaunchedEffect(member.id, displayedMessages.size) {
+        if (displayedMessages.isEmpty()) {
+            previousMessageCount = 0
+            return@LaunchedEffect
+        }
+
+        if (!isInitialScrollDone) {
+            // Wait until LazyColumn has layouted its items
+            if (listState.layoutInfo.totalItemsCount == 0) {
+                snapshotFlow { listState.layoutInfo.totalItemsCount }
+                    .filter { it > 0 }
+                    .first()
+            }
+            yield()
+            val totalItems = listState.layoutInfo.totalItemsCount
+            if (totalItems > 0) {
+                val lastIndex = (totalItems - 1).coerceAtLeast(0)
+                listState.scrollToItem(lastIndex)
+                isInitialScrollDone = true
+                lastSeenBottomMessageCount = displayedMessages.size
+            }
+        } else if (displayedMessages.size > previousMessageCount) {
+            val wasNearBottom = isNearBottom
+            if (wasNearBottom) {
+                yield()
+                val totalItems = listState.layoutInfo.totalItemsCount
+                if (totalItems > 0) {
+                    val lastIndex = (totalItems - 1).coerceAtLeast(0)
+                    listState.scrollToItem(lastIndex)
                     lastSeenBottomMessageCount = displayedMessages.size
-                } else if (displayedMessages.size > previousMessageCount || member.isTyping) {
-                    val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-                    // Only scroll down instantly if user was already at or near bottom, avoiding jump/flicker
-                    if (isNearBottom || lastVisible >= (displayedMessages.size - 2).coerceAtLeast(0)) {
-                        listState.scrollToItem(targetIndex)
-                    }
-                } else if (displayedMessages.size < previousMessageCount) {
-                    val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-                    if (lastVisible > targetIndex) {
-                        listState.scrollToItem(targetIndex)
-                    }
+                }
+            }
+        } else if (displayedMessages.size < previousMessageCount) {
+            yield()
+            val totalItems = listState.layoutInfo.totalItemsCount
+            if (totalItems > 0) {
+                val lastIndex = (totalItems - 1).coerceAtLeast(0)
+                val firstVisible = listState.firstVisibleItemIndex
+                if (firstVisible > lastIndex) {
+                    listState.scrollToItem(lastIndex)
                 }
             }
         }
@@ -2801,7 +2818,7 @@ fun ChatDetailScreen(
                                     .size(42.dp)
                                     .clickable {
                                         scope.launch {
-                                            val target = displayedMessages.size + (if (member.isTyping) 1 else 0)
+                                            val target = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
                                             listState.animateScrollToItem(target)
                                         }
                                     }
