@@ -64,7 +64,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 
-class FirebaseChatRepository(private val context: Context) {
+class FirebaseChatRepository private constructor(private val context: Context) {
 
     private val repositoryScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 

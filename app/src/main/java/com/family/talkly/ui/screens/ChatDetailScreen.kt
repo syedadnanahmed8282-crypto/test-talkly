@@ -493,7 +493,7 @@ fun ChatDetailScreen(
 
         replyingToMessage = null
 
-        val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository(context)
+        val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository.getInstance(context)
         val canonicalId = chatRepo.getCanonicalMemberId(member.id)
 
         val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
@@ -2269,7 +2269,7 @@ fun ChatDetailScreen(
                                                     },
                                                     onRetryUpload = { retryMsg ->
                                                         if (!retryMsg.mediaUrl.isNullOrBlank()) {
-                                                            val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository(context)
+                                                            val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository.getInstance(context)
                                                             val canonicalId = chatRepo.getCanonicalMemberId(member.id)
                                                             com.family.talkly.util.MediaUploadManager.enqueueMediaUpload(
                                                                 context = context,
@@ -2328,7 +2328,7 @@ fun ChatDetailScreen(
                                                         },
                                                         onRetryUpload = {
                                                             if (!msg.mediaUrl.isNullOrBlank()) {
-                                                                val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository(context)
+                                                                val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository.getInstance(context)
                                                                 val canonicalId = chatRepo.getCanonicalMemberId(member.id)
                                                                 com.family.talkly.util.MediaUploadManager.enqueueMediaUpload(
                                                                     context = context,
@@ -2591,7 +2591,7 @@ fun ChatDetailScreen(
                                                                 },
                                                                 onRetryUpload = {
                                                                     if (!msg.mediaUrl.isNullOrBlank()) {
-                                                                        val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository(context)
+                                                                        val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository.getInstance(context)
                                                                         val canonicalId = chatRepo.getCanonicalMemberId(member.id)
                                                                         com.family.talkly.util.MediaUploadManager.enqueueMediaUpload(
                                                                             context = context,

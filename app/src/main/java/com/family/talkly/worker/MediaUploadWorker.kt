@@ -174,7 +174,7 @@ class MediaUploadWorker(
             // 3. Complete process & sync message to Firebase Repository
             updateProgressState(dao, messageId, 100, notificationId, "Upload complete!")
 
-            val repository = FirebaseChatRepository(appContext)
+            val repository = FirebaseChatRepository.getInstance(appContext)
             val originalTimestamp = dao.getMessageById(messageId)?.timestamp ?: System.currentTimeMillis()
             repository.sendMessage(
                 memberId = recipientId.ifBlank { chatKey },
