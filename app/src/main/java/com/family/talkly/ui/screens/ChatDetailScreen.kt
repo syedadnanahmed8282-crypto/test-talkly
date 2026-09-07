@@ -202,7 +202,7 @@ sealed interface ChatUiItem {
     }
 
     data class MediaCluster(val messages: List<ChatMessage>) : ChatUiItem {
-        override val id: String get() = "cluster_${messages.first().id}"
+        override val id: String get() = "cluster_${messages.firstOrNull()?.id ?: ""}"
         override val timestamp: Long get() = messages.last().timestamp
         override val primaryMessage: ChatMessage get() = messages.last()
     }
@@ -587,6 +587,43 @@ fun ChatDetailScreen(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             com.family.talkly.util.TalklyNotificationHelper.clearActiveChat(member.id)
+        }
+    }
+
+    // --- SAFE SCROLL ENGINE ---
+    val nearBottomThresholdPx = with(LocalDensity.current) { 120.dp.roundToPx() }
+    var hasPositionedInitially by remember(member.id) { mutableStateOf(false) }
+    var knownMessageIds by remember(member.id) { mutableStateOf<Set<String>>(emptySet()) }
+    val currentMessageIds = remember(combinedMessages) {
+        combinedMessages.map { it.id }.toSet()
+    }
+
+    // Initial position on opening and new-message-only auto-scroll
+    LaunchedEffect(member.id, uiItems.size, currentMessageIds, isSearchActive) {
+        if (uiItems.isEmpty()) return@LaunchedEffect
+
+        if (!hasPositionedInitially) {
+            // STEP 2: Initial chat opening position (only once when initial non-empty uiItems exist and search is inactive)
+            if (!isSearchActive) {
+                listState.scrollToItem(uiItems.size)
+                hasPositionedInitially = true
+                knownMessageIds = currentMessageIds
+            }
+        } else {
+            // STEP 3: New-message-only auto-scroll (compare stable message IDs)
+            val newIds = currentMessageIds - knownMessageIds
+            if (newIds.isNotEmpty()) {
+                // STEP 4: Determine scroll policy based on user's own viewport distance from bottom
+                val wasNearBottom = isUserNearBottom(listState.layoutInfo, nearBottomThresholdPx)
+                knownMessageIds = currentMessageIds
+                if (wasNearBottom && !isSearchActive) {
+                    listState.animateScrollToItem(uiItems.size)
+                }
+            } else {
+                // Non-new-message updates (read/delivery receipts, reactions, edits, upload progress)
+                // keep the ID set up to date without moving the scroll position
+                knownMessageIds = currentMessageIds
+            }
         }
     }
 
@@ -3746,4 +3783,29 @@ fun VoiceNotePreviewBar(
             }
         }
     }
+}
+
+/**
+ * Checks if the user is currently looking at or near the bottom of the message list.
+ * Evaluates actual pixel distance of the last visible item from the bottom of the viewport
+ * to avoid arbitrary index-based jumps.
+ */
+private fun isUserNearBottom(
+    layoutInfo: androidx.compose.foundation.lazy.LazyListLayoutInfo,
+    thresholdPx: Int
+): Boolean {
+    val totalItems = layoutInfo.totalItemsCount
+    if (totalItems <= 1) return true
+    val visibleItems = layoutInfo.visibleItemsInfo
+    if (visibleItems.isEmpty()) return true
+    val lastVisible = visibleItems.last()
+    // In LazyColumn, the last item is at index (totalItems - 1).
+    // If the last item or second-to-last item is visible (accounting for optional typing indicator bubble):
+    if (lastVisible.index >= totalItems - 2) {
+        val lastItemBottom = lastVisible.offset + lastVisible.size
+        val viewportBottom = layoutInfo.viewportEndOffset - layoutInfo.afterContentPadding
+        val distanceFromBottom = lastItemBottom - viewportBottom
+        return distanceFromBottom <= thresholdPx
+    }
+    return false
 }
