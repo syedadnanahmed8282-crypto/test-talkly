@@ -176,7 +176,10 @@ fun MediaMessageItem(
                     )
                 } else {
                     AsyncImage(
-                        model = com.family.talkly.util.PhoneUtils.getCoilMediaModel(message.mediaUrl),
+                        model = coil.request.ImageRequest.Builder(LocalContext.current)
+                            .data(com.family.talkly.util.PhoneUtils.getCoilMediaModel(message.mediaUrl))
+                            .crossfade(true)
+                            .build(),
                         contentDescription = message.textContent,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
@@ -620,7 +623,10 @@ private fun MediaTile(
             )
         } else {
             AsyncImage(
-                model = com.family.talkly.util.PhoneUtils.getCoilMediaModel(message.mediaUrl),
+                model = coil.request.ImageRequest.Builder(LocalContext.current)
+                    .data(com.family.talkly.util.PhoneUtils.getCoilMediaModel(message.mediaUrl))
+                    .crossfade(true)
+                    .build(),
                 contentDescription = message.textContent,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()

@@ -83,6 +83,8 @@ class FirebaseChatRepository(private val context: Context) {
         @Volatile
         private var INSTANCE: FirebaseChatRepository? = null
 
+        var emissionCounter: Long = 0L
+
         fun getInstance(context: Context): FirebaseChatRepository {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: FirebaseChatRepository(context.applicationContext).also { INSTANCE = it }
@@ -992,6 +994,7 @@ class FirebaseChatRepository(private val context: Context) {
                             val mergedMap = _messagesMap.value.toMutableMap()
                             resultMap.forEach { (key, list) ->
                                 mergedMap[key] = list
+                                Log.e("SCROLL_DEBUG", "_messagesMap emission #${++emissionCounter}, chatKey=$key, entities=${entities.size}")
                             }
                             _messagesMap.value = mergedMap
                         }
