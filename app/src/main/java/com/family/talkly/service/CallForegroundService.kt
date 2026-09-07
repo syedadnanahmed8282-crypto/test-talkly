@@ -138,6 +138,11 @@ class CallForegroundService : Service() {
         fun stopCallService(context: Context) {
             // First stop ringtone in memory immediately to avoid any OS Intent delivery latency delay
             stopRingtoneImmediately()
+            try {
+                activeServiceInstance?.stopSelfAndRingtone()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error stopping active service instance directly: ${e.localizedMessage}")
+            }
             val intent = Intent(context, CallForegroundService::class.java).apply {
                 action = ACTION_STOP_INCOMING_CALL
             }
@@ -151,16 +156,29 @@ class CallForegroundService : Service() {
 
     private var ringtone: Ringtone? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    @Volatile
+    private var isForegroundStarted = false
 
     override fun onCreate() {
         super.onCreate()
         activeServiceInstance = this
+        ensureForegroundStarted()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val action = intent?.action ?: return START_NOT_STICKY
+        activeServiceInstance = this
+
+        // IMMEDIATELY satisfy Android startForegroundService requirement
+        ensureForegroundStarted()
+
+        val action = intent?.action
+        if (action == null) {
+            Log.w(TAG, "onStartCommand received null intent or action. Stopping service safely.")
+            stopSelfAndRingtone()
+            return START_NOT_STICKY
+        }
 
         when (action) {
             ACTION_START_INCOMING_CALL -> {
@@ -186,9 +204,7 @@ class CallForegroundService : Service() {
 
                 if (isSelfCall) {
                     Log.d(TAG, "Ignoring ACTION_START_INCOMING_CALL for self-call (callerUid=$callerUid)")
-                    safeStartForeground(NOTIFICATION_ID, buildSilentPlaceholderNotification(), 0)
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
+                    stopSelfAndRingtone()
                     return START_NOT_STICKY
                 }
 
@@ -230,6 +246,41 @@ class CallForegroundService : Service() {
         }
 
         return START_NOT_STICKY
+    }
+
+    private fun getCallForegroundServiceType(): Int {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+        } else {
+            0
+        }
+    }
+
+    @Synchronized
+    private fun ensureForegroundStarted() {
+        if (isForegroundStarted) return
+
+        try {
+            val placeholder = buildSilentPlaceholderNotification()
+            val fgType = getCallForegroundServiceType()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && fgType != 0) {
+                startForeground(NOTIFICATION_ID, placeholder, fgType)
+            } else {
+                startForeground(NOTIFICATION_ID, placeholder)
+            }
+            isForegroundStarted = true
+            Log.d(TAG, "CallForegroundService promoted to foreground immediately")
+        } catch (e: Throwable) {
+            Log.e(TAG, "startForeground failed with type: ${e.localizedMessage}, attempting fallback untyped", e)
+            try {
+                val placeholder = buildSilentPlaceholderNotification()
+                startForeground(NOTIFICATION_ID, placeholder)
+                isForegroundStarted = true
+                Log.d(TAG, "CallForegroundService promoted to foreground via untyped fallback")
+            } catch (fallbackEx: Throwable) {
+                Log.e(TAG, "FATAL: Both typed and untyped startForeground failed: ${fallbackEx.localizedMessage}", fallbackEx)
+            }
+        }
     }
 
     private fun acquireFullWakeLock() {
@@ -361,22 +412,30 @@ class CallForegroundService : Service() {
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePendingIntent)
             .addAction(android.R.drawable.ic_menu_call, "Answer", fullScreenPendingIntent)
 
-        val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
-        } else {
-            0
-        }
+        val notification = notificationBuilder.build()
+        val foregroundType = getCallForegroundServiceType()
 
-        safeStartForeground(NOTIFICATION_ID, notificationBuilder.build(), foregroundType)
+        if (!isForegroundStarted) {
+            safeStartForeground(NOTIFICATION_ID, notification, foregroundType)
+        } else {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            notificationManager?.notify(NOTIFICATION_ID, notification)
+        }
     }
 
     private fun buildSilentPlaceholderNotification(): android.app.Notification {
-        TalklyNotificationHelper.initNotificationChannels(this)
-        return NotificationCompat.Builder(this, TalklyNotificationHelper.CHANNEL_CALLS_ID)
+        try {
+            TalklyNotificationHelper.initNotificationChannels(this)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error initializing notification channels: ${e.localizedMessage}")
+        }
+        return NotificationCompat.Builder(this, TalklyNotificationHelper.CHANNEL_ONGOING_CALLS_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("Talkly")
-            .setContentText("Checking call...")
+            .setContentText("Connecting...")
             .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setOngoing(true)
             .setSilent(true)
             .build()
     }
@@ -388,12 +447,14 @@ class CallForegroundService : Service() {
             } else {
                 startForeground(notificationId, notification)
             }
+            isForegroundStarted = true
         } catch (e: Throwable) {
-            Log.e(TAG, "startForeground failed with type $primaryType: ${e.localizedMessage}, attempting fallback untyped")
+            Log.e(TAG, "startForeground failed with type $primaryType: ${e.localizedMessage}, attempting fallback untyped", e)
             try {
                 startForeground(notificationId, notification)
+                isForegroundStarted = true
             } catch (e3: Throwable) {
-                Log.e(TAG, "Untyped startForeground failed: ${e3.localizedMessage}")
+                Log.e(TAG, "Untyped startForeground failed: ${e3.localizedMessage}", e3)
             }
         }
     }
@@ -429,13 +490,15 @@ class CallForegroundService : Service() {
             .setContentIntent(contentPendingIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
-        val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
-        } else {
-            0
-        }
+        val notification = notificationBuilder.build()
+        val foregroundType = getCallForegroundServiceType()
 
-        safeStartForeground(NOTIFICATION_ID, notificationBuilder.build(), foregroundType)
+        if (!isForegroundStarted) {
+            safeStartForeground(NOTIFICATION_ID, notification, foregroundType)
+        } else {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            notificationManager?.notify(NOTIFICATION_ID, notification)
+        }
     }
 
     private fun declineCallInSupabase(roomId: String, callerUid: String, callerPhone: String) {
@@ -450,10 +513,20 @@ class CallForegroundService : Service() {
         }
     }
 
-    private fun stopSelfAndRingtone() {
+    fun stopSelfAndRingtone() {
         stopRingtone()
         releaseWakeLock()
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error in stopForeground: ${e.localizedMessage}")
+        }
+        isForegroundStarted = false
         stopSelf()
     }
 

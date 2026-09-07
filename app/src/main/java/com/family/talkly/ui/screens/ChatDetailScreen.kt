@@ -132,7 +132,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -183,11 +182,7 @@ import com.family.talkly.ui.components.WallpaperSelectionDialog
 import com.family.talkly.util.AudioRecorder
 import com.family.talkly.util.MediaCompressorAndUploader
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.yield
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -601,114 +596,13 @@ fun ChatDetailScreen(
         onReadMessages()
     }
 
-    // Auto-scroll and reading position preservation state
-    var isInitialScrollDone by remember(member.id) { mutableStateOf(false) }
-    var previousMessageIds by remember(member.id) { mutableStateOf<Set<String>>(emptySet()) }
-    var previousLastMessageId by remember(member.id) { mutableStateOf<String?>(null) }
-    var wasNearBottomBeforeMessageChange by remember(member.id) { mutableStateOf(true) }
-    var lastSeenBottomMessageCount by remember(member.id) { mutableStateOf(0) }
-
-    // Check if the user is currently scrolled up away from bottom
-    val isNearBottom by remember {
+    // Manual scroll-to-bottom visibility helper (when scrolled up away from bottom)
+    val isScrolledUp by remember {
         derivedStateOf {
             val totalItems = listState.layoutInfo.totalItemsCount
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            totalItems == 0 || lastVisible >= totalItems - 3
+            totalItems > 0 && lastVisible < totalItems - 3
         }
-    }
-
-    // Number of new messages arrived while scrolled away from bottom
-    val unreadScrolledCount by remember {
-        derivedStateOf {
-            if (wasNearBottomBeforeMessageChange || isNearBottom) {
-                0
-            } else {
-                (displayedMessages.size - lastSeenBottomMessageCount).coerceAtLeast(0)
-            }
-        }
-    }
-
-    // Continuously observe the actual LazyListState to capture scroll position BEFORE any message mutation
-    LaunchedEffect(member.id) {
-        snapshotFlow {
-            val totalItems = listState.layoutInfo.totalItemsCount
-            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            totalItems == 0 || lastVisible >= totalItems - 3
-        }.collect { nearBottom ->
-            wasNearBottomBeforeMessageChange = nearBottom
-            if (nearBottom) {
-                lastSeenBottomMessageCount = displayedMessages.size
-            }
-        }
-    }
-
-    // Manage Initial Scroll and New Message Auto-Scroll
-    LaunchedEffect(member.id, displayedMessages) {
-        if (displayedMessages.isEmpty()) {
-            previousMessageIds = emptySet()
-            previousLastMessageId = null
-            isInitialScrollDone = false
-            return@LaunchedEffect
-        }
-
-        val currentIds = displayedMessages.map { it.id }.toSet()
-        val currentLastId = displayedMessages.lastOrNull()?.id
-
-        if (!isInitialScrollDone) {
-            // Initial chat opening: wait until LazyColumn has actually laid out all UI items
-            val expectedMinCount = (uiItems.size + 1).coerceAtLeast(1)
-            if (listState.layoutInfo.totalItemsCount < expectedMinCount) {
-                snapshotFlow { listState.layoutInfo.totalItemsCount }
-                    .filter { it >= expectedMinCount }
-                    .first()
-            }
-            yield()
-            val totalItems = listState.layoutInfo.totalItemsCount
-            if (totalItems > 0) {
-                val lastIndex = (totalItems - 1).coerceAtLeast(0)
-                listState.scrollToItem(lastIndex)
-                isInitialScrollDone = true
-                wasNearBottomBeforeMessageChange = true
-                lastSeenBottomMessageCount = displayedMessages.size
-            }
-            previousMessageIds = currentIds
-            previousLastMessageId = currentLastId
-            return@LaunchedEffect
-        }
-
-        // Detect if genuinely NEW messages were added at the bottom
-        // (Do NOT trigger on edits, reactions, read receipts, delivery updates, or identical re-emissions)
-        val hasNewMessageAtBottom = currentLastId != null &&
-                currentLastId != previousLastMessageId &&
-                currentLastId !in previousMessageIds
-
-        if (hasNewMessageAtBottom) {
-            // New message arrived at the bottom of the conversation
-            if (wasNearBottomBeforeMessageChange) {
-                // If THIS SCREEN was already at/near the bottom immediately BEFORE the message arrived:
-                // Wait until LazyColumn has laid out the new rendered item
-                val expectedMinCount = (uiItems.size + 1).coerceAtLeast(1)
-                if (listState.layoutInfo.totalItemsCount < expectedMinCount) {
-                    snapshotFlow { listState.layoutInfo.totalItemsCount }
-                        .filter { it >= expectedMinCount }
-                        .first()
-                }
-                yield()
-                val totalItems = listState.layoutInfo.totalItemsCount
-                if (totalItems > 0) {
-                    val lastIndex = (totalItems - 1).coerceAtLeast(0)
-                    listState.scrollToItem(lastIndex)
-                    wasNearBottomBeforeMessageChange = true
-                    lastSeenBottomMessageCount = displayedMessages.size
-                }
-            } else {
-                // If THIS SCREEN was reading older messages / scrolled upward:
-                // DO NOT scroll. Preserve the user's current reading position.
-            }
-        }
-
-        previousMessageIds = currentIds
-        previousLastMessageId = currentLastId
     }
 
     // Attachment Dialog
@@ -2886,70 +2780,45 @@ fun ChatDetailScreen(
                         item { Spacer(modifier = Modifier.height(8.dp)) }
                     }
 
-                    // FLOATING SCROLL TO BOTTOM BUTTON WITH BADGE & GLOW
+                    // FLOATING SCROLL TO BOTTOM BUTTON (MANUAL USER ACTION ONLY)
                     androidx.compose.animation.AnimatedVisibility(
-                        visible = !isNearBottom && displayedMessages.isNotEmpty(),
+                        visible = isScrolledUp && displayedMessages.isNotEmpty(),
                         enter = scaleIn(animationSpec = tween(220, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(200)),
                         exit = scaleOut(animationSpec = tween(180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(150)),
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
                             .padding(end = 16.dp, bottom = bottomPadding + 8.dp)
                     ) {
-                        Box(contentAlignment = Alignment.TopEnd) {
-                            Surface(
-                                shape = CircleShape,
-                                color = TalklyCard,
-                                border = BorderStroke(1.dp, TalklyCyan.copy(alpha = 0.6f)),
-                                shadowElevation = 8.dp,
-                                modifier = Modifier
-                                    .size(42.dp)
-                                    .clickable {
-                                        scope.launch {
-                                            val target = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
-                                            listState.animateScrollToItem(target)
-                                            lastSeenBottomMessageCount = displayedMessages.size
-                                            wasNearBottomBeforeMessageChange = true
-                                        }
+                        Surface(
+                            shape = CircleShape,
+                            color = TalklyCard,
+                            border = BorderStroke(1.dp, TalklyCyan.copy(alpha = 0.6f)),
+                            shadowElevation = 8.dp,
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clickable {
+                                    scope.launch {
+                                        val target = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+                                        listState.animateScrollToItem(target)
                                     }
+                                }
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.radialGradient(
+                                            listOf(TalklyCyan.copy(alpha = 0.2f), Color.Transparent)
+                                        )
+                                    ),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(
-                                            Brush.radialGradient(
-                                                listOf(TalklyCyan.copy(alpha = 0.2f), Color.Transparent)
-                                            )
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.KeyboardArrowDown,
-                                        contentDescription = "Scroll to bottom",
-                                        tint = TalklyCyan,
-                                        modifier = Modifier.size(26.dp)
-                                    )
-                                }
-                            }
-
-                            // Unread messages counter badge if new messages arrived while scrolled up
-                            if (unreadScrolledCount > 0) {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = TalklyMint,
-                                    border = BorderStroke(1.dp, TalklySurface),
-                                    shadowElevation = 4.dp,
-                                    modifier = Modifier
-                                        .offset(x = 4.dp, y = (-4).dp)
-                                        .wrapContentHeight()
-                                ) {
-                                    Text(
-                                        text = if (unreadScrolledCount > 99) "99+" else "$unreadScrolledCount",
-                                        color = Color(0xFF080B10),
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
-                                    )
-                                }
+                                Icon(
+                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Scroll to bottom",
+                                    tint = TalklyCyan,
+                                    modifier = Modifier.size(26.dp)
+                                )
                             }
                         }
                     }
