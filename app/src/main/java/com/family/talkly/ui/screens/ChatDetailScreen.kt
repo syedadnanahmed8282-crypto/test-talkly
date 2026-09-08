@@ -8,6 +8,7 @@ package com.family.talkly.ui.screens
 import android.content.Context
 import android.media.MediaPlayer
 import android.net.Uri
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -469,6 +470,7 @@ fun ChatDetailScreen(
                 i++
             }
         }
+        Log.e("UI_ITEMS_DEBUG", "uiItems recomputed: size=${items.size}, ids=${items.map { it.id }}")
         items
     }
 
