@@ -1904,45 +1904,59 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         val canonicalOtherPartyId = getCanonicalMemberId(rawOtherPartyId)
         ensureContactInChatList(canonicalOtherPartyId, fallbackName = message.senderName)
 
-        val currentMap = _messagesMap.value.toMutableMap()
-        val existingMsgs = (currentMap[canonicalOtherPartyId] ?: currentMap[rawOtherPartyId] ?: emptyList()).toMutableList()
-        val existingIndex = existingMsgs.indexOfFirst { it.id == message.id }
-        
         var isIdenticalSelfEcho = false
 
-        if (existingIndex >= 0) {
-            val existing = existingMsgs[existingIndex]
-            val preservedDelivered = existing.isDelivered || finalMessage.isDelivered
-            val preservedRead = existing.isRead || finalMessage.isRead
-            val preservedReadAt = finalMessage.readAtTimestamp ?: existing.readAtTimestamp
-            val preservedDeletedForUsers = (finalMessage.deletedForUsers + existing.deletedForUsers).distinct()
-            val preservedReaction = finalMessage.reaction ?: existing.reaction
-            val preservedTimestamp = existing.timestamp // Retain local client timestamp to prevent scroll order jumps
+        _messagesMap.update { current ->
+            val currentMap = current.toMutableMap()
+            val existingMsgs = (currentMap[canonicalOtherPartyId] ?: currentMap[rawOtherPartyId] ?: emptyList()).toMutableList()
+            val existingIndex = existingMsgs.indexOfFirst { it.id == message.id }
 
-            val updatedMsg = finalMessage.copy(
-                timestamp = preservedTimestamp,
-                isDelivered = preservedDelivered,
-                isRead = preservedRead,
-                readAtTimestamp = preservedReadAt,
-                deletedForUsers = preservedDeletedForUsers,
-                reaction = preservedReaction,
-                isPending = false
-            )
+            if (existingIndex >= 0) {
+                val existing = existingMsgs[existingIndex]
+                val preservedDelivered = existing.isDelivered || finalMessage.isDelivered
+                val preservedRead = existing.isRead || finalMessage.isRead
+                val preservedReadAt = finalMessage.readAtTimestamp ?: existing.readAtTimestamp
+                val preservedDeletedForUsers = (finalMessage.deletedForUsers + existing.deletedForUsers).distinct()
+                val preservedReaction = finalMessage.reaction ?: existing.reaction
+                val preservedTimestamp = existing.timestamp // Retain local client timestamp to prevent scroll order jumps
 
-            if (isSelf &&
-                existing.isPending == updatedMsg.isPending &&
-                existing.isDelivered == updatedMsg.isDelivered &&
-                existing.isRead == updatedMsg.isRead &&
-                existing.mediaUrl == updatedMsg.mediaUrl &&
-                existing.reaction == updatedMsg.reaction &&
-                existing.deletedForUsers == updatedMsg.deletedForUsers
-            ) {
-                isIdenticalSelfEcho = true
+                val updatedMsg = finalMessage.copy(
+                    timestamp = preservedTimestamp,
+                    isDelivered = preservedDelivered,
+                    isRead = preservedRead,
+                    readAtTimestamp = preservedReadAt,
+                    deletedForUsers = preservedDeletedForUsers,
+                    reaction = preservedReaction,
+                    isPending = false
+                )
+
+                if (isSelf &&
+                    existing.isPending == updatedMsg.isPending &&
+                    existing.isDelivered == updatedMsg.isDelivered &&
+                    existing.isRead == updatedMsg.isRead &&
+                    existing.mediaUrl == updatedMsg.mediaUrl &&
+                    existing.reaction == updatedMsg.reaction &&
+                    existing.deletedForUsers == updatedMsg.deletedForUsers
+                ) {
+                    isIdenticalSelfEcho = true
+                }
+
+                existingMsgs[existingIndex] = updatedMsg
+            } else {
+                existingMsgs.add(finalMessage)
             }
 
-            existingMsgs[existingIndex] = updatedMsg
-        } else {
-            existingMsgs.add(finalMessage)
+            val filteredMsgs = existingMsgs.filterNot { msg ->
+                (currentUserId.isNotBlank() && msg.deletedForUsers.contains(currentUserId)) ||
+                msg.deletedForUsers.contains("self") ||
+                (userSuffix.isNotBlank() && msg.deletedForUsers.contains(userSuffix))
+            }.sortedBy { it.timestamp }
+
+            currentMap[canonicalOtherPartyId] = filteredMsgs
+            if (canonicalOtherPartyId != rawOtherPartyId && currentMap.containsKey(rawOtherPartyId)) {
+                currentMap.remove(rawOtherPartyId)
+            }
+            currentMap
         }
 
         // Deduplication & notification tracking
@@ -1988,19 +2002,6 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             return
         }
 
-        val filteredMsgs = existingMsgs.filterNot { msg ->
-            (currentUserId.isNotBlank() && msg.deletedForUsers.contains(currentUserId)) ||
-            msg.deletedForUsers.contains("self") ||
-            (userSuffix.isNotBlank() && msg.deletedForUsers.contains(userSuffix))
-        }.sortedBy { it.timestamp }
-        _messagesMap.update { current ->
-            val updatedMap = current.toMutableMap()
-            updatedMap[canonicalOtherPartyId] = filteredMsgs
-            if (canonicalOtherPartyId != rawOtherPartyId && updatedMap.containsKey(rawOtherPartyId)) {
-                updatedMap.remove(rawOtherPartyId)
-            }
-            updatedMap
-        }
         saveMessagesToDisk()
         _lastServerSyncTime.value = System.currentTimeMillis()
 
