@@ -2322,7 +2322,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         val mergedExisting = (existingUnderCanonical + existingUnderRawMemberId + existingFromHelper)
             .distinctBy { it.id }
             .sortedBy { it.timestamp }
-        val currentList = mergedExisting.toMutableList()
+        val currentList = mergedExisting.filterNot { it.id == newMessage.id }.toMutableList()
         currentList.add(newMessage)
 
         val updatedMap = _messagesMap.value.toMutableMap()
