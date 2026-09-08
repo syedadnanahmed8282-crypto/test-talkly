@@ -30,6 +30,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -991,12 +992,14 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                         }
                         val resultMap = loadedMap.mapValues { entry -> entry.value.sortedBy { it.timestamp } }
                         if (resultMap.isNotEmpty()) {
-                            val mergedMap = _messagesMap.value.toMutableMap()
-                            resultMap.forEach { (key, list) ->
-                                mergedMap[key] = list
-                                Log.e("SCROLL_DEBUG", "_messagesMap emission #${++emissionCounter}, chatKey=$key, entities=${entities.size}")
+                            _messagesMap.update { current ->
+                                val mergedMap = current.toMutableMap()
+                                resultMap.forEach { (key, list) ->
+                                    mergedMap[key] = list
+                                    Log.e("SCROLL_DEBUG", "_messagesMap emission #${++emissionCounter}, chatKey=$key, entities=${entities.size}")
+                                }
+                                mergedMap
                             }
-                            _messagesMap.value = mergedMap
                         }
                     }
                 }
@@ -1990,12 +1993,14 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             msg.deletedForUsers.contains("self") ||
             (userSuffix.isNotBlank() && msg.deletedForUsers.contains(userSuffix))
         }.sortedBy { it.timestamp }
-        currentMap[canonicalOtherPartyId] = filteredMsgs
-        if (canonicalOtherPartyId != rawOtherPartyId && currentMap.containsKey(rawOtherPartyId)) {
-            currentMap.remove(rawOtherPartyId)
+        _messagesMap.update { current ->
+            val updatedMap = current.toMutableMap()
+            updatedMap[canonicalOtherPartyId] = filteredMsgs
+            if (canonicalOtherPartyId != rawOtherPartyId && updatedMap.containsKey(rawOtherPartyId)) {
+                updatedMap.remove(rawOtherPartyId)
+            }
+            updatedMap
         }
-
-        _messagesMap.value = currentMap
         saveMessagesToDisk()
         _lastServerSyncTime.value = System.currentTimeMillis()
 
@@ -2325,12 +2330,14 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         val currentList = mergedExisting.filterNot { it.id == newMessage.id }.toMutableList()
         currentList.add(newMessage)
 
-        val updatedMap = _messagesMap.value.toMutableMap()
-        updatedMap[canonicalId] = currentList
-        if (canonicalId != memberId && updatedMap.containsKey(memberId)) {
-            updatedMap.remove(memberId)
+        _messagesMap.update { current ->
+            val updatedMap = current.toMutableMap()
+            updatedMap[canonicalId] = currentList
+            if (canonicalId != memberId && updatedMap.containsKey(memberId)) {
+                updatedMap.remove(memberId)
+            }
+            updatedMap
         }
-        _messagesMap.value = updatedMap
         saveMessagesToDisk()
 
         // Insert into local Room DB immediately
