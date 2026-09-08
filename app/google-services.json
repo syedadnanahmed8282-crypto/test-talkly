@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "688875089801",
+    "project_id": "familycallapp-e6b21",
+    "storage_bucket": "familycallapp-e6b21.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:688875089801:android:07f27e3cf40ca2af913b58",
+        "android_client_info": {
+          "package_name": "com.family.talkly"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCmmYWBqRREKmhNaBvc1drcTJib0EuMgF0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
