@@ -2321,16 +2321,16 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             replyToText = replyToText
         )
 
-        val existingUnderCanonical = _messagesMap.value[canonicalId] ?: emptyList()
-        val existingUnderRawMemberId = _messagesMap.value[memberId] ?: emptyList()
-        val existingFromHelper = getMessagesForMember(canonicalId)
-        val mergedExisting = (existingUnderCanonical + existingUnderRawMemberId + existingFromHelper)
-            .distinctBy { it.id }
-            .sortedBy { it.timestamp }
-        val currentList = mergedExisting.filterNot { it.id == newMessage.id }.toMutableList()
-        currentList.add(newMessage)
-
         _messagesMap.update { current ->
+            val existingUnderCanonical = current[canonicalId] ?: emptyList()
+            val existingUnderRawMemberId = current[memberId] ?: emptyList()
+            val existingFromHelper = getMessagesForMember(canonicalId)
+            val mergedExisting = (existingUnderCanonical + existingUnderRawMemberId + existingFromHelper)
+                .distinctBy { it.id }
+                .sortedBy { it.timestamp }
+            val currentList = mergedExisting.filterNot { it.id == newMessage.id }.toMutableList()
+            currentList.add(newMessage)
+
             val updatedMap = current.toMutableMap()
             updatedMap[canonicalId] = currentList
             if (canonicalId != memberId && updatedMap.containsKey(memberId)) {
