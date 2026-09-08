@@ -928,12 +928,14 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         }
 
         // 2. Wipe from local messagesMap memory cache and Room Database
-        val updatedMap = _messagesMap.value.toMutableMap()
-        updatedMap.remove(memberId)
-        updatedMap.remove(canonicalId)
-        if (targetFirebaseUid.isNotBlank()) updatedMap.remove(targetFirebaseUid)
-        if (targetSuffix.isNotBlank()) updatedMap.remove(targetSuffix)
-        _messagesMap.value = updatedMap
+        _messagesMap.update { current ->
+            val updatedMap = current.toMutableMap()
+            updatedMap.remove(memberId)
+            updatedMap.remove(canonicalId)
+            if (targetFirebaseUid.isNotBlank()) updatedMap.remove(targetFirebaseUid)
+            if (targetSuffix.isNotBlank()) updatedMap.remove(targetSuffix)
+            updatedMap
+        }
 
         repositoryScope.launch(Dispatchers.IO) {
             listOfNotNull(memberId.ifBlank { null }, canonicalId.ifBlank { null }, targetFirebaseUid.ifBlank { null }, targetSuffix.ifBlank { null })
@@ -1081,7 +1083,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                     }
                     val resultMap = loadedMap.mapValues { entry -> entry.value.sortedBy { it.timestamp } }
                     if (resultMap.isNotEmpty()) {
-                        _messagesMap.value = resultMap
+                        _messagesMap.update { resultMap }
                         Log.i(TAG, "Loaded ${loadedEntities.size} messages from Room Database for offline support")
                         return@launch
                     }
@@ -1162,7 +1164,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                     loadedMap[chatKey] = msgList.sortedBy { it.timestamp }
                 }
                 if (loadedMap.isNotEmpty()) {
-                    _messagesMap.value = loadedMap
+                    _messagesMap.update { loadedMap }
                     saveMessagesToDisk()
                 }
             } catch (e: Exception) {
@@ -1266,12 +1268,14 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         }
 
         if (updatedAny) {
-            val updatedMap = _messagesMap.value.toMutableMap()
-            updatedMap[canonicalId] = updatedMessages
-            if (canonicalId != memberId) {
-                updatedMap[memberId] = updatedMessages
+            _messagesMap.update { current ->
+                val updatedMap = current.toMutableMap()
+                updatedMap[canonicalId] = updatedMessages
+                if (canonicalId != memberId) {
+                    updatedMap[memberId] = updatedMessages
+                }
+                updatedMap
             }
-            _messagesMap.value = updatedMap
             saveMessagesToDisk()
 
             // Update in Supabase and Room
@@ -1364,12 +1368,14 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             }
         }
 
-        val updatedMap = _messagesMap.value.toMutableMap()
-        updatedMap[canonicalId] = updatedMessages
-        if (canonicalId != memberId) {
-            updatedMap[memberId] = updatedMessages
+        _messagesMap.update { current ->
+            val updatedMap = current.toMutableMap()
+            updatedMap[canonicalId] = updatedMessages
+            if (canonicalId != memberId) {
+                updatedMap[memberId] = updatedMessages
+            }
+            updatedMap
         }
-        _messagesMap.value = updatedMap
         saveMessagesToDisk()
 
         // Sync reaction to Supabase and Room
@@ -1411,10 +1417,12 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             }
         }
 
-        val updatedMap = _messagesMap.value.toMutableMap()
-        updatedMap[canonicalId] = updatedList
-        if (canonicalId != memberId) updatedMap[memberId] = updatedList
-        _messagesMap.value = updatedMap
+        _messagesMap.update { current ->
+            val updatedMap = current.toMutableMap()
+            updatedMap[canonicalId] = updatedList
+            if (canonicalId != memberId) updatedMap[memberId] = updatedList
+            updatedMap
+        }
         saveMessagesToDisk()
 
         val finalDeleted = updatedMsg?.deletedForUsers ?: listOf(currentUid)
@@ -1450,10 +1458,12 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             }
         }
 
-        val updatedMap = _messagesMap.value.toMutableMap()
-        updatedMap[canonicalId] = updatedList
-        if (canonicalId != memberId) updatedMap[memberId] = updatedList
-        _messagesMap.value = updatedMap
+        _messagesMap.update { current ->
+            val updatedMap = current.toMutableMap()
+            updatedMap[canonicalId] = updatedList
+            if (canonicalId != memberId) updatedMap[memberId] = updatedList
+            updatedMap
+        }
         saveMessagesToDisk()
 
         // Sync to Supabase and Room
@@ -1490,10 +1500,12 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             }
         }
 
-        val updatedMap = _messagesMap.value.toMutableMap()
-        updatedMap[canonicalId] = updatedList
-        if (canonicalId != memberId) updatedMap[memberId] = updatedList
-        _messagesMap.value = updatedMap
+        _messagesMap.update { current ->
+            val updatedMap = current.toMutableMap()
+            updatedMap[canonicalId] = updatedList
+            if (canonicalId != memberId) updatedMap[memberId] = updatedList
+            updatedMap
+        }
         saveMessagesToDisk()
 
         // Sync to Supabase and Room
@@ -1523,12 +1535,14 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                 msg
             }
         }
-        val updatedMap = _messagesMap.value.toMutableMap()
-        updatedMap[canonicalId] = updatedMessages
-        if (canonicalId != memberId) {
-            updatedMap[memberId] = updatedMessages
+        _messagesMap.update { current ->
+            val updatedMap = current.toMutableMap()
+            updatedMap[canonicalId] = updatedMessages
+            if (canonicalId != memberId) {
+                updatedMap[memberId] = updatedMessages
+            }
+            updatedMap
         }
-        _messagesMap.value = updatedMap
         saveMessagesToDisk()
 
         // Sync to Supabase & Room
@@ -1580,12 +1594,14 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             }
         }
 
-        val updatedMap = _messagesMap.value.toMutableMap()
-        updatedMap[canonicalId] = updatedMessages
-        if (canonicalId != memberId) {
-            updatedMap[memberId] = updatedMessages
+        _messagesMap.update { current ->
+            val updatedMap = current.toMutableMap()
+            updatedMap[canonicalId] = updatedMessages
+            if (canonicalId != memberId) {
+                updatedMap[memberId] = updatedMessages
+            }
+            updatedMap
         }
-        _messagesMap.value = updatedMap
         saveMessagesToDisk()
 
         // Sync to Supabase & Room
@@ -1705,23 +1721,25 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                 val recentSupabaseMessages = SupabaseMessagingService.fetchRecentMessagesForUser(currentUserId, limit = 200)
                 Log.d(TAG, "DIAGNOSTIC messageSyncJob: Fetched ${recentSupabaseMessages.size} recent messages via PostgREST")
                 if (recentSupabaseMessages.isNotEmpty()) {
-                    val currentMap = _messagesMap.value.toMutableMap()
-                    recentSupabaseMessages.forEach { sMsg ->
-                        val chatMsg = sMsg.toChatMessage(currentUserId)
-                        val rawOtherPartyId = if (chatMsg.senderId == "self" || chatMsg.senderId == currentUserId) chatMsg.receiverId else chatMsg.senderId
-                        if (rawOtherPartyId.isNotBlank()) {
-                            val canonicalOther = getCanonicalMemberId(rawOtherPartyId)
-                            val list = (currentMap[canonicalOther] ?: emptyList()).toMutableList()
-                            if (list.none { it.id == chatMsg.id }) {
-                                list.add(chatMsg)
-                                currentMap[canonicalOther] = list.sortedBy { it.timestamp }
+                    _messagesMap.update { current ->
+                        val currentMap = current.toMutableMap()
+                        recentSupabaseMessages.forEach { sMsg ->
+                            val chatMsg = sMsg.toChatMessage(currentUserId)
+                            val rawOtherPartyId = if (chatMsg.senderId == "self" || chatMsg.senderId == currentUserId) chatMsg.receiverId else chatMsg.senderId
+                            if (rawOtherPartyId.isNotBlank()) {
+                                val canonicalOther = getCanonicalMemberId(rawOtherPartyId)
+                                val list = (currentMap[canonicalOther] ?: emptyList()).toMutableList()
+                                if (list.none { it.id == chatMsg.id }) {
+                                    list.add(chatMsg)
+                                    currentMap[canonicalOther] = list.sortedBy { it.timestamp }
+                                }
+                                try {
+                                    database.chatMessageDao().insertMessage(ChatMessageEntity.fromChatMessage(canonicalOther, chatMsg))
+                                } catch (e: Exception) {}
                             }
-                            try {
-                                database.chatMessageDao().insertMessage(ChatMessageEntity.fromChatMessage(canonicalOther, chatMsg))
-                            } catch (e: Exception) {}
                         }
+                        currentMap
                     }
-                    _messagesMap.value = currentMap
                     saveMessagesToDisk()
                 }
                 _lastServerSyncTime.value = System.currentTimeMillis()
@@ -1827,13 +1845,15 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             is io.github.jan.supabase.realtime.PostgresAction.Delete -> {
                 try {
                     val id = action.oldRecord["id"]?.toString()?.replace("\"", "") ?: return
-                    val currentMap = _messagesMap.value.toMutableMap()
-                    for ((key, list) in currentMap) {
-                        if (list.any { it.id == id }) {
-                            currentMap[key] = list.filterNot { it.id == id }
+                    _messagesMap.update { current ->
+                        val currentMap = current.toMutableMap()
+                        for ((key, list) in currentMap) {
+                            if (list.any { it.id == id }) {
+                                currentMap[key] = list.filterNot { it.id == id }
+                            }
                         }
+                        currentMap
                     }
-                    _messagesMap.value = currentMap
                     saveMessagesToDisk()
                     repositoryScope.launch(Dispatchers.IO) {
                         database.chatMessageDao().deleteMessageById(id)
@@ -2038,11 +2058,13 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         saveContactsToPrefs()
 
         // Purge messages map entry for self key
-        val currentMap = _messagesMap.value.toMutableMap()
-        currentMap.remove(primaryUid)
-        currentMap.remove("self")
-        if (userSuffix.isNotBlank()) currentMap.remove(userSuffix)
-        _messagesMap.value = currentMap
+        _messagesMap.update { current ->
+            val currentMap = current.toMutableMap()
+            currentMap.remove(primaryUid)
+            currentMap.remove("self")
+            if (userSuffix.isNotBlank()) currentMap.remove(userSuffix)
+            currentMap
+        }
         saveMessagesToDisk()
 
         // Clear Coil memory and disk caches to purge stale avatars
@@ -2083,7 +2105,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             }
 
             currentSyncedUserId = null
-            _messagesMap.value = emptyMap()
+            _messagesMap.update { emptyMap() }
             _familyMembers.value = emptyList()
             _statuses.value = emptyList()
             _messageRequests.value = emptyList()
