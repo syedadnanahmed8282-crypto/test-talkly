@@ -2239,19 +2239,21 @@ class FirebaseChatRepository private constructor(private val context: Context) {
     }
 
     private fun updateMessagePendingState(messageId: String, isPending: Boolean) {
-        val currentMap = _messagesMap.value.toMutableMap()
         var modified = false
-        currentMap.forEach { (key, msgs) ->
-            val idx = msgs.indexOfFirst { it.id == messageId }
-            if (idx >= 0 && msgs[idx].isPending != isPending) {
-                val list = msgs.toMutableList()
-                list[idx] = list[idx].copy(isPending = isPending)
-                currentMap[key] = list
-                modified = true
+        _messagesMap.update { current ->
+            val currentMap = current.toMutableMap()
+            currentMap.forEach { (key, msgs) ->
+                val idx = msgs.indexOfFirst { it.id == messageId }
+                if (idx >= 0 && msgs[idx].isPending != isPending) {
+                    val list = msgs.toMutableList()
+                    list[idx] = list[idx].copy(isPending = isPending)
+                    currentMap[key] = list
+                    modified = true
+                }
             }
+            currentMap
         }
         if (modified) {
-            _messagesMap.value = currentMap
             saveMessagesToDisk()
         }
     }
