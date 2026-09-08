@@ -25,6 +25,8 @@ class MediaUploadWorker(
     workerParams: WorkerParameters
 ) : CoroutineWorker(appContext, workerParams) {
 
+    private var lastProgressUpdateTime = 0L
+
     companion object {
         private const val TAG = "MediaUploadWorker"
         const val CHANNEL_ID = "talkly_media_upload_channel"
@@ -240,6 +242,12 @@ class MediaUploadWorker(
         notificationId: Int,
         statusText: String
     ) {
+        val now = System.currentTimeMillis()
+        if (progress < 100 && (now - lastProgressUpdateTime) < 250L) {
+            return
+        }
+        lastProgressUpdateTime = now
+
         kotlinx.coroutines.runBlocking(Dispatchers.IO) {
             dao.updateUploadState(
                 messageId = messageId,
