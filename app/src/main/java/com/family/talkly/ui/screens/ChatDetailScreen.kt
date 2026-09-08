@@ -470,7 +470,7 @@ fun ChatDetailScreen(
                 i++
             }
         }
-        Log.e("UI_ITEMS_DEBUG", "uiItems recomputed: size=${items.size}, ids=${items.map { it.id }}")
+        Log.e("Talkly_UI_ITEMS_DEBUG", "uiItems recomputed: size=${items.size}, ids=${items.map { it.id }}")
         items
     }
 
