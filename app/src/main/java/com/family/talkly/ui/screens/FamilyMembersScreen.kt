@@ -691,7 +691,7 @@ fun FamilyMembersScreen(
                                     Spacer(modifier = Modifier.height(2.dp))
 
                                     Text(
-                                        text = if (!member.isRegisteredOnTalkly) "Not on Talkly" else if (member.phone.isNotBlank()) member.phone else member.status,
+                                        text = if (!member.isRegisteredOnTalkly) "Not on Payra" else if (member.phone.isNotBlank()) member.phone else member.status,
                                         fontSize = 12.sp,
                                         color = if (!member.isRegisteredOnTalkly) ErrorColor else TextSecondary,
                                         maxLines = 1,
@@ -709,7 +709,7 @@ fun FamilyMembersScreen(
                                             if (member.isRegisteredOnTalkly) {
                                                 onSelectMember(member)
                                             } else {
-                                                android.widget.Toast.makeText(context, "User not registered on Talkly", android.widget.Toast.LENGTH_SHORT).show()
+                                                android.widget.Toast.makeText(context, "User not registered on Payra", android.widget.Toast.LENGTH_SHORT).show()
                                             }
                                         },
                                         modifier = Modifier
@@ -730,7 +730,7 @@ fun FamilyMembersScreen(
                                             if (member.isRegisteredOnTalkly) {
                                                 onStartCall(member, CallType.AUDIO)
                                             } else {
-                                                android.widget.Toast.makeText(context, "User not registered on Talkly", android.widget.Toast.LENGTH_SHORT).show()
+                                                android.widget.Toast.makeText(context, "User not registered on Payra", android.widget.Toast.LENGTH_SHORT).show()
                                             }
                                         },
                                         modifier = Modifier
@@ -751,7 +751,7 @@ fun FamilyMembersScreen(
                                             if (member.isRegisteredOnTalkly) {
                                                 onStartCall(member, CallType.VIDEO)
                                             } else {
-                                                android.widget.Toast.makeText(context, "User not registered on Talkly", android.widget.Toast.LENGTH_SHORT).show()
+                                                android.widget.Toast.makeText(context, "User not registered on Payra", android.widget.Toast.LENGTH_SHORT).show()
                                             }
                                         },
                                         modifier = Modifier

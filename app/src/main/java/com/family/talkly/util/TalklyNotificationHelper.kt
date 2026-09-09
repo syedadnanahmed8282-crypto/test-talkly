@@ -266,7 +266,7 @@ object TalklyNotificationHelper {
             )
 
             val defaultNotificationUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            val title = "Talkly Messages"
+            val title = "Payra Messages"
             val text = if (chatCount > 1) {
                 "$totalUnreadCount new messages from $chatCount chats"
             } else {
@@ -310,7 +310,9 @@ object TalklyNotificationHelper {
         if (clean.isNotBlank() &&
             !clean.equals("Member", ignoreCase = true) &&
             !clean.equals("Talkly User", ignoreCase = true) &&
-            !clean.equals("Talkly Message", ignoreCase = true)
+            !clean.equals("Payra User", ignoreCase = true) &&
+            !clean.equals("Talkly Message", ignoreCase = true) &&
+            !clean.equals("Payra Message", ignoreCase = true)
         ) {
             return clean
         }
@@ -327,7 +329,11 @@ object TalklyNotificationHelper {
                 (senderPhone.isNotBlank() && m.phone.isNotBlank() && m.phone == senderPhone) ||
                 (candidateSuffix.isNotBlank() && m.phone.isNotBlank() && PhoneUtils.extractPhoneSuffix(m.phone) == candidateSuffix)
             }
-            if (matched != null && matched.name.isNotBlank() && !matched.name.equals("Member", ignoreCase = true) && !matched.name.equals("Talkly User", ignoreCase = true)) {
+            if (matched != null && matched.name.isNotBlank() &&
+                !matched.name.equals("Member", ignoreCase = true) &&
+                !matched.name.equals("Talkly User", ignoreCase = true) &&
+                !matched.name.equals("Payra User", ignoreCase = true)
+            ) {
                 return matched.name
             }
         } catch (e: Exception) {
@@ -338,7 +344,7 @@ object TalklyNotificationHelper {
             return clean
         }
 
-        return "Talkly Message"
+        return "Payra Message"
     }
 
     /**

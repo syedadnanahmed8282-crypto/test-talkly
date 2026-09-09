@@ -122,7 +122,7 @@ object VideoCacheManager {
 
         val request = Request.Builder()
             .url(url)
-            .header("User-Agent", "Talkly/1.0 (Android; VideoPlayer)")
+            .header("User-Agent", "Payra/1.0 (Android; VideoPlayer)")
             .header("Accept", "video/mp4,video/*,*/*")
             .build()
 

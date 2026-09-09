@@ -3,6 +3,6 @@
     <item
         android:width="72dp"
         android:height="72dp"
-        android:drawable="@drawable/talkly_logo"
+        android:drawable="@drawable/payra_launcher_asset"
         android:gravity="center" />
 </layer-list>

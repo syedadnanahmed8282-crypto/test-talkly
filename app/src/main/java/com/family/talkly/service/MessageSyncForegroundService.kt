@@ -94,7 +94,7 @@ class MessageSyncForegroundService : Service() {
 
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Talkly")
+            .setContentTitle("Payra")
             .setContentText("Staying connected for instant messages and calls")
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setOngoing(true)
@@ -133,10 +133,10 @@ class MessageSyncForegroundService : Service() {
             if (existing == null) {
                 val channel = NotificationChannel(
                     CHANNEL_ID,
-                    "Talkly Background Sync",
+                    "Payra Background Sync",
                     NotificationManager.IMPORTANCE_MIN
                 ).apply {
-                    description = "Keeps Talkly connected so messages and calls arrive instantly"
+                    description = "Keeps Payra connected so messages and calls arrive instantly"
                     setShowBadge(false)
                 }
                 manager?.createNotificationChannel(channel)

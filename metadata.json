@@ -1,5 +1,5 @@
 {
-  "name": "Talkly",
+  "name": "Payra",
   "description": "Family chat and 1-on-1 audio/video calling app with expiring media",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

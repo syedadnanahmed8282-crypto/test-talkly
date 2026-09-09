@@ -2893,7 +2893,7 @@ private fun ContactsTab(
                             color = TextPrimary
                         )
                         Text(
-                            text = "Search phone number on Talkly",
+                            text = "Search phone number on Payra",
                             fontSize = 12.sp,
                             color = TextSecondary
                         )

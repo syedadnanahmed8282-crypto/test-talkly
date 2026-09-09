@@ -22,7 +22,7 @@ class GreetingScreenshotTest {
 
   @Test
   fun greeting_screenshot() {
-    composeTestRule.setContent { TalklyTheme { Text("Talkly Family App") } }
+    composeTestRule.setContent { TalklyTheme { Text("Payra Family App") } }
 
     composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/greeting.png")
   }

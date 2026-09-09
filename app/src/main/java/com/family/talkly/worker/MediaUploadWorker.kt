@@ -284,7 +284,7 @@ class MediaUploadWorker(
         progress: Int
     ): ForegroundInfo {
         val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
-            .setContentTitle("Talkly Video Upload")
+            .setContentTitle("Payra Video Upload")
             .setContentText(statusText)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
             .setProgress(100, progress, false)
@@ -302,7 +302,7 @@ class MediaUploadWorker(
     private fun showErrorNotification(notificationId: Int, text: String) {
         val manager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
-            .setContentTitle("Talkly Video Upload Failed")
+            .setContentTitle("Payra Video Upload Failed")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setAutoCancel(true)

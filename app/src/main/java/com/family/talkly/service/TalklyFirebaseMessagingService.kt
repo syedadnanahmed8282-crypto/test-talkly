@@ -67,7 +67,7 @@ class TalklyFirebaseMessagingService : FirebaseMessagingService() {
                 data.containsKey("roomID") ||
                 data.containsKey("callerUid") -> {
 
-                    val callerName = data["callerName"] ?: "Talkly User"
+                    val callerName = data["callerName"] ?: "Payra User"
                     val callerUid = data["caller_id"] ?: data["callerId"] ?: data["callerUid"] ?: data["caller_uid"] ?: ""
                     val callerPhone = data["callerPhone"] ?: data["caller_phone"] ?: ""
                     val callerAvatar = data["callerAvatarUrl"] ?: data["callerAvatar"] ?: ""

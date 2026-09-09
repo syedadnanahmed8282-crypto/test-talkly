@@ -24,6 +24,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Talkly"
+rootProject.name = "Payra"
 
 include(":app")

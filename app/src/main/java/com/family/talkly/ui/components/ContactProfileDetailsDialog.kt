@@ -714,7 +714,7 @@ fun ContactProfileDetailsDialog(
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                text = "This person hasn't registered on Talkly yet. Messaging and HD calls will become active once they join.",
+                                text = "This person hasn't registered on Payra yet. Messaging and HD calls will become active once they join.",
                                 color = TextPrimary,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium

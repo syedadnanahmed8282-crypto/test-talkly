@@ -369,7 +369,7 @@ fun StatusViewerDialog(
                                         name = currentGroup.userName,
                                         relation = "Contact",
                                         avatarUrl = currentGroup.userAvatarUrl,
-                                        status = "Available on Talkly 💬",
+                                        status = "Available on Payra 💬",
                                         phone = currentGroup.userId,
                                         isRegisteredOnTalkly = true,
                                         firebaseUid = if (!currentGroup.userId.startsWith("contact_")) currentGroup.userId else null
@@ -890,7 +890,7 @@ private fun StatusAnalyticsModal(
                                                 name = viewerName,
                                                 relation = "Contact",
                                                 avatarUrl = viewerAvatar,
-                                                status = "Available on Talkly 💬",
+                                                status = "Available on Payra 💬",
                                                 phone = viewer.userId,
                                                 isRegisteredOnTalkly = true,
                                                 firebaseUid = if (!viewer.userId.startsWith("contact_")) viewer.userId else null
@@ -994,7 +994,7 @@ private fun StatusAnalyticsModal(
                                                 name = likerName,
                                                 relation = "Contact",
                                                 avatarUrl = likerAvatar,
-                                                status = "Available on Talkly 💬",
+                                                status = "Available on Payra 💬",
                                                 phone = liker.userId,
                                                 isRegisteredOnTalkly = true,
                                                 firebaseUid = if (!liker.userId.startsWith("contact_")) liker.userId else null

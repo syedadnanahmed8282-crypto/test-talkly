@@ -71,7 +71,7 @@ class CrashDisplayActivity : ComponentActivity() {
                 crashInfo = crashInfo,
                 onCopy = {
                     val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    val clip = ClipData.newPlainText("Talkly Crash Log", crashInfo)
+                    val clip = ClipData.newPlainText("Payra Crash Log", crashInfo)
                     clipboard.setPrimaryClip(clip)
                     Toast.makeText(this, "ক্র্যাশ রিপোর্ট কপি করা হয়েছে!", Toast.LENGTH_LONG).show()
                 },
@@ -127,7 +127,7 @@ fun CrashDisplayScreen(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(
-                        text = "Talkly ক্র্যাশ করেছে (Crash Report)",
+                        text = "Payra ক্র্যাশ করেছে (Crash Report)",
                         color = Color.White,
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold

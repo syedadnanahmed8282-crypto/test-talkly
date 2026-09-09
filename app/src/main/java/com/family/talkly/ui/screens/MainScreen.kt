@@ -264,7 +264,7 @@ fun MainScreen(
         }
 
         if (!target.isRegisteredOnTalkly && target.firebaseUid.isNullOrEmpty() && target.phone.isBlank()) {
-            Toast.makeText(context, "User not registered on Talkly", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "User not registered on Payra", Toast.LENGTH_SHORT).show()
             return
         }
 

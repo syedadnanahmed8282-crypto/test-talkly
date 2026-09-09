@@ -703,7 +703,7 @@ fun CallScreen(
                             Spacer(modifier = Modifier.height(14.dp))
 
                             Text(
-                                text = if (isVideo) "TALKLY VIDEO CALL" else "TALKLY VOICE CALL",
+                                text = if (isVideo) "PAYRA VIDEO CALL" else "PAYRA VOICE CALL",
                                 color = MintAccent,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,

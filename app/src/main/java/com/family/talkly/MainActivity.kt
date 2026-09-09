@@ -158,7 +158,7 @@ class MainActivity : ComponentActivity() {
                                 crashInfo = detectedCrashReport!!,
                                 onCopy = {
                                     val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                    val clip = android.content.ClipData.newPlainText("Talkly Crash Log", detectedCrashReport)
+                                    val clip = android.content.ClipData.newPlainText("Payra Crash Log", detectedCrashReport)
                                     clipboard.setPrimaryClip(clip)
                                     android.widget.Toast.makeText(applicationContext, "ক্র্যাশ রিপোর্ট কপি করা হয়েছে!", android.widget.Toast.LENGTH_LONG).show()
                                 },
@@ -176,7 +176,7 @@ class MainActivity : ComponentActivity() {
                         when (val state = authState) {
                             is AuthState.InitialCheck -> {
                                 AuthLoadingState(
-                                    message = "Talkly Family Messenger",
+                                    message = "Payra Family Messenger",
                                     subMessage = "Checking authentication session..."
                                 )
                             }
@@ -334,7 +334,7 @@ class MainActivity : ComponentActivity() {
         if (intent == null) return
         val isOpenCall = intent.getBooleanExtra("open_incoming_call", false)
         if (isOpenCall) {
-            val callerName = intent.getStringExtra("caller_name") ?: "Talkly User"
+            val callerName = intent.getStringExtra("caller_name") ?: "Payra User"
             val callerUid = intent.getStringExtra("caller_uid") ?: ""
             val callerPhone = intent.getStringExtra("caller_phone") ?: ""
             val callerAvatar = intent.getStringExtra("caller_avatar") ?: ""

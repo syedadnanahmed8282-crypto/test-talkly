@@ -762,7 +762,7 @@ fun UserProfileDetailsDialog(
                                 )
                             } else {
                                 Text(
-                                    text = editedBio.ifBlank { "Available on Talkly 💬" },
+                                    text = editedBio.ifBlank { "Available on Payra 💬" },
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = TextSecondary,

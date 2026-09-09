@@ -152,7 +152,7 @@ class AuthManager(private val context: Context) {
                 val cachedPhone = if (savedUid == effectiveUid) prefs.getString(KEY_PHONE, "") ?: (currentUser.phone ?: "") else (currentUser.phone ?: "")
                 var cachedPic = if (savedUid == effectiveUid) prefs.getString(KEY_PROFILE_PIC, "") ?: "" else ""
                 val cachedCover = if (savedUid == effectiveUid) prefs.getString(KEY_COVER_PHOTO, "") ?: "" else ""
-                val cachedBio = if (savedUid == effectiveUid) prefs.getString(KEY_BIO, "Available on Talkly 💬") ?: "Available on Talkly 💬" else "Available on Talkly 💬"
+                val cachedBio = if (savedUid == effectiveUid) prefs.getString(KEY_BIO, "Available on Payra 💬") ?: "Available on Payra 💬" else "Available on Payra 💬"
 
                 // Check if pic is a content:// URI and convert to persistent internal avatar file if available
                 if (cachedPic.startsWith("content://") || cachedPic.isBlank()) {
@@ -229,7 +229,7 @@ class AuthManager(private val context: Context) {
                         put("phone", phoneNumber)
                         put("name", name)
                         put("avatar_url", profilePicUrl)
-                        put("bio", "Available on Talkly 💬")
+                        put("bio", "Available on Payra 💬")
                     }
                 }
 
@@ -488,7 +488,7 @@ class AuthManager(private val context: Context) {
                         phoneSuffix = suffix,
                         profilePicUrl = effectivePic,
                         coverPhotoUrl = effectiveCover,
-                        bio = profileDto.bio.ifBlank { "Available on Talkly 💬" }
+                        bio = profileDto.bio.ifBlank { "Available on Payra 💬" }
                     )
 
                     saveLocalSession(uid, profile.name, profile.phoneNumber, profile.profilePicUrl, profile.bio, profile.coverPhotoUrl)
@@ -539,7 +539,7 @@ class AuthManager(private val context: Context) {
             val phone = if (savedUid == uid) prefs.getString(KEY_PHONE, fallbackPhone) ?: fallbackPhone else fallbackPhone
             val pic = if (savedUid == uid) prefs.getString(KEY_PROFILE_PIC, "") ?: "" else ""
             val cover = if (savedUid == uid) prefs.getString(KEY_COVER_PHOTO, "") ?: "" else ""
-            val bio = if (savedUid == uid) prefs.getString(KEY_BIO, "Available on Talkly 💬") ?: "Available on Talkly 💬" else "Available on Talkly 💬"
+            val bio = if (savedUid == uid) prefs.getString(KEY_BIO, "Available on Payra 💬") ?: "Available on Payra 💬" else "Available on Payra 💬"
             val suffix = PhoneUtils.extractPhoneSuffix(phone)
 
             val profile = UserProfile(
@@ -665,7 +665,7 @@ class AuthManager(private val context: Context) {
         onSuccess: () -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
-        val bio = "Available on Talkly 💬"
+        val bio = "Available on Payra 💬"
         val phoneSuffix = PhoneUtils.extractPhoneSuffix(phoneNumber)
         val (localPicUrl, cloudPicUrl) = processProfileAvatarImage(uid, profilePicUrl)
 
@@ -725,7 +725,7 @@ class AuthManager(private val context: Context) {
     fun saveUserProfile(
         name: String,
         profilePicUrl: String,
-        bio: String = "Available on Talkly 💬",
+        bio: String = "Available on Payra 💬",
         coverPhotoUrl: String = "",
         onSuccess: () -> Unit = {},
         onError: (String) -> Unit = {}
@@ -859,7 +859,7 @@ class AuthManager(private val context: Context) {
         }
     }
 
-    private fun saveLocalSession(uid: String, name: String, phone: String, pic: String, bio: String = "Available on Talkly 💬", coverPic: String = "") {
+    private fun saveLocalSession(uid: String, name: String, phone: String, pic: String, bio: String = "Available on Payra 💬", coverPic: String = "") {
         if (isLoggingOut || uid.isBlank()) return
 
         prefs.edit()

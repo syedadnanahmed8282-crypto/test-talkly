@@ -182,7 +182,7 @@ class CallForegroundService : Service() {
 
         when (action) {
             ACTION_START_INCOMING_CALL -> {
-                val callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: "Talkly User"
+                val callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: "Payra User"
                 val callerUid = intent.getStringExtra(EXTRA_CALLER_UID) ?: ""
                 val callerPhone = intent.getStringExtra(EXTRA_CALLER_PHONE) ?: ""
                 val callerAvatar = intent.getStringExtra(EXTRA_CALLER_AVATAR) ?: ""
@@ -220,7 +220,7 @@ class CallForegroundService : Service() {
                 )
             }
             ACTION_START_ACTIVE_CALL -> {
-                val callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: "Talkly User"
+                val callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: "Payra User"
                 val callType = intent.getStringExtra(EXTRA_CALL_TYPE) ?: "AUDIO"
                 val roomId = intent.getStringExtra(EXTRA_ROOM_ID) ?: ""
 
@@ -431,7 +431,7 @@ class CallForegroundService : Service() {
         }
         return NotificationCompat.Builder(this, TalklyNotificationHelper.CHANNEL_ONGOING_CALLS_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Talkly")
+            .setContentTitle("Payra")
             .setContentText("Connecting...")
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setCategory(NotificationCompat.CATEGORY_CALL)

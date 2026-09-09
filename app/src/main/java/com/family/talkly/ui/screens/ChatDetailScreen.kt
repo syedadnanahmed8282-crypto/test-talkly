@@ -1710,7 +1710,7 @@ fun ChatDetailScreen(
 
                                 val statusSubtext = when {
                                     !isMutualContact -> "Message request required"
-                                    !member.isRegisteredOnTalkly -> "Not on Talkly"
+                                    !member.isRegisteredOnTalkly -> "Not on Payra"
                                     isBlocked -> "Blocked"
                                     member.isTyping -> "typing..."
                                     member.isOnline -> "Online"
@@ -1756,7 +1756,7 @@ fun ChatDetailScreen(
                                     } else if (member.isRegisteredOnTalkly) {
                                         onStartCall(CallType.AUDIO)
                                     } else {
-                                        Toast.makeText(context, "User not registered on Talkly", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "User not registered on Payra", Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 modifier = Modifier.size(32.dp)
@@ -1786,7 +1786,7 @@ fun ChatDetailScreen(
                                         android.util.Log.e("Talkly_ZegoEngine", "[CALLER_DIAGNOSTIC] Video call button tapped, passing CallType.VIDEO")
                                         onStartCall(CallType.VIDEO)
                                     } else {
-                                        Toast.makeText(context, "User not registered on Talkly", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "User not registered on Payra", Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 modifier = Modifier.size(32.dp)
@@ -3033,7 +3033,7 @@ fun ChatDetailScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "User not registered on Talkly",
+                                text = "User not registered on Payra",
                                 color = TalklyError,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold
@@ -3142,7 +3142,7 @@ fun ChatDetailScreen(
                                     }
                                 }
                             } else {
-                                var requestInputText by remember { mutableStateOf("Hello, I would like to connect on Talkly!") }
+                                var requestInputText by remember { mutableStateOf("Hello, I would like to connect on Payra!") }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(
                                         imageVector = Icons.Default.Lock,

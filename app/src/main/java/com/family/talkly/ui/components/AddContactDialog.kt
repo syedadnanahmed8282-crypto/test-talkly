@@ -135,10 +135,10 @@ fun AddContactDialog(
                     nameInput = profile.name
                 }
                 avatarUrlInput = profile.profilePicUrl.ifBlank { null }
-                searchStatusMessage = "Talkly user verified: ${profile.name}"
+                searchStatusMessage = "Payra user verified: ${profile.name}"
             } else {
                 foundUser = null
-                searchStatusMessage = "User not on Talkly yet. Will be saved to contacts."
+                searchStatusMessage = "User not on Payra yet. Will be saved to contacts."
             }
         }
     }
@@ -186,7 +186,7 @@ fun AddContactDialog(
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "Connect with a new person on Talkly.",
+                            text = "Connect with a new person on Payra.",
                             fontSize = 13.sp,
                             color = TextSecondary
                         )
@@ -523,7 +523,7 @@ fun AddContactDialog(
                                     finalName,
                                     cleanPhone,
                                     relationInput,
-                                    "Available on Talkly 💬",
+                                    "Available on Payra 💬",
                                     avatarUrlInput
                                 )
                                 onDismiss()

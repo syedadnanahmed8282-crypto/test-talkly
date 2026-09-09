@@ -370,7 +370,7 @@ fun AuthLoadingState(
                     ) {
                         Icon(
                             imageVector = Icons.Default.ChatBubble,
-                            contentDescription = "Talkly Logo",
+                            contentDescription = "Payra Logo",
                             tint = Color(0xFF040E14),
                             modifier = Modifier.size(36.dp)
                         )
