@@ -415,6 +415,8 @@ fun ChatDetailScreen(
         }
     }
 
+    var lastStableUiItems by remember { mutableStateOf<List<ChatUiItem>>(emptyList()) }
+
     val uiItems = remember(displayedMessages, simulatedTimeOffsetMs, member.id, member.phone, member.firebaseUid) {
         val items = mutableListOf<ChatUiItem>()
         var i = 0
@@ -470,8 +472,21 @@ fun ChatDetailScreen(
                 i++
             }
         }
-        Log.e("Talkly_UI_ITEMS_DEBUG", "uiItems recomputed: size=${items.size}, ids=${items.map { it.id }}")
-        items
+
+        val previousSize = lastStableUiItems.size
+        val newSize = items.size
+
+        val result = if (previousSize > 5 && newSize < previousSize / 2) {
+            // সাময়িক/সন্দেহজনক ড্রপ - পুরনো stable list-ই ধরে রাখো
+            Log.w("Talkly_UI_GUARD", "Suspicious drop detected: previous=$previousSize, new=$newSize. Ignoring this recompute, keeping stable list.")
+            lastStableUiItems
+        } else {
+            lastStableUiItems = items
+            items
+        }
+
+        Log.e("Talkly_UI_ITEMS_DEBUG", "uiItems recomputed: size=${result.size}, ids=${result.map { it.id }}")
+        result
     }
 
     val pinnedMessage = remember(combinedMessages) {
