@@ -19,6 +19,7 @@ import com.family.talkly.util.MediaCompressorAndUploader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 
 class MediaUploadWorker(
     private val appContext: Context,
@@ -113,6 +114,8 @@ class MediaUploadWorker(
             var finalRemoteUrl = localMediaUrl
             val uri = if (localMediaUrl.startsWith("/")) Uri.fromFile(File(localMediaUrl)) else Uri.parse(localMediaUrl)
 
+            var compressedImageSizeBytes: Long? = null
+
             if (messageType == MessageType.VIDEO) {
                 val compressedFile = uploader.compressVideo(uri) { progress, statusText ->
                     val overallProgress = ((progress / 100.0) * 30).toInt().coerceIn(0, 30)
@@ -140,6 +143,11 @@ class MediaUploadWorker(
                     updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
                 }
 
+                if (!compressedFile.exists() || compressedFile.length() <= 0) {
+                    throw IOException("Image compression failed to produce a valid file")
+                }
+
+                compressedImageSizeBytes = compressedFile.length()
                 val compressedPath = compressedFile.absolutePath
                 dao.updateUploadState(
                     messageId = messageId,
@@ -158,7 +166,11 @@ class MediaUploadWorker(
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Cloudinary upload failed for image, using fallback: ${e.localizedMessage}")
-                    if (compressedFile.exists() && compressedFile.length() > 0) uploader.encodeFileToBase64(compressedFile) else localMediaUrl
+                    if (compressedFile.exists() && compressedFile.length() > 0) {
+                        uploader.encodeFileToBase64(compressedFile)
+                    } else {
+                        throw IOException("Cloudinary upload failed and compressed file missing", e)
+                    }
                 }
             } else if (messageType == MessageType.VOICE_NOTE) {
                 val filePath = if (localMediaUrl.startsWith("file://")) Uri.parse(localMediaUrl).path ?: "" else localMediaUrl
@@ -188,7 +200,8 @@ class MediaUploadWorker(
                 replyToText = replyToText,
                 forcedTimestamp = originalTimestamp,
                 explicitSenderUid = senderUid.ifBlank { null },
-                explicitMessageId = messageId
+                explicitMessageId = messageId,
+                fileSizeBytes = compressedImageSizeBytes
             )
 
             val updatedEntity = dao.getMessageById(messageId)?.copy(
@@ -196,7 +209,8 @@ class MediaUploadWorker(
                 isPending = false,
                 isUploading = false,
                 isFailed = false,
-                uploadProgress = 100
+                uploadProgress = 100,
+                fileSizeBytes = compressedImageSizeBytes
             )
             if (updatedEntity != null) {
                 dao.insertMessage(updatedEntity)

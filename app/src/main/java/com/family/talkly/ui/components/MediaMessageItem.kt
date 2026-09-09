@@ -226,7 +226,7 @@ fun MediaMessageItem(
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = if (message.uploadProgress > 0) "Uploading ${message.uploadProgress}%" else "Compressing video...",
+                                text = if (message.uploadProgress > 0) "Uploading ${message.uploadProgress}%" else if (message.messageType == MessageType.VIDEO) "Compressing video..." else "Compressing image...",
                                 color = Color.White,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
@@ -270,6 +270,25 @@ fun MediaMessageItem(
                                 Text("Retry Upload", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         }
+                    }
+                }
+
+                // File size badge overlay (top-start or bottom badge)
+                if (message.messageType == MessageType.IMAGE && message.fileSizeBytes != null && message.fileSizeBytes > 0L) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = Color.Black.copy(alpha = 0.55f),
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(6.dp)
+                    ) {
+                        Text(
+                            text = com.family.talkly.util.MediaCompressorAndUploader.formatFileSize(message.fileSizeBytes),
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
                     }
                 }
 
@@ -647,6 +666,25 @@ private fun MediaTile(
                     contentDescription = "Play Video",
                     tint = Color.White,
                     modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+
+        // File size badge overlay
+        if (message.messageType == MessageType.IMAGE && message.fileSizeBytes != null && message.fileSizeBytes > 0L) {
+            Surface(
+                shape = RoundedCornerShape(4.dp),
+                color = Color.Black.copy(alpha = 0.55f),
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(4.dp)
+            ) {
+                Text(
+                    text = com.family.talkly.util.MediaCompressorAndUploader.formatFileSize(message.fileSizeBytes),
+                    color = Color.White.copy(alpha = 0.9f),
+                    fontSize = 8.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                 )
             }
         }

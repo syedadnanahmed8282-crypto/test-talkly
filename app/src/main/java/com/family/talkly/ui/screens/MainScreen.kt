@@ -29,6 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import android.os.Build
+import android.util.Log
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -309,9 +310,17 @@ fun MainScreen(
         val memberId = activeChatMember!!.id
         val currentMember = familyMembers.firstOrNull { it.id == memberId } ?: activeChatMember!!
         val currentMessages = remember(messagesMap, currentMember.id, currentMember.firebaseUid, currentMember.phone) {
-            chatRepository.getMessagesForMember(currentMember.id)
-                .ifEmpty { if (!currentMember.firebaseUid.isNullOrBlank()) chatRepository.getMessagesForMember(currentMember.firebaseUid!!) else emptyList() }
-                .ifEmpty { messagesMap[currentMember.id] ?: emptyList() }
+            val step1 = chatRepository.getMessagesForMember(currentMember.id)
+            Log.e("Talkly_KEY_DEBUG", "step1 (by currentMember.id='${currentMember.id}'): size=${step1.size}")
+
+            val step2 = if (step1.isEmpty() && !currentMember.firebaseUid.isNullOrBlank())
+                chatRepository.getMessagesForMember(currentMember.firebaseUid!!) else step1
+            Log.e("Talkly_KEY_DEBUG", "step2 (by firebaseUid='${currentMember.firebaseUid}'): size=${step2.size}")
+
+            val step3 = if (step2.isEmpty()) messagesMap[currentMember.id] ?: emptyList() else step2
+            Log.e("Talkly_KEY_DEBUG", "step3 (raw messagesMap[currentMember.id]): size=${step3.size}")
+
+            step3
         }
 
         val isMutual = chatRepository.isMutualContact(currentUid, currentMember)

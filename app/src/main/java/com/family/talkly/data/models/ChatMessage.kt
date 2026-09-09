@@ -39,7 +39,8 @@ data class ChatMessage(
     val isPending: Boolean = false,
     val isUploading: Boolean = false,
     val isFailed: Boolean = false,
-    val uploadProgress: Int = 0
+    val uploadProgress: Int = 0,
+    val fileSizeBytes: Long? = null
 ) {
     companion object {
         const val EXPIRATION_48_HOURS_MS = 48 * 60 * 60 * 1000L // 172,800,000 ms

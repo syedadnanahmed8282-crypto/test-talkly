@@ -1044,6 +1044,9 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                             put("replyToText", msg.replyToText ?: org.json.JSONObject.NULL)
                             put("isEdited", msg.isEdited)
                             put("isDeletedForEveryone", msg.isDeletedForEveryone)
+                            if (msg.fileSizeBytes != null) {
+                                put("fileSizeBytes", msg.fileSizeBytes)
+                            }
                             if (msg.deletedForUsers.isNotEmpty()) {
                                 val delArr = org.json.JSONArray()
                                 msg.deletedForUsers.forEach { delArr.put(it) }
@@ -1126,6 +1129,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                         val replyToText = if (obj.has("replyToText") && !obj.isNull("replyToText")) obj.getString("replyToText") else null
                         val isEdited = obj.optBoolean("isEdited", false)
                         val isDeletedForEveryone = obj.optBoolean("isDeletedForEveryone", false)
+                        val fileSizeBytes = if (obj.has("fileSizeBytes") && !obj.isNull("fileSizeBytes")) obj.optLong("fileSizeBytes") else null
                         val deletedForUsers = mutableListOf<String>()
                         if (obj.has("deletedForUsers")) {
                             val delArr = obj.getJSONArray("deletedForUsers")
@@ -1157,7 +1161,8 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                                 replyToText = replyToText,
                                 isEdited = isEdited,
                                 isDeletedForEveryone = isDeletedForEveryone,
-                                deletedForUsers = deletedForUsers
+                                deletedForUsers = deletedForUsers,
+                                fileSizeBytes = fileSizeBytes
                             )
                         )
                     }
@@ -1198,7 +1203,11 @@ class FirebaseChatRepository private constructor(private val context: Context) {
     }
 
     fun getCanonicalMemberId(memberOrUidOrPhone: String): String {
-        if (memberOrUidOrPhone.isBlank()) return memberOrUidOrPhone
+        Log.e("Talkly_KEY_DEBUG", "getCanonicalMemberId called with input='$memberOrUidOrPhone'")
+        if (memberOrUidOrPhone.isBlank()) {
+            Log.e("Talkly_KEY_DEBUG", "getCanonicalMemberId returning='$memberOrUidOrPhone' for input='$memberOrUidOrPhone'")
+            return memberOrUidOrPhone
+        }
         val suffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(memberOrUidOrPhone)
         val existing = _familyMembers.value.firstOrNull { member ->
             member.id == memberOrUidOrPhone ||
@@ -1206,7 +1215,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             member.phone == memberOrUidOrPhone ||
             (suffix.isNotBlank() && com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone) == suffix)
         }
-        if (existing != null) {
+        val result = if (existing != null) {
             val candidates = listOfNotNull(existing.firebaseUid, existing.id)
             val validUuid = candidates.firstOrNull { candidate ->
                 candidate.isNotBlank() && try {
@@ -1216,9 +1225,12 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                     false
                 }
             }
-            return validUuid ?: existing.id
+            validUuid ?: existing.id
+        } else {
+            memberOrUidOrPhone
         }
-        return memberOrUidOrPhone
+        Log.e("Talkly_KEY_DEBUG", "getCanonicalMemberId returning='$result' for input='$memberOrUidOrPhone'")
+        return result
     }
 
     fun getMessagesForMember(memberId: String): List<ChatMessage> {
@@ -2290,7 +2302,8 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         replyToSenderName: String? = null,
         replyToText: String? = null,
         explicitSenderUid: String? = null,
-        explicitMessageId: String? = null
+        explicitMessageId: String? = null,
+        fileSizeBytes: Long? = null
     ) {
         val canonicalId = getCanonicalMemberId(memberId)
 
@@ -2343,7 +2356,8 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             isPending = !isOnline,
             replyToMessageId = replyToMessageId,
             replyToSenderName = replyToSenderName,
-            replyToText = replyToText
+            replyToText = replyToText,
+            fileSizeBytes = fileSizeBytes
         )
 
         _messagesMap.update { current ->

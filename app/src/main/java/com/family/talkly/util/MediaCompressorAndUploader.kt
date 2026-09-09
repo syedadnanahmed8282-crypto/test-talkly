@@ -48,94 +48,166 @@ class MediaCompressorAndUploader(private val context: Context) {
 
     companion object {
         private const val TAG = "MediaCompressor"
-        private const val MAX_IMAGE_DIMENSION = 800 // 800px target max width/height for optimal Base64 & Storage
-        private const val JPEG_QUALITY = 70 // 70% quality
+        private const val TARGET_IMAGE_MAX_BYTES = 1_572_864L // 1.5 MB = 1.5 * 1024 * 1024 bytes
         private const val TARGET_VIDEO_BITRATE = 1_800_000 // ~1.8 Mbps
+
+        fun formatFileSize(sizeBytes: Long): String {
+            if (sizeBytes <= 0) return "0 KB"
+            val kb = sizeBytes / 1024.0
+            val mb = kb / 1024.0
+            val df = DecimalFormat("#.##")
+            return if (mb >= 1.0) {
+                "${df.format(mb)} MB"
+            } else {
+                "${df.format(kb)} KB"
+            }
+        }
     }
 
     /**
-     * Compresses an image Uri safely handling EXIF rotation, downsampling, and recycling bitmaps to prevent memory leaks.
+     * Compresses an image Uri safely handling EXIF rotation, downsampling, and quality adjustment.
+     * Target: under 1.5 MB (1,572,864 bytes).
+     * 1. Preserves original resolution if possible, iterating quality down from 85% to 60%.
+     * 2. If still > 1.5 MB, gradually scales resolution (e.g. 75%, 50%) and reapplies quality compression.
+     * Never falls back to the uncompressed original. Fails safely if compression cannot succeed.
      */
     suspend fun compressImage(
         imageUri: Uri,
         onProgress: (Int, String) -> Unit
     ): File = withContext(Dispatchers.IO) {
-        try {
-            onProgress(10, "Reading image properties...")
+        onProgress(5, "Reading image properties...")
 
-            // 1. Read EXIF Orientation
-            val rotationDegrees = getRotationDegrees(imageUri)
+        // 1. Read EXIF Orientation
+        val rotationDegrees = getRotationDegrees(imageUri)
 
-            // 2. Decode image dimensions safely
-            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            openInputStreamForUri(imageUri)?.use { stream ->
-                BitmapFactory.decodeStream(stream, null, options)
-            }
-
-            val originalWidth = options.outWidth
-            val originalHeight = options.outHeight
-
-            if (originalWidth <= 0 || originalHeight <= 0) {
-                throw IllegalArgumentException("Invalid image dimensions")
-            }
-
-            // 3. Downsample ratio calculation
-            var inSampleSize = 1
-            if (originalWidth > MAX_IMAGE_DIMENSION || originalHeight > MAX_IMAGE_DIMENSION) {
-                val halfWidth = originalWidth / 2
-                val halfHeight = originalHeight / 2
-                while ((halfWidth / inSampleSize) >= MAX_IMAGE_DIMENSION || (halfHeight / inSampleSize) >= MAX_IMAGE_DIMENSION) {
-                    inSampleSize *= 2
-                }
-            }
-
-            onProgress(30, "Decoding image...")
-            val decodeOptions = BitmapFactory.Options().apply {
-                this.inSampleSize = inSampleSize
-                inPreferredConfig = Bitmap.Config.ARGB_8888
-            }
-
-            var sampledBitmap: Bitmap? = null
-            openInputStreamForUri(imageUri)?.use { stream ->
-                sampledBitmap = BitmapFactory.decodeStream(stream, null, decodeOptions)
-            }
-
-            sampledBitmap?.let { bitmap ->
-                onProgress(60, "Resizing and Rotating...")
-
-                // 4. Handle Rotation & Resizing atomically
-                val rotatedAndScaledBitmap = transformBitmap(bitmap, rotationDegrees)
-
-                // Recycle intermediate bitmap if a new transformed bitmap was created
-                if (rotatedAndScaledBitmap != bitmap) {
-                    bitmap.recycle()
-                }
-
-                onProgress(80, "Saving compressed image...")
-                val outputFile = File(context.cacheDir, "compressed_img_${System.currentTimeMillis()}.jpg")
-
-                FileOutputStream(outputFile).use { outputStream ->
-                    rotatedAndScaledBitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, outputStream)
-                    outputStream.flush()
-                }
-
-                // Recycle final bitmap memory
-                rotatedAndScaledBitmap.recycle()
-
-                onProgress(100, "Done")
-                return@withContext outputFile
-            }
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Image compression error: ${e.localizedMessage}", e)
+        // 2. Decode original dimensions safely
+        val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        openInputStreamForUri(imageUri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, boundsOptions)
         }
 
-        // Fallback if decoding fails
-        Log.w(TAG, "Image compression fallback triggered for $imageUri")
-        onProgress(50, "Falling back to direct copy...")
-        val fallbackFile = File(context.cacheDir, "fallback_img_${System.currentTimeMillis()}.jpg")
-        copyUriToFile(imageUri, fallbackFile, onProgress)
-        return@withContext fallbackFile
+        val origWidth = boundsOptions.outWidth
+        val origHeight = boundsOptions.outHeight
+        if (origWidth <= 0 || origHeight <= 0) {
+            throw IOException("Invalid or unreadable image dimensions ($origWidth x $origHeight)")
+        }
+
+        // 3. Decode base bitmap handling EXIF rotation
+        onProgress(20, "Decoding image...")
+        val decodeOptions = BitmapFactory.Options().apply {
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+            // If the raw image is enormous (> 4000px on either side), downsample decode to prevent OOM
+            val maxRawDim = maxOf(origWidth, origHeight)
+            var sample = 1
+            while ((maxRawDim / (sample * 2)) >= 4000) {
+                sample *= 2
+            }
+            inSampleSize = sample
+        }
+
+        val decodedBitmap: Bitmap = openInputStreamForUri(imageUri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, decodeOptions)
+        } ?: throw IOException("Failed to decode bitmap from $imageUri")
+
+        // Apply rotation if needed
+        val orientedBitmap: Bitmap = if (rotationDegrees != 0f) {
+            val matrix = Matrix().apply { postRotate(rotationDegrees) }
+            val rotated = Bitmap.createBitmap(decodedBitmap, 0, 0, decodedBitmap.width, decodedBitmap.height, matrix, true)
+            if (rotated != decodedBitmap) {
+                decodedBitmap.recycle()
+            }
+            rotated
+        } else {
+            decodedBitmap
+        }
+
+        val baseWidth = orientedBitmap.width
+        val baseHeight = orientedBitmap.height
+
+        onProgress(40, "Compressing image...")
+
+        val candidateFile = File(context.cacheDir, "compressed_img_${System.currentTimeMillis()}.jpg")
+        val qualitySteps = listOf(85, 80, 75, 70, 65, 60)
+        val scaleSteps = listOf(1.0f, 0.75f, 0.5f, 0.35f)
+
+        var bestFile: File? = null
+        var bestSize = Long.MAX_VALUE
+        var successUnderTarget = false
+
+        scaleLoop@ for (scale in scaleSteps) {
+            val targetW = (baseWidth * scale).toInt().coerceAtLeast(1)
+            val targetH = (baseHeight * scale).toInt().coerceAtLeast(1)
+
+            val scaledBitmap: Bitmap = if (scale == 1.0f) {
+                orientedBitmap
+            } else {
+                Bitmap.createScaledBitmap(orientedBitmap, targetW, targetH, true)
+            }
+
+            for (quality in qualitySteps) {
+                val tempFile = File(context.cacheDir, "temp_compress_${System.currentTimeMillis()}.jpg")
+                try {
+                    FileOutputStream(tempFile).use { out ->
+                        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
+                        out.flush()
+                    }
+                    val fileSize = tempFile.length()
+                    if (fileSize in 1..TARGET_IMAGE_MAX_BYTES) {
+                        // Meets target requirement!
+                        if (tempFile.renameTo(candidateFile) || copyFile(tempFile, candidateFile)) {
+                            bestFile = candidateFile
+                            bestSize = fileSize
+                            successUnderTarget = true
+                            tempFile.delete()
+                            if (scaledBitmap != orientedBitmap) {
+                                scaledBitmap.recycle()
+                            }
+                            break@scaleLoop
+                        }
+                    } else if (fileSize > 0 && fileSize < bestSize) {
+                        // Track lowest size achieved in case all passes exceed limit
+                        bestSize = fileSize
+                        if (tempFile.renameTo(candidateFile) || copyFile(tempFile, candidateFile)) {
+                            bestFile = candidateFile
+                        }
+                        tempFile.delete()
+                    } else {
+                        tempFile.delete()
+                    }
+                } catch (e: Exception) {
+                    tempFile.delete()
+                    Log.w(TAG, "Quality step $quality with scale $scale failed: ${e.localizedMessage}")
+                }
+            }
+
+            if (scaledBitmap != orientedBitmap) {
+                scaledBitmap.recycle()
+            }
+        }
+
+        // Clean up oriented bitmap
+        orientedBitmap.recycle()
+
+        if (bestFile != null && bestFile.exists() && bestFile.length() > 0) {
+            Log.i(TAG, "Image compressed successfully: size=${bestFile.length()} bytes, target=$TARGET_IMAGE_MAX_BYTES bytes")
+            onProgress(100, "Done")
+            return@withContext bestFile
+        }
+
+        throw IOException("Image compression failed to produce a valid compressed file for $imageUri")
+    }
+
+    private fun copyFile(src: File, dst: File): Boolean {
+        return try {
+            src.inputStream().use { input ->
+                dst.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     // Helper to extract EXIF rotation degrees
@@ -153,26 +225,6 @@ class MediaCompressorAndUploader(private val context: Context) {
         } catch (e: Exception) {
             0f
         }
-    }
-
-    // Helper for matrix scaling and rotation
-    private fun transformBitmap(bitmap: Bitmap, rotationDegrees: Float): Bitmap {
-        val width = bitmap.width
-        val height = bitmap.height
-        val maxDim = maxOf(width, height)
-
-        val matrix = Matrix()
-
-        if (maxDim > MAX_IMAGE_DIMENSION) {
-            val scale = MAX_IMAGE_DIMENSION.toFloat() / maxDim.toFloat()
-            matrix.postScale(scale, scale)
-        }
-
-        if (rotationDegrees != 0f) {
-            matrix.postRotate(rotationDegrees)
-        }
-
-        return Bitmap.createBitmap(bitmap, 0, 0, width, height, matrix, true)
     }
 
     /**
@@ -629,18 +681,6 @@ class MediaCompressorAndUploader(private val context: Context) {
             } ?: 0L
         } catch (e: Exception) {
             0L
-        }
-    }
-
-    fun formatFileSize(sizeBytes: Long): String {
-        if (sizeBytes <= 0) return "0 KB"
-        val kb = sizeBytes / 1024.0
-        val mb = kb / 1024.0
-        val df = DecimalFormat("#.##")
-        return if (mb >= 1.0) {
-            "${df.format(mb)} MB"
-        } else {
-            "${df.format(kb)} KB"
         }
     }
 }
