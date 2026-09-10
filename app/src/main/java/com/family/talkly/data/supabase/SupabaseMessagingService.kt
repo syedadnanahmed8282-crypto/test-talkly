@@ -13,6 +13,7 @@ import io.github.jan.supabase.realtime.postgresChangeFlow
 import io.github.jan.supabase.realtime.realtime
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,6 +24,14 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import org.json.JSONObject
 
 object SupabaseMessagingService {
 
@@ -373,8 +382,67 @@ object SupabaseMessagingService {
         }
     }
 
-    suspend fun deleteMessageForEveryone(messageId: String): Boolean = withContext(Dispatchers.IO) {
+    private val edgeHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .build()
+    }
+
+    private fun triggerCloudinaryMediaDeletion(mediaUrl: String) {
         try {
+            if (mediaUrl.isBlank() || !mediaUrl.contains("cloudinary.com", ignoreCase = true)) {
+                return
+            }
+            val supabaseUrl = SupabaseClientProvider.supabaseUrl
+            val publishableKey = SupabaseClientProvider.supabasePublishableKey
+            val currentSessionToken = try {
+                SupabaseClientProvider.auth.currentAccessTokenOrNull()
+            } catch (e: Exception) {
+                null
+            }
+
+            val json = JSONObject().apply {
+                put("media_url", mediaUrl)
+            }
+
+            val requestBody = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+            val edgeFunctionUrl = "$supabaseUrl/functions/v1/delete-cloudinary-media"
+
+            val requestBuilder = Request.Builder()
+                .url(edgeFunctionUrl)
+                .addHeader("apikey", publishableKey)
+                .addHeader("Content-Type", "application/json")
+                .post(requestBody)
+
+            if (!currentSessionToken.isNullOrBlank()) {
+                requestBuilder.addHeader("Authorization", "Bearer $currentSessionToken")
+            } else {
+                requestBuilder.addHeader("Authorization", "Bearer $publishableKey")
+            }
+
+            edgeHttpClient.newCall(requestBuilder.build()).enqueue(object : Callback {
+                override fun onFailure(call: Call, e: java.io.IOException) {
+                    Log.w(TAG, "delete-cloudinary-media Edge Function request failed: ${e.message}")
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    Log.d(TAG, "delete-cloudinary-media Edge Function response code: ${response.code}")
+                    response.close()
+                }
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "Error triggering Cloudinary media deletion: ${e.localizedMessage}")
+        }
+    }
+
+    suspend fun deleteMessageForEveryone(messageId: String, mediaUrl: String? = null): Boolean = withContext(Dispatchers.IO) {
+        try {
+            // Trigger remote Cloudinary media deletion via Edge Function if mediaUrl was present
+            if (!mediaUrl.isNullOrBlank()) {
+                triggerCloudinaryMediaDeletion(mediaUrl)
+            }
+
             SupabaseClientProvider.client.postgrest["messages"]
                 .update({
                     set("is_deleted_for_everyone", true)

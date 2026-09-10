@@ -966,7 +966,7 @@ fun ChatDetailScreen(
                                     }
 
                                     // Delete for everyone
-                                    if (isSelfMsg && isWithin10Mins && !selectedMsg.isDeletedForEveryone) {
+                                    if (isSelfMsg && !selectedMsg.isDeletedForEveryone) {
                                         Surface(
                                             shape = RoundedCornerShape(12.dp),
                                             color = TalklyError.copy(alpha = 0.18f),

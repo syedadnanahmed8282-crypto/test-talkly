@@ -1058,8 +1058,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                     rootObj.put(chatKey, arr)
                 }
 
-                // 1. Save to Room Database on IO thread
-                database.chatMessageDao().clearAllMessages()
+                // 1. Save to Room Database on IO thread using UPSERT (insertMessages with REPLACE)
                 if (entities.isNotEmpty()) {
                     database.chatMessageDao().insertMessages(entities)
                 }
@@ -1440,9 +1439,9 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         val finalDeleted = updatedMsg?.deletedForUsers ?: listOf(currentUid)
         repositoryScope.launch(Dispatchers.IO) {
             try {
-                database.chatMessageDao().deleteMessageById(messageId)
+                database.chatMessageDao().updateDeletedForUsers(messageId, finalDeleted.joinToString(","))
             } catch (e: Exception) {
-                Log.w(TAG, "Error purging message $messageId from local Room DB: ${e.localizedMessage}")
+                Log.w(TAG, "Error updating deleted_for_users for message $messageId in local Room DB: ${e.localizedMessage}")
             }
             SupabaseMessagingService.deleteMessageForYou(messageId, finalDeleted)
         }
@@ -1453,10 +1452,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         val rawList = _messagesMap.value[canonicalId] ?: _messagesMap.value[memberId] ?: emptyList()
         val msg = rawList.firstOrNull { it.id == messageId } ?: return false
 
-        val isWithin10Mins = (System.currentTimeMillis() - msg.timestamp) <= (10 * 60 * 1000L)
-        if (!isWithin10Mins) {
-            return false
-        }
+        val mediaUrlToDelete = msg.mediaUrl
 
         val updatedList = rawList.map { m ->
             if (m.id == messageId) {
@@ -1480,7 +1476,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
 
         // Sync to Supabase and Room
         repositoryScope.launch(Dispatchers.IO) {
-            SupabaseMessagingService.deleteMessageForEveryone(messageId)
+            SupabaseMessagingService.deleteMessageForEveryone(messageId, mediaUrlToDelete)
             try {
                 database.chatMessageDao().updateMessageDeletion(messageId, isDeletedForEveryone = true, textContent = "This message was deleted")
             } catch (e: Exception) {

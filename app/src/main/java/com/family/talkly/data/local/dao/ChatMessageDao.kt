@@ -52,6 +52,9 @@ interface ChatMessageDao {
     @Query("UPDATE chat_messages SET isDeletedForEveryone = :isDeletedForEveryone, textContent = :textContent, mediaUrl = NULL WHERE id = :messageId")
     suspend fun updateMessageDeletion(messageId: String, isDeletedForEveryone: Boolean, textContent: String)
 
+    @Query("UPDATE chat_messages SET deletedForUsersString = :deletedForUsersString WHERE id = :messageId")
+    suspend fun updateDeletedForUsers(messageId: String, deletedForUsersString: String)
+
     @Query("UPDATE chat_messages SET textContent = :newContent, isEdited = 1 WHERE id = :messageId")
     suspend fun updateMessageContent(messageId: String, newContent: String)
 
