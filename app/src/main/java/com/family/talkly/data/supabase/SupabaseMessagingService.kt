@@ -389,7 +389,7 @@ object SupabaseMessagingService {
             .build()
     }
 
-    private fun triggerCloudinaryMediaDeletion(mediaUrl: String) {
+    private fun triggerCloudinaryMediaDeletion(messageId: String, mediaUrl: String) {
         try {
             if (mediaUrl.isBlank() || !mediaUrl.contains("cloudinary.com", ignoreCase = true)) {
                 return
@@ -403,6 +403,7 @@ object SupabaseMessagingService {
             }
 
             val json = JSONObject().apply {
+                put("message_id", messageId)
                 put("media_url", mediaUrl)
             }
 
@@ -440,7 +441,7 @@ object SupabaseMessagingService {
         try {
             // Trigger remote Cloudinary media deletion via Edge Function if mediaUrl was present
             if (!mediaUrl.isNullOrBlank()) {
-                triggerCloudinaryMediaDeletion(mediaUrl)
+                triggerCloudinaryMediaDeletion(messageId, mediaUrl)
             }
 
             SupabaseClientProvider.client.postgrest["messages"]
@@ -497,9 +498,10 @@ object SupabaseMessagingService {
 
     suspend fun updateDeletedForUsers(messageId: String, deletedForUsers: List<String>): Boolean = withContext(Dispatchers.IO) {
         try {
+            val sanitized = deletedForUsers.filter { it.isNotBlank() && it != "self" }.distinct()
             SupabaseClientProvider.client.postgrest["messages"]
                 .update({
-                    set("deleted_for_users", deletedForUsers)
+                    set("deleted_for_users", sanitized)
                 }) {
                     filter {
                         eq("id", messageId)

@@ -56,7 +56,7 @@ data class ChatMessageEntity(
         val deletedUsers = if (deletedForUsersString.isBlank()) {
             emptyList()
         } else {
-            deletedForUsersString.split(",").filter { it.isNotBlank() }
+            deletedForUsersString.split(",").filter { it.isNotBlank() && it != "self" }
         }
 
         return ChatMessage(
@@ -117,7 +117,7 @@ data class ChatMessageEntity(
                 replyToText = message.replyToText,
                 isEdited = message.isEdited,
                 isDeletedForEveryone = message.isDeletedForEveryone,
-                deletedForUsersString = message.deletedForUsers.joinToString(","),
+                deletedForUsersString = message.deletedForUsers.filter { it.isNotBlank() && it != "self" }.joinToString(","),
                 isPending = message.isPending,
                 isUploading = message.isUploading,
                 isFailed = message.isFailed,

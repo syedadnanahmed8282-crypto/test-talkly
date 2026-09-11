@@ -31,7 +31,8 @@ object PostgresStringListSerializer : KSerializer<List<String>> {
     override val descriptor: SerialDescriptor = ListSerializer(String.serializer()).descriptor
 
     override fun serialize(encoder: Encoder, value: List<String>) {
-        ListSerializer(String.serializer()).serialize(encoder, value)
+        val sanitized = value.filter { it.isNotBlank() && it != "self" }.distinct()
+        ListSerializer(String.serializer()).serialize(encoder, sanitized)
     }
 
     override fun deserialize(decoder: Decoder): List<String> {
@@ -41,14 +42,14 @@ object PostgresStringListSerializer : KSerializer<List<String>> {
             return parseStringList(element)
         }
         return try {
-            ListSerializer(String.serializer()).deserialize(decoder)
+            ListSerializer(String.serializer()).deserialize(decoder).filter { it.isNotBlank() && it != "self" }.distinct()
         } catch (e: Exception) {
             emptyList()
         }
     }
 
     fun parseStringList(element: JsonElement): List<String> {
-        return when (element) {
+        val list = when (element) {
             is JsonArray -> {
                 element.mapNotNull {
                     when (it) {
@@ -64,6 +65,7 @@ object PostgresStringListSerializer : KSerializer<List<String>> {
             is JsonNull -> emptyList()
             else -> emptyList()
         }
+        return list.filter { it.isNotBlank() && it != "self" }.distinct()
     }
 
     fun parsePgArrayString(raw: String): List<String> {
@@ -75,7 +77,7 @@ object PostgresStringListSerializer : KSerializer<List<String>> {
         if (clean.isBlank()) return emptyList()
         return clean.split(",").map {
             it.trim().removeSurrounding("\"").removeSurrounding("'")
-        }.filter { it.isNotBlank() }
+        }.filter { it.isNotBlank() && it != "self" }.distinct()
     }
 }
 
@@ -196,7 +198,7 @@ data class SupabaseMessage(
             replyToText = replyToText,
             isEdited = isEdited,
             isDeletedForEveryone = isDeletedForEveryone,
-            deletedForUsers = deletedForUsers,
+            deletedForUsers = deletedForUsers.filter { it.isNotBlank() && it != "self" }.distinct(),
             isPending = false,
             isUploading = false,
             isFailed = false,

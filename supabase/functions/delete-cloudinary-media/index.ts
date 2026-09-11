@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -7,8 +8,10 @@ const corsHeaders = {
 };
 
 interface DeleteMediaRequest {
+  message_id?: string;
+  messageId?: string;
   media_url?: string;
-  public_id?: string;
+  mediaUrl?: string;
 }
 
 // SHA-1 helper using Web Crypto API
@@ -56,13 +59,82 @@ serve(async (req: Request) => {
   }
 
   try {
-    const body: DeleteMediaRequest = await req.json().catch(() => ({}));
-    const { media_url, public_id } = body;
+    // 1. Authenticate caller using Supabase session token
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const userToken = authHeader.replace(/^Bearer\s+/i, "").trim();
 
-    if (!media_url && !public_id) {
+    if (!userToken) {
       return new Response(
-        JSON.stringify({ success: false, error: "Missing media_url or public_id parameter" }),
+        JSON.stringify({ success: false, error: "Unauthorized: Missing authentication token" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
+
+    const { data: { user }, error: userAuthError } = await supabaseAdmin.auth.getUser(userToken);
+    if (userAuthError || !user || !user.id) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Unauthorized: Invalid or expired authentication token" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const body: DeleteMediaRequest = await req.json().catch(() => ({}));
+    const messageId = body.message_id || body.messageId;
+    let targetMediaUrl = body.media_url || body.mediaUrl;
+
+    // 2. Reject requests without a valid messageId (do NOT trust arbitrary client-provided URLs)
+    if (!messageId) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Missing message_id parameter to authorize deletion" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // 3. Verify message exists and caller is authorized
+    const { data: messageRecord, error: msgError } = await supabaseAdmin
+      .from("messages")
+      .select("id, sender_id, receiver_id, media_url, is_deleted_for_everyone")
+      .eq("id", messageId)
+      .maybeSingle();
+
+    if (msgError || !messageRecord) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Message not found" }),
+        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Caller must be sender or receiver of the message
+    if (messageRecord.sender_id !== user.id && messageRecord.receiver_id !== user.id) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Forbidden: Not authorized to delete media for this message" }),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // If media_url was not provided, use the message's recorded media_url
+    if (!targetMediaUrl && messageRecord.media_url) {
+      targetMediaUrl = messageRecord.media_url;
+    }
+
+    // If message already had its media URL cleared or was already deleted, and targetMediaUrl is provided,
+    // verify it matches what was recorded if recorded media_url is still present
+    if (messageRecord.media_url && targetMediaUrl && messageRecord.media_url !== targetMediaUrl) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Target media URL does not match message record" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!targetMediaUrl) {
+      // Message has no media to delete
+      return new Response(
+        JSON.stringify({ success: true, message: "No media associated with this message" }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -71,39 +143,34 @@ serve(async (req: Request) => {
     const apiSecret = Deno.env.get("CLOUDINARY_API_SECRET");
 
     if (!apiKey || !apiSecret) {
-      console.warn("CLOUDINARY_API_KEY or CLOUDINARY_API_SECRET not set in environment");
+      console.warn("CLOUDINARY_API_KEY or CLOUDINARY_API_SECRET not configured on server");
       return new Response(
         JSON.stringify({ success: false, error: "Cloudinary credentials not configured on server" }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    let targetPublicId = public_id;
-    let resourceType = "image";
-
-    if (media_url) {
-      const parsed = parseCloudinaryUrl(media_url);
-      if (parsed) {
-        targetPublicId = targetPublicId || parsed.publicId;
-        resourceType = parsed.resourceType || "image";
-      }
-    }
-
-    if (!targetPublicId) {
+    const parsed = parseCloudinaryUrl(targetMediaUrl);
+    if (!parsed || !parsed.publicId) {
       return new Response(
-        JSON.stringify({ success: false, error: "Could not resolve public_id from request" }),
+        JSON.stringify({ success: false, error: "Could not parse Cloudinary public_id from media URL" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
+    const targetPublicId = parsed.publicId;
+    const resourceType = parsed.resourceType || "image";
+
+    // 4. Compute signature with invalidate=true in alphabetical parameter order
     const timestamp = Math.floor(Date.now() / 1000).toString();
-    const stringToSign = `public_id=${targetPublicId}&timestamp=${timestamp}${apiSecret}`;
+    const stringToSign = `invalidate=true&public_id=${targetPublicId}&timestamp=${timestamp}${apiSecret}`;
     const signature = await sha1Hex(stringToSign);
 
     const formData = new URLSearchParams();
     formData.append("public_id", targetPublicId);
     formData.append("timestamp", timestamp);
     formData.append("api_key", apiKey);
+    formData.append("invalidate", "true");
     formData.append("signature", signature);
 
     // Call Cloudinary destroy API: /v1_1/<cloud_name>/<resource_type>/destroy
@@ -114,7 +181,7 @@ serve(async (req: Request) => {
     });
 
     const result = await response.json();
-    console.log(`Cloudinary destroy result for ${targetPublicId} (${resourceType}):`, result);
+    console.log(`Cloudinary destroy result for message ${messageId} (${targetPublicId}):`, result);
 
     return new Response(
       JSON.stringify({ success: true, result }),
