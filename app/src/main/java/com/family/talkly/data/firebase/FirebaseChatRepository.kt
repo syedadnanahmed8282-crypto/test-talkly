@@ -1472,20 +1472,29 @@ class FirebaseChatRepository private constructor(private val context: Context) {
     }
 
     fun deleteMessageForYou(memberId: String, messageId: String) {
+        deleteMessagesForYou(memberId, setOf(messageId))
+    }
+
+    fun deleteMessagesForYou(memberId: String, messageIds: Set<String>) {
+        if (messageIds.isEmpty()) return
         val canonicalId = getCanonicalMemberId(memberId)
         val currentUid = getAuthenticatedUserUid()
 
-        _deletedForMeMessageIds.add(messageId)
+        _deletedForMeMessageIds.addAll(messageIds)
 
         val rawList = _messagesMap.value[canonicalId] ?: _messagesMap.value[memberId] ?: emptyList()
-        val targetMsg = rawList.firstOrNull { it.id == messageId }
-        val currentDeleted = targetMsg?.deletedForUsers?.filter { it.isNotBlank() && it != "self" }?.toMutableList() ?: mutableListOf()
-        if (currentUid.isNotBlank() && !currentDeleted.contains(currentUid)) {
-            currentDeleted.add(currentUid)
-        }
-        val finalDeleted = currentDeleted.distinct()
+        val updates = mutableListOf<Pair<String, List<String>>>()
 
-        val updatedList = rawList.filterNot { it.id == messageId }
+        for (msgId in messageIds) {
+            val targetMsg = rawList.firstOrNull { it.id == msgId }
+            val currentDeleted = targetMsg?.deletedForUsers?.filter { it.isNotBlank() && it != "self" }?.toMutableList() ?: mutableListOf()
+            if (currentUid.isNotBlank() && !currentDeleted.contains(currentUid)) {
+                currentDeleted.add(currentUid)
+            }
+            updates.add(Pair(msgId, currentDeleted.distinct()))
+        }
+
+        val updatedList = rawList.filterNot { it.id in messageIds }
 
         _messagesMap.update { current ->
             val updatedMap = current.toMutableMap()
@@ -1496,26 +1505,32 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         saveMessagesToDisk()
 
         repositoryScope.launch(Dispatchers.IO) {
-            try {
-                database.chatMessageDao().updateDeletedForUsers(messageId, finalDeleted.joinToString(","))
-            } catch (e: Exception) {
-                Log.w(TAG, "Error updating deleted_for_users for message $messageId in local Room DB: ${e.localizedMessage}")
+            for ((msgId, finalDeleted) in updates) {
+                try {
+                    database.chatMessageDao().updateDeletedForUsers(msgId, finalDeleted.joinToString(","))
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error updating deleted_for_users for message $msgId in local Room DB: ${e.localizedMessage}")
+                }
+                SupabaseMessagingService.updateDeletedForUsers(msgId, finalDeleted)
             }
-            SupabaseMessagingService.updateDeletedForUsers(messageId, finalDeleted)
         }
     }
 
     fun deleteMessageForEveryone(memberId: String, messageId: String): Boolean {
+        return deleteMessagesForEveryone(memberId, setOf(messageId)) > 0
+    }
+
+    fun deleteMessagesForEveryone(memberId: String, messageIds: Set<String>): Int {
+        if (messageIds.isEmpty()) return 0
         val canonicalId = getCanonicalMemberId(memberId)
         val rawList = _messagesMap.value[canonicalId] ?: _messagesMap.value[memberId] ?: emptyList()
-        val msg = rawList.firstOrNull { it.id == messageId } ?: return false
+        val targetMessages = rawList.filter { it.id in messageIds }
+        if (targetMessages.isEmpty()) return 0
 
-        _deletedForEveryoneMessageIds.add(messageId)
-
-        val mediaUrlToDelete = msg.mediaUrl
+        _deletedForEveryoneMessageIds.addAll(targetMessages.map { it.id })
 
         val updatedList = rawList.map { m ->
-            if (m.id == messageId) {
+            if (m.id in messageIds) {
                 m.copy(
                     isDeletedForEveryone = true,
                     textContent = "This message was deleted",
@@ -1534,17 +1549,28 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         }
         saveMessagesToDisk()
 
-        // Sync to Supabase and Room
+        // Sync to Supabase and Room sequentially so failure on one does not block others
         repositoryScope.launch(Dispatchers.IO) {
-            SupabaseMessagingService.deleteMessageForEveryone(messageId, mediaUrlToDelete)
-            try {
-                database.chatMessageDao().updateMessageDeletion(messageId, isDeletedForEveryone = true, textContent = "This message was deleted")
-            } catch (e: Exception) {
-                Log.w(TAG, "Error updating delete for everyone in Room: ${e.localizedMessage}")
+            for (msg in targetMessages) {
+                val mediaUrlToDelete = msg.mediaUrl
+                try {
+                    SupabaseMessagingService.deleteMessageForEveryone(msg.id, mediaUrlToDelete)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error in bulk deleteMessageForEveryone for ${msg.id}: ${e.localizedMessage}")
+                }
+                try {
+                    database.chatMessageDao().updateMessageDeletion(
+                        msg.id,
+                        isDeletedForEveryone = true,
+                        textContent = "This message was deleted"
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error updating delete for everyone in Room for ${msg.id}: ${e.localizedMessage}")
+                }
             }
         }
 
-        return true
+        return targetMessages.size
     }
 
     fun editMessage(memberId: String, messageId: String, newText: String): Boolean {

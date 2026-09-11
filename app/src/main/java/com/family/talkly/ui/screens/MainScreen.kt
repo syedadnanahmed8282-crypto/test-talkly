@@ -370,6 +370,12 @@ fun MainScreen(
             onDeleteForEveryone = { messageId ->
                 chatRepository.deleteMessageForEveryone(currentMember.id, messageId)
             },
+            onDeleteMessagesForYou = { messageIds ->
+                chatRepository.deleteMessagesForYou(currentMember.id, messageIds)
+            },
+            onDeleteMessagesForEveryone = { messageIds ->
+                chatRepository.deleteMessagesForEveryone(currentMember.id, messageIds)
+            },
             onEditMessage = { messageId, newText ->
                 chatRepository.editMessage(currentMember.id, messageId, newText)
             },

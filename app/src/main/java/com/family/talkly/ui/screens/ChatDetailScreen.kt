@@ -94,6 +94,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VolumeMute
 import androidx.compose.material.icons.filled.VolumeUp
@@ -246,6 +247,8 @@ fun ChatDetailScreen(
     onToggleReaction: (messageId: String, reactionEmoji: String) -> Unit = { _, _ -> },
     onDeleteForYou: (messageId: String) -> Unit = {},
     onDeleteForEveryone: (messageId: String) -> Boolean = { false },
+    onDeleteMessagesForYou: ((messageIds: Set<String>) -> Unit)? = null,
+    onDeleteMessagesForEveryone: ((messageIds: Set<String>) -> Int)? = null,
     onEditMessage: (messageId: String, newText: String) -> Boolean = { _, _ -> false },
     onToggleStarMessage: (messageId: String) -> Unit = {},
     onTogglePinMessage: (messageId: String) -> Boolean = { false },
@@ -306,9 +309,15 @@ fun ChatDetailScreen(
     var chatWindowScreenHeight by remember { mutableFloatStateOf(1000f) }
     var selectedMsgIsTopHalf by remember { mutableStateOf(false) }
 
+    var selectedMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showBulkDeleteDialog by remember { mutableStateOf(false) }
+    val isSelectionMode = selectedMessageIds.isNotEmpty()
+
     // Intercept back presses to close overlays or go back to chat list
     BackHandler(enabled = true) {
         when {
+            showBulkDeleteDialog -> showBulkDeleteDialog = false
+            selectedMessageIds.isNotEmpty() -> selectedMessageIds = emptySet()
             fullMediaViewerMessage != null -> fullMediaViewerMessage = null
             reactionDialogMessage != null -> reactionDialogMessage = null
             reactionDetailsMessage != null -> reactionDetailsMessage = null
@@ -412,6 +421,39 @@ fun ChatDetailScreen(
             }
         } else {
             combinedMessages
+        }
+    }
+
+    LaunchedEffect(combinedMessages) {
+        if (selectedMessageIds.isNotEmpty()) {
+            val currentValidIds = combinedMessages
+                .filter { !it.isDeletedForEveryone }
+                .map { it.id }
+                .toSet()
+            val filtered = selectedMessageIds.filter { it in currentValidIds }.toSet()
+            if (filtered.size != selectedMessageIds.size) {
+                selectedMessageIds = filtered
+            }
+        }
+    }
+
+    val toggleMessageSelection: (ChatMessage) -> Unit = { targetMsg ->
+        if (!targetMsg.isDeletedForEveryone) {
+            selectedMessageIds = if (selectedMessageIds.contains(targetMsg.id)) {
+                selectedMessageIds - targetMsg.id
+            } else {
+                selectedMessageIds + targetMsg.id
+            }
+        }
+    }
+
+    val onMessageLongPress: (ChatMessage) -> Unit = { targetMsg ->
+        if (!targetMsg.isDeletedForEveryone) {
+            if (selectedMessageIds.isEmpty()) {
+                selectedMessageIds = setOf(targetMsg.id)
+            } else {
+                toggleMessageSelection(targetMsg)
+            }
         }
     }
 
@@ -1029,6 +1071,200 @@ fun ChatDetailScreen(
         }
     }
 
+    // Bulk Delete Confirmation Dialog
+    if (showBulkDeleteDialog && selectedMessageIds.isNotEmpty()) {
+        val currentUid = currentUserProfile?.uid.orEmpty()
+        val currentPhone = currentUserProfile?.phoneNumber.orEmpty()
+        val currentPhoneSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(currentPhone)
+        val memberSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone)
+
+        fun isOwnMessage(m: ChatMessage): Boolean {
+            val senderSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(m.senderId)
+            val isMember = (m.senderId == member.id) ||
+                    (!member.firebaseUid.isNullOrBlank() && m.senderId == member.firebaseUid) ||
+                    (member.phone.isNotBlank() && m.senderId == member.phone) ||
+                    (memberSuffix.isNotBlank() && memberSuffix == senderSuffix)
+            return !isMember ||
+                    m.senderId == "self" ||
+                    (currentUid.isNotBlank() && m.senderId == currentUid) ||
+                    m.senderName.contains("You", ignoreCase = true) ||
+                    (currentPhoneSuffix.isNotBlank() && currentPhoneSuffix == senderSuffix)
+        }
+
+        val currentSelectedMsgs = combinedMessages.filter { it.id in selectedMessageIds }
+        val currentOwnMsgs = currentSelectedMsgs.filter {
+            isOwnMessage(it) && !it.isDeletedForEveryone
+        }
+        val hasOwn = currentOwnMsgs.isNotEmpty()
+        val isAllOwn = currentSelectedMsgs.isNotEmpty() && currentSelectedMsgs.size == currentOwnMsgs.size
+        val isMixed = currentSelectedMsgs.isNotEmpty() && currentOwnMsgs.isNotEmpty() && !isAllOwn
+        val totalCount = currentSelectedMsgs.size
+        val ownCount = currentOwnMsgs.size
+
+        Dialog(
+            onDismissRequest = { showBulkDeleteDialog = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.65f))
+                    .clickable { showBulkDeleteDialog = false },
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = TalklySurface,
+                    border = BorderStroke(1.dp, TalklyElevated),
+                    shadowElevation = 16.dp,
+                    modifier = Modifier
+                        .padding(horizontal = 24.dp)
+                        .widthIn(max = 340.dp)
+                        .clickable(enabled = false) {}
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = if (totalCount == 1) "Delete message?" else "Delete $totalCount messages?",
+                            color = TalklyTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 17.sp
+                        )
+
+                        if (isMixed) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Delete for me will remove all $totalCount selected messages. Delete for everyone will apply only to your $ownCount sent messages.",
+                                color = TalklyTextSecondary,
+                                fontSize = 12.5.sp,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Delete for me
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = TalklyError.copy(alpha = 0.12f),
+                                border = BorderStroke(0.5.dp, TalklyError.copy(alpha = 0.25f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        val idsToDelete = selectedMessageIds.toSet()
+                                        showBulkDeleteDialog = false
+                                        selectedMessageIds = emptySet()
+                                        if (onDeleteMessagesForYou != null) {
+                                            onDeleteMessagesForYou(idsToDelete)
+                                        } else {
+                                            idsToDelete.forEach { onDeleteForYou(it) }
+                                        }
+                                        Toast.makeText(
+                                            context,
+                                            if (idsToDelete.size == 1) "Deleted for you" else "Deleted ${idsToDelete.size} messages for you",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = null,
+                                        tint = TalklyError,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (totalCount == 1) "Delete for me" else "Delete for me ($totalCount)",
+                                        color = TalklyError,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 13.sp
+                                    )
+                                }
+                            }
+
+                            // Delete for everyone
+                            if (hasOwn) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = TalklyError.copy(alpha = 0.18f),
+                                    border = BorderStroke(0.5.dp, TalklyError.copy(alpha = 0.35f)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            val ownIdsToDelete = currentOwnMsgs.map { it.id }.toSet()
+                                            showBulkDeleteDialog = false
+                                            selectedMessageIds = emptySet()
+                                            if (onDeleteMessagesForEveryone != null) {
+                                                onDeleteMessagesForEveryone(ownIdsToDelete)
+                                            } else {
+                                                ownIdsToDelete.forEach { onDeleteForEveryone(it) }
+                                            }
+                                            Toast.makeText(
+                                                context,
+                                                if (ownIdsToDelete.size == 1) "Deleted for everyone" else "Deleted ${ownIdsToDelete.size} messages for everyone",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = null,
+                                            tint = TalklyError,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = if (isAllOwn) {
+                                                if (totalCount == 1) "Delete for everyone" else "Delete for everyone ($totalCount)"
+                                            } else {
+                                                "Delete for everyone ($ownCount)"
+                                            },
+                                            color = TalklyError,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.CenterEnd
+                        ) {
+                            TextButton(onClick = { showBulkDeleteDialog = false }) {
+                                Text(
+                                    text = "Cancel",
+                                    color = TalklyTextSecondary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Reaction Details Dialog
     if (reactionDetailsMessage != null) {
         val targetMsg = reactionDetailsMessage!!
@@ -1510,7 +1746,149 @@ fun ChatDetailScreen(
                         topHeaderHeightPx = coords.size.height
                     }
             ) {
-                if (isSearchActive) {
+                if (isSelectionMode) {
+                    // SELECTION TOOLBAR
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 2.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(22.dp),
+                            color = Color(0xEE11161D),
+                            border = BorderStroke(1.dp, TalklyCyan.copy(alpha = 0.6f)),
+                            shadowElevation = 6.dp,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 4.dp, end = 6.dp, top = 3.dp, bottom = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IconButton(
+                                    onClick = { selectedMessageIds = emptySet() },
+                                    modifier = Modifier.size(34.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Cancel selection",
+                                        tint = TalklyTextPrimary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.width(6.dp))
+
+                                Text(
+                                    text = "${selectedMessageIds.size}",
+                                    color = TalklyTextPrimary,
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f)
+                                )
+
+                                // Quick actions if exactly 1 message selected
+                                if (selectedMessageIds.size == 1) {
+                                    val singleMsgId = selectedMessageIds.first()
+                                    val singleMsg = combinedMessages.firstOrNull { it.id == singleMsgId }
+                                    if (singleMsg != null && !singleMsg.isDeletedForEveryone) {
+                                        IconButton(
+                                            onClick = {
+                                                replyingToMessage = singleMsg
+                                                selectedMessageIds = emptySet()
+                                            },
+                                            modifier = Modifier.size(34.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Filled.Reply,
+                                                contentDescription = "Reply",
+                                                tint = TalklyCyan,
+                                                modifier = Modifier.size(19.dp)
+                                            )
+                                        }
+
+                                        IconButton(
+                                            onClick = {
+                                                onToggleStarMessage(singleMsg.id)
+                                                val wasStarred = singleMsg.isStarred
+                                                Toast.makeText(
+                                                    context,
+                                                    if (wasStarred) "Unstarred message" else "Starred message ⭐",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                                selectedMessageIds = emptySet()
+                                            },
+                                            modifier = Modifier.size(34.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (singleMsg.isStarred) Icons.Default.Star else Icons.Default.StarBorder,
+                                                contentDescription = "Star",
+                                                tint = Color(0xFFFFD54F),
+                                                modifier = Modifier.size(19.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                IconButton(
+                                    onClick = { showBulkDeleteDialog = true },
+                                    modifier = Modifier.size(34.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Delete",
+                                        tint = TalklyError,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (selectedMessageIds.size == 1) {
+                        val singleMsgId = selectedMessageIds.first()
+                        val singleMsg = combinedMessages.firstOrNull { it.id == singleMsgId }
+                        if (singleMsg != null && !singleMsg.isDeletedForEveryone) {
+                            Surface(
+                                shape = RoundedCornerShape(24.dp),
+                                color = TalklyCard,
+                                border = BorderStroke(1.dp, TalklyCyan.copy(alpha = 0.35f)),
+                                shadowElevation = 8.dp,
+                                modifier = Modifier
+                                    .padding(horizontal = 14.dp, vertical = 2.dp)
+                                    .fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    listOf("❤️", "🔥", "😂", "👍", "😮", "😭", "🥰", "👏", "🎉", "💯", "✨", "💙").forEach { emoji ->
+                                        Box(
+                                            modifier = Modifier
+                                                .size(36.dp)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    if (singleMsg.reaction == emoji) TalklyCyan.copy(alpha = 0.25f) else Color.Transparent
+                                                )
+                                                .clickable {
+                                                    onToggleReaction(singleMsg.id, emoji)
+                                                    selectedMessageIds = emptySet()
+                                                },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(text = emoji, fontSize = 20.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if (isSearchActive) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2216,24 +2594,44 @@ fun ChatDetailScreen(
                                 }
                             }
 
+                            val isItemSelected = when (item) {
+                                is ChatUiItem.SingleMessage -> selectedMessageIds.contains(item.message.id)
+                                is ChatUiItem.MediaCluster -> item.messages.any { selectedMessageIds.contains(it.id) }
+                            }
+
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .pointerInput(item.id) {
-                                        detectHorizontalDragGestures(
-                                            onDragEnd = {
-                                                if (offsetX > 60f) {
-                                                    replyingToMessage = msg
-                                                }
-                                                offsetX = 0f
-                                            },
-                                            onHorizontalDrag = { _, dragAmount ->
-                                                if (dragAmount > 0 || offsetX > 0) {
-                                                    offsetX = (offsetX + dragAmount).coerceIn(0f, 100f)
-                                                }
+                                    .then(
+                                        if (isItemSelected) {
+                                            Modifier
+                                                .background(TalklyCyan.copy(alpha = 0.16f), RoundedCornerShape(12.dp))
+                                                .border(1.dp, TalklyCyan.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
+                                    .then(
+                                        if (isSelectionMode) {
+                                            Modifier
+                                        } else {
+                                            Modifier.pointerInput(item.id) {
+                                                detectHorizontalDragGestures(
+                                                    onDragEnd = {
+                                                        if (offsetX > 60f) {
+                                                            replyingToMessage = msg
+                                                        }
+                                                        offsetX = 0f
+                                                    },
+                                                    onHorizontalDrag = { _, dragAmount ->
+                                                        if (dragAmount > 0 || offsetX > 0) {
+                                                            offsetX = (offsetX + dragAmount).coerceIn(0f, 100f)
+                                                        }
+                                                    }
+                                                )
                                             }
-                                        )
-                                    }
+                                        }
+                                    )
                             ) {
                                 if (offsetX > 10f) {
                                     Icon(
@@ -2266,8 +2664,31 @@ fun ChatDetailScreen(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .offset { IntOffset(offsetX.roundToInt(), 0) },
-                                    horizontalArrangement = if (isSelf) Arrangement.End else Arrangement.Start
+                                    horizontalArrangement = if (isSelf) Arrangement.End else Arrangement.Start,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    if (isSelectionMode && !isSelf) {
+                                        Box(
+                                            modifier = Modifier
+                                                .padding(start = 6.dp, end = 4.dp)
+                                                .size(20.dp)
+                                                .clip(CircleShape)
+                                                .background(if (isItemSelected) TalklyCyan else Color(0x3322D3EE))
+                                                .border(1.dp, if (isItemSelected) TalklyCyan else Color(0x6622D3EE), CircleShape)
+                                                .clickable { toggleMessageSelection(msg) },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (isItemSelected) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Done,
+                                                    contentDescription = "Selected",
+                                                    tint = Color(0xFF080B10),
+                                                    modifier = Modifier.size(13.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+
                                     Box {
                                         when (item) {
                                             is ChatUiItem.MediaCluster -> {
@@ -2276,13 +2697,19 @@ fun ChatDetailScreen(
                                                     isSelf = isSelf,
                                                     simulatedTimeOffsetMs = simulatedTimeOffsetMs,
                                                     onMediaClick = { clickedMsg ->
-                                                        if (!clickedMsg.isMediaExpired(simulatedTimeOffsetMs)) {
+                                                        if (isSelectionMode) {
+                                                            toggleMessageSelection(clickedMsg)
+                                                        } else if (!clickedMsg.isMediaExpired(simulatedTimeOffsetMs)) {
                                                             fullMediaViewerMessage = clickedMsg
                                                         }
                                                     },
                                                     onLongClick = { targetMsg ->
-                                                        selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
-                                                        reactionDialogMessage = targetMsg
+                                                        if (isSelectionMode) {
+                                                            toggleMessageSelection(targetMsg)
+                                                        } else {
+                                                            selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
+                                                            onMessageLongPress(targetMsg)
+                                                        }
                                                     },
                                                     onRetryUpload = { retryMsg ->
                                                         if (!retryMsg.mediaUrl.isNullOrBlank()) {
@@ -2320,10 +2747,20 @@ fun ChatDetailScreen(
                                                         message = msg,
                                                         isSelf = isSelf,
                                                         onLongClick = {
-                                                            selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
-                                                            reactionDialogMessage = msg
+                                                            if (isSelectionMode) {
+                                                                toggleMessageSelection(msg)
+                                                            } else {
+                                                                selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
+                                                                onMessageLongPress(msg)
+                                                            }
                                                         },
-                                                        onClick = { showReadDetails = !showReadDetails },
+                                                        onClick = {
+                                                            if (isSelectionMode) {
+                                                                toggleMessageSelection(msg)
+                                                            } else {
+                                                                showReadDetails = !showReadDetails
+                                                            }
+                                                        },
                                                         modifier = Modifier
                                                             .onGloballyPositioned { coords ->
                                                                 itemYInWindow = coords.positionInWindow().y
@@ -2335,13 +2772,19 @@ fun ChatDetailScreen(
                                                         isSelf = isSelf,
                                                         simulatedTimeOffsetMs = simulatedTimeOffsetMs,
                                                         onMediaClick = {
-                                                            if (!msg.isMediaExpired(simulatedTimeOffsetMs)) {
+                                                            if (isSelectionMode) {
+                                                                toggleMessageSelection(msg)
+                                                            } else if (!msg.isMediaExpired(simulatedTimeOffsetMs)) {
                                                                 fullMediaViewerMessage = msg
                                                             }
                                                         },
                                                         onLongClick = {
-                                                            selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
-                                                            reactionDialogMessage = msg
+                                                            if (isSelectionMode) {
+                                                                toggleMessageSelection(msg)
+                                                            } else {
+                                                                selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
+                                                                onMessageLongPress(msg)
+                                                            }
                                                         },
                                                         onRetryUpload = {
                                                             if (!msg.mediaUrl.isNullOrBlank()) {
@@ -2402,10 +2845,20 @@ fun ChatDetailScreen(
                                                     itemYInWindow = coords.positionInWindow().y
                                                 }
                                                 .combinedClickable(
-                                                    onClick = { showReadDetails = !showReadDetails },
+                                                    onClick = {
+                                                        if (isSelectionMode) {
+                                                            toggleMessageSelection(msg)
+                                                        } else {
+                                                            showReadDetails = !showReadDetails
+                                                        }
+                                                    },
                                                     onLongClick = {
-                                                        selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
-                                                        reactionDialogMessage = msg
+                                                        if (isSelectionMode) {
+                                                            toggleMessageSelection(msg)
+                                                        } else {
+                                                            selectedMsgIsTopHalf = (itemYInWindow < chatWindowScreenHeight / 2f)
+                                                            onMessageLongPress(msg)
+                                                        }
                                                     }
                                                 )
                                         ) {
@@ -2755,6 +3208,28 @@ fun ChatDetailScreen(
                                                         }
                                                     }
                                                 }
+                                            }
+                                        }
+                                    }
+
+                                    if (isSelectionMode && isSelf) {
+                                        Box(
+                                            modifier = Modifier
+                                                .padding(start = 4.dp, end = 6.dp)
+                                                .size(20.dp)
+                                                .clip(CircleShape)
+                                                .background(if (isItemSelected) TalklyCyan else Color(0x3322D3EE))
+                                                .border(1.dp, if (isItemSelected) TalklyCyan else Color(0x6622D3EE), CircleShape)
+                                                .clickable { toggleMessageSelection(msg) },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (isItemSelected) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Done,
+                                                    contentDescription = "Selected",
+                                                    tint = Color(0xFF080B10),
+                                                    modifier = Modifier.size(13.dp)
+                                                )
                                             }
                                         }
                                     }
