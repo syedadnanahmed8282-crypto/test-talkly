@@ -384,23 +384,31 @@ object SupabaseMessagingService {
 
     private val edgeHttpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .writeTimeout(10, TimeUnit.SECONDS)
             .build()
     }
 
-    private fun triggerCloudinaryMediaDeletion(messageId: String, mediaUrl: String) {
+    private suspend fun awaitCloudinaryMediaDeletion(messageId: String, mediaUrl: String) = withContext(Dispatchers.IO) {
         try {
             if (mediaUrl.isBlank() || !mediaUrl.contains("cloudinary.com", ignoreCase = true)) {
-                return
+                return@withContext
             }
-            val supabaseUrl = SupabaseClientProvider.supabaseUrl
-            val publishableKey = SupabaseClientProvider.supabasePublishableKey
             val currentSessionToken = try {
                 SupabaseClientProvider.auth.currentAccessTokenOrNull()
             } catch (e: Exception) {
                 null
             }
+
+            // If there is no valid authenticated session token, do not attempt with publishable key fallback
+            if (currentSessionToken.isNullOrBlank()) {
+                Log.w(TAG, "Skipping Cloudinary media deletion: No authenticated user session token available")
+                return@withContext
+            }
+
+            val supabaseUrl = SupabaseClientProvider.supabaseUrl
+            val publishableKey = SupabaseClientProvider.supabasePublishableKey
 
             val json = JSONObject().apply {
                 put("message_id", messageId)
@@ -410,40 +418,30 @@ object SupabaseMessagingService {
             val requestBody = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
             val edgeFunctionUrl = "$supabaseUrl/functions/v1/delete-cloudinary-media"
 
-            val requestBuilder = Request.Builder()
+            val request = Request.Builder()
                 .url(edgeFunctionUrl)
                 .addHeader("apikey", publishableKey)
+                .addHeader("Authorization", "Bearer $currentSessionToken")
                 .addHeader("Content-Type", "application/json")
                 .post(requestBody)
+                .build()
 
-            if (!currentSessionToken.isNullOrBlank()) {
-                requestBuilder.addHeader("Authorization", "Bearer $currentSessionToken")
-            } else {
-                requestBuilder.addHeader("Authorization", "Bearer $publishableKey")
+            edgeHttpClient.newCall(request).execute().use { response ->
+                Log.d(TAG, "delete-cloudinary-media Edge Function completed with status code: ${response.code}")
             }
-
-            edgeHttpClient.newCall(requestBuilder.build()).enqueue(object : Callback {
-                override fun onFailure(call: Call, e: java.io.IOException) {
-                    Log.w(TAG, "delete-cloudinary-media Edge Function request failed: ${e.message}")
-                }
-
-                override fun onResponse(call: Call, response: Response) {
-                    Log.d(TAG, "delete-cloudinary-media Edge Function response code: ${response.code}")
-                    response.close()
-                }
-            })
         } catch (e: Exception) {
-            Log.w(TAG, "Error triggering Cloudinary media deletion: ${e.localizedMessage}")
+            Log.w(TAG, "Cloudinary cleanup attempt failed or timed out (continuing with deletion): ${e.localizedMessage}")
         }
     }
 
     suspend fun deleteMessageForEveryone(messageId: String, mediaUrl: String? = null): Boolean = withContext(Dispatchers.IO) {
         try {
-            // Trigger remote Cloudinary media deletion via Edge Function if mediaUrl was present
+            // 1. Cloudinary cleanup attempt before clearing media_url (awaitable with timeout, never blocks on failure)
             if (!mediaUrl.isNullOrBlank()) {
-                triggerCloudinaryMediaDeletion(messageId, mediaUrl)
+                awaitCloudinaryMediaDeletion(messageId, mediaUrl)
             }
 
+            // 2. Supabase global deletion (is_deleted_for_everyone=true, text_content, media_url=null)
             SupabaseClientProvider.client.postgrest["messages"]
                 .update({
                     set("is_deleted_for_everyone", true)
