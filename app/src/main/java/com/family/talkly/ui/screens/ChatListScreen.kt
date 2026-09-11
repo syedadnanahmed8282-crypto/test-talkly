@@ -255,10 +255,10 @@ fun ChatListScreen(
     }
 
     // Filtered Chat List for Tab 0
-    val activeChatMembers = remember(deduplicatedMembers, messagesMap, searchQuery) {
+    val activeChatMembers = remember(deduplicatedMembers, messagesMap, searchQuery, currentUid) {
         deduplicatedMembers
             .filter { member ->
-                val msgs = getMemberMessages(member, messagesMap)
+                val msgs = getMemberMessages(member, messagesMap, currentUid)
                 val hasHistory = member.isPinned || msgs.isNotEmpty()
                 if (!hasHistory) return@filter false
 
@@ -272,7 +272,7 @@ fun ChatListScreen(
             .sortedWith(
                 compareByDescending<FamilyMember> { it.isPinned }
                     .thenByDescending { member ->
-                        getMemberMessages(member, messagesMap).lastOrNull()?.timestamp ?: 0L
+                        getMemberMessages(member, messagesMap, currentUid).lastOrNull()?.timestamp ?: 0L
                     }
             )
     }
@@ -672,7 +672,7 @@ fun ChatListScreen(
                                         }
 
                                         items(pinnedMembers, key = { "pinned_${it.id}" }) { member ->
-                                            val memberMessages = getMemberMessages(member, messagesMap)
+                                            val memberMessages = getMemberMessages(member, messagesMap, currentUid)
                                             val lastMessage = memberMessages.lastOrNull()
 
                                             TalklyConversationCard(
@@ -750,7 +750,7 @@ fun ChatListScreen(
                                         }
                                     } else {
                                         items(regularMembers, key = { it.id }) { member ->
-                                            val memberMessages = getMemberMessages(member, messagesMap)
+                                            val memberMessages = getMemberMessages(member, messagesMap, currentUid)
                                             val lastMessage = memberMessages.lastOrNull()
 
                                             TalklyConversationCard(
@@ -3190,26 +3190,33 @@ private fun ContactsTab(
 // ==========================================
 // HELPER: GET MESSAGES
 // ==========================================
-private fun getMemberMessages(member: FamilyMember, messagesMap: Map<String, List<ChatMessage>>): List<ChatMessage> {
+private fun getMemberMessages(
+    member: FamilyMember,
+    messagesMap: Map<String, List<ChatMessage>>,
+    currentUid: String = ""
+): List<ChatMessage> {
     val msgsById = messagesMap[member.id]
-    if (!msgsById.isNullOrEmpty()) return msgsById
-
-    val targetFirebaseUid = member.firebaseUid
-    if (!targetFirebaseUid.isNullOrBlank()) {
-        val msgsByUid = messagesMap[targetFirebaseUid]
-        if (!msgsByUid.isNullOrEmpty()) return msgsByUid
+    val rawList = if (!msgsById.isNullOrEmpty()) {
+        msgsById
+    } else {
+        val targetFirebaseUid = member.firebaseUid
+        if (!targetFirebaseUid.isNullOrBlank() && !messagesMap[targetFirebaseUid].isNullOrEmpty()) {
+            messagesMap[targetFirebaseUid]!!
+        } else {
+            val suffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone)
+            if (suffix.isNotBlank() && !messagesMap[suffix].isNullOrEmpty()) {
+                messagesMap[suffix]!!
+            } else if (member.phone.isNotBlank() && !messagesMap[member.phone].isNullOrEmpty()) {
+                messagesMap[member.phone]!!
+            } else {
+                emptyList()
+            }
+        }
     }
 
-    val suffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(member.phone)
-    if (suffix.isNotBlank()) {
-        val msgsBySuffix = messagesMap[suffix]
-        if (!msgsBySuffix.isNullOrEmpty()) return msgsBySuffix
+    return if (currentUid.isNotBlank()) {
+        rawList.filter { !it.deletedForUsers.contains(currentUid) }
+    } else {
+        rawList
     }
-
-    if (member.phone.isNotBlank()) {
-        val msgsByPhone = messagesMap[member.phone]
-        if (!msgsByPhone.isNullOrEmpty()) return msgsByPhone
-    }
-
-    return emptyList()
 }

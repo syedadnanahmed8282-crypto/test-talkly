@@ -250,7 +250,7 @@ data class SupabaseMessage(
             val isDeletedForEveryone = getBoolean("is_deleted_for_everyone", false)
 
             val deletedForUsers = record["deleted_for_users"]?.let {
-                PostgresStringListSerializer.parseStringList(it)
+                PostgresStringListSerializer.parseStringList(it).filter { u -> u.isNotBlank() && u != "self" }
             } ?: emptyList()
 
             val createdAt = getString("created_at")
