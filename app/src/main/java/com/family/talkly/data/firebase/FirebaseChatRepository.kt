@@ -2873,7 +2873,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                         userAvatarUrl = if (obj.has("userAvatarUrl") && !obj.isNull("userAvatarUrl")) obj.getString("userAvatarUrl") else null,
                         textContent = if (obj.has("textContent") && !obj.isNull("textContent")) obj.getString("textContent") else null,
                         photoUrl = if (obj.has("photoUrl") && !obj.isNull("photoUrl")) obj.getString("photoUrl") else null,
-                        backgroundColorHex = obj.optString("backgroundColorHex", "#321C3B"),
+                        backgroundColorHex = obj.optString("backgroundColorHex", "#0C2B3A"),
                         timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
                         isSeen = isSeenVal,
                         viewers = viewers,
@@ -2944,47 +2944,67 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         userAvatarUrl: String? = null,
         textContent: String? = null,
         photoUrl: String? = null,
-        backgroundColorHex: String = "#321C3B"
+        backgroundColorHex: String = "#0C2B3A"
     ) {
         val statusId = java.util.UUID.randomUUID().toString()
         var persistentPhotoUrl = photoUrl
         var localPhotoFile: File? = null
 
-        if (!photoUrl.isNullOrBlank() && (photoUrl.startsWith("content://") || (photoUrl.startsWith("file://") && !photoUrl.contains("status_photos")))) {
+        val isVideo = photoUrl?.let {
+            it.endsWith(".mp4", ignoreCase = true) ||
+            it.endsWith(".mov", ignoreCase = true) ||
+            it.contains("video", ignoreCase = true) ||
+            it.contains("content://media/external/video")
+        } ?: false
+
+        if (!photoUrl.isNullOrBlank() && (photoUrl.startsWith("content://") || (photoUrl.startsWith("file://") && !photoUrl.contains("status_photos") && !photoUrl.contains("status_videos")))) {
             try {
-                val statusDir = File(context.filesDir, "status_photos").apply { mkdirs() }
-                val destFile = File(statusDir, "${statusId}.jpg")
                 val uri = Uri.parse(photoUrl)
-
-                val inputStream = context.contentResolver.openInputStream(uri)
-                if (inputStream != null) {
-                    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    BitmapFactory.decodeStream(context.contentResolver.openInputStream(uri), null, options)
-
-                    val maxDim = maxOf(options.outWidth, options.outHeight)
-                    var sampleSize = 1
-                    while (maxDim / sampleSize > 1080) { sampleSize *= 2 }
-
-                    val decodeOptions = BitmapFactory.Options().apply {
-                        inSampleSize = sampleSize
-                        inPreferredConfig = Bitmap.Config.ARGB_8888
+                if (isVideo) {
+                    val statusDir = File(context.filesDir, "status_videos").apply { mkdirs() }
+                    val destFile = File(statusDir, "${statusId}.mp4")
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(destFile).use { output ->
+                            input.copyTo(output)
+                        }
                     }
-                    val bitmap = BitmapFactory.decodeStream(inputStream, null, decodeOptions)
-                    inputStream.close()
-
-                    if (bitmap != null) {
-                        val outStream = FileOutputStream(destFile)
-                        bitmap.compress(Bitmap.CompressFormat.JPEG, 85, outStream)
-                        outStream.flush()
-                        outStream.close()
-                        bitmap.recycle()
-
+                    if (destFile.exists() && destFile.length() > 0) {
                         localPhotoFile = destFile
                         persistentPhotoUrl = Uri.fromFile(destFile).toString()
                     }
+                } else {
+                    val statusDir = File(context.filesDir, "status_photos").apply { mkdirs() }
+                    val destFile = File(statusDir, "${statusId}.jpg")
+                    val inputStream = context.contentResolver.openInputStream(uri)
+                    if (inputStream != null) {
+                        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        BitmapFactory.decodeStream(context.contentResolver.openInputStream(uri), null, options)
+
+                        val maxDim = maxOf(options.outWidth, options.outHeight)
+                        var sampleSize = 1
+                        while (maxDim / sampleSize > 1080) { sampleSize *= 2 }
+
+                        val decodeOptions = BitmapFactory.Options().apply {
+                            inSampleSize = sampleSize
+                            inPreferredConfig = Bitmap.Config.ARGB_8888
+                        }
+                        val bitmap = BitmapFactory.decodeStream(inputStream, null, decodeOptions)
+                        inputStream.close()
+
+                        if (bitmap != null) {
+                            val outStream = FileOutputStream(destFile)
+                            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, outStream)
+                            outStream.flush()
+                            outStream.close()
+                            bitmap.recycle()
+
+                            localPhotoFile = destFile
+                            persistentPhotoUrl = Uri.fromFile(destFile).toString()
+                        }
+                    }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Error storing local status image: ${e.localizedMessage}")
+                Log.w(TAG, "Error storing local status media: ${e.localizedMessage}")
             }
         }
 
@@ -3006,6 +3026,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             userAvatarUrl = userAvatarUrl,
             textContent = textContent,
             photoUrl = persistentPhotoUrl,
+            isVideo = isVideo,
             backgroundColorHex = backgroundColorHex,
             timestamp = now,
             isSeen = true,
@@ -3029,9 +3050,9 @@ class FirebaseChatRepository private constructor(private val context: Context) {
 
                 if (targetUploadFile != null && targetUploadFile.exists()) {
                     try {
-                        Log.d(TAG, "Uploading status image to Cloudinary: ${targetUploadFile.absolutePath}")
+                        Log.d(TAG, "Uploading status media to Cloudinary: ${targetUploadFile.absolutePath}")
                         val uploader = MediaCompressorAndUploader(context)
-                        val remotePath = "status_photos/${newStatus.id}.jpg"
+                        val remotePath = if (isVideo) "status_videos/${newStatus.id}.mp4" else "status_photos/${newStatus.id}.jpg"
                         val downloadUrl = uploader.uploadMediaFile(targetUploadFile, remotePath) { _, _ -> }
                         if (downloadUrl.startsWith("http://") || downloadUrl.startsWith("https://")) {
                             finalMediaUrl = downloadUrl

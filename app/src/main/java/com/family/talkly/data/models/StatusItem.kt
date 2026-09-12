@@ -23,7 +23,7 @@ data class StatusItem(
     val textContent: String? = null,
     val photoUrl: String? = null,
     val isVideo: Boolean = false,
-    val backgroundColorHex: String = "#321C3B",
+    val backgroundColorHex: String = "#0C2B3A",
     val timestamp: Long = System.currentTimeMillis(),
     val isSeen: Boolean = false,
     val viewers: List<StatusViewer> = emptyList(),

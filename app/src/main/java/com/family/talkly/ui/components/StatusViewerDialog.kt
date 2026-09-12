@@ -79,11 +79,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.unit.IntOffset
+import android.net.Uri
+import android.widget.FrameLayout
+import android.widget.VideoView
 import coil.compose.AsyncImage
 import com.family.talkly.data.models.FamilyMember
 import com.family.talkly.data.models.StatusItem
 import com.family.talkly.data.models.UserStatusGroup
+import com.family.talkly.data.models.StoryTextMetadata
 import com.family.talkly.util.PhoneUtils
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -233,18 +244,62 @@ fun StatusViewerDialog(
                 }
         ) {
             // ==========================================
-            // 1. BACKGROUND PHOTO OR TEXT CANVAS
+            // 1. BACKGROUND PHOTO OR VIDEO OR TEXT CANVAS
             // ==========================================
+            val isVideo = currentStatus.isVideo || (currentStatus.photoUrl?.let {
+                it.endsWith(".mp4", ignoreCase = true) ||
+                it.endsWith(".mov", ignoreCase = true) ||
+                it.contains("video", ignoreCase = true)
+            } ?: false)
+
             if (currentStatus.photoUrl != null) {
-                val mediaModel = remember(currentStatus.photoUrl) {
-                    PhoneUtils.getCoilMediaModel(currentStatus.photoUrl)
+                if (isVideo) {
+                    var viewerVideoView by remember { mutableStateOf<VideoView?>(null) }
+
+                    AndroidView(
+                        factory = { ctx ->
+                            VideoView(ctx).apply {
+                                layoutParams = FrameLayout.LayoutParams(
+                                    FrameLayout.LayoutParams.MATCH_PARENT,
+                                    FrameLayout.LayoutParams.MATCH_PARENT
+                                )
+                                setVideoURI(Uri.parse(currentStatus.photoUrl))
+                                setOnPreparedListener { mp ->
+                                    mp.isLooping = true
+                                    mp.setVideoScalingMode(android.media.MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING)
+                                    start()
+                                }
+                                viewerVideoView = this
+                            }
+                        },
+                        update = { view ->
+                            viewerVideoView = view
+                            if (isPaused) {
+                                if (view.isPlaying) view.pause()
+                            } else {
+                                if (!view.isPlaying) view.start()
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    DisposableEffect(currentStatus.photoUrl) {
+                        onDispose {
+                            viewerVideoView?.stopPlayback()
+                            viewerVideoView = null
+                        }
+                    }
+                } else {
+                    val mediaModel = remember(currentStatus.photoUrl) {
+                        PhoneUtils.getCoilMediaModel(currentStatus.photoUrl)
+                    }
+                    AsyncImage(
+                        model = mediaModel,
+                        contentDescription = "Status image",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
                 }
-                AsyncImage(
-                    model = mediaModel,
-                    contentDescription = "Status image",
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
 
                 // Top Vignette Overlay
                 Box(
@@ -273,42 +328,81 @@ fun StatusViewerDialog(
                 )
             }
 
-            // Main Text Content Display
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 24.dp, vertical = 120.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                if (currentStatus.photoUrl == null) {
-                    Text(
-                        text = currentStatus.textContent ?: "",
-                        style = MaterialTheme.typography.headlineMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = ViewerTextPrimary,
-                            fontSize = 24.sp,
-                            lineHeight = 34.sp,
-                            textAlign = TextAlign.Center
-                        )
-                    )
-                } else if (!currentStatus.textContent.isNullOrBlank()) {
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.65f),
-                        shape = RoundedCornerShape(16.dp),
-                        border = BorderStroke(0.5.dp, Color.White.copy(alpha = 0.15f)),
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 80.dp)
-                    ) {
+            // Main Story Text Rendering (Handles both legacy and modern metadata)
+            val storyMetadata = remember(currentStatus.textContent, currentStatus.photoUrl) {
+                StoryTextMetadata.parse(currentStatus.textContent, currentStatus.photoUrl != null)
+            }
+
+            if (storyMetadata.isLegacy) {
+                // Legacy Rendering (Strict Backward Compatibility)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 24.dp, vertical = 120.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (currentStatus.photoUrl == null) {
                         Text(
-                            text = currentStatus.textContent ?: "",
-                            style = MaterialTheme.typography.bodyLarge.copy(
+                            text = storyMetadata.text,
+                            style = MaterialTheme.typography.headlineMedium.copy(
+                                fontWeight = FontWeight.Bold,
                                 color = ViewerTextPrimary,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Medium,
+                                fontSize = 24.sp,
+                                lineHeight = 34.sp,
                                 textAlign = TextAlign.Center
-                            ),
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                            )
+                        )
+                    } else if (storyMetadata.text.isNotBlank()) {
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.65f),
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(0.5.dp, Color.White.copy(alpha = 0.15f)),
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 80.dp)
+                        ) {
+                            Text(
+                                text = storyMetadata.text,
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    color = ViewerTextPrimary,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    textAlign = TextAlign.Center
+                                ),
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                            )
+                        }
+                    }
+                }
+            } else if (storyMetadata.text.isNotBlank()) {
+                // Modern positioned, scaled, and styled story text
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 90.dp, bottom = 100.dp)
+                ) {
+                    val canvasW = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+                    val canvasH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+                    val posX = canvasW * storyMetadata.x
+                    val posY = canvasH * storyMetadata.y
+
+                    Box(
+                        modifier = Modifier
+                            .offset {
+                                IntOffset(
+                                    x = (posX - 160).roundToInt().coerceIn(0, (canvasW - 320).toInt().coerceAtLeast(0)),
+                                    y = (posY - 40).roundToInt().coerceIn(0, (canvasH - 80).toInt().coerceAtLeast(0))
+                                )
+                            }
+                            .graphicsLayer {
+                                scaleX = storyMetadata.scale
+                                scaleY = storyMetadata.scale
+                                rotationZ = storyMetadata.rotation
+                            }
+                    ) {
+                        StoryTextRender(
+                            metadata = storyMetadata,
+                            isSelected = false
                         )
                     }
                 }
