@@ -1809,77 +1809,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                 Log.w(TAG, "Error cleaning previous realtime channel: ${e.localizedMessage}")
             }
 
-            // 2. Fetch recent messages from Supabase PostgREST to initialize local DB & state
-            try {
-                Log.d(TAG, "DIAGNOSTIC messageSyncJob: Fetching recent messages via PostgREST for uid='$currentUserId'")
-                val recentSupabaseMessages = SupabaseMessagingService.fetchRecentMessagesForUser(currentUserId, limit = 200)
-                Log.d(TAG, "DIAGNOSTIC messageSyncJob: Fetched ${recentSupabaseMessages.size} recent messages via PostgREST")
-                if (recentSupabaseMessages.isNotEmpty()) {
-                    _messagesMap.update { current ->
-                        val currentMap = current.toMutableMap()
-                        recentSupabaseMessages.forEach { sMsg ->
-                            val chatMsg = sMsg.toChatMessage(currentUserId)
-                            val rawOtherPartyId = if (chatMsg.senderId == "self" || chatMsg.senderId == currentUserId) chatMsg.receiverId else chatMsg.senderId
-                            if (rawOtherPartyId.isNotBlank()) {
-                                val canonicalOther = getCanonicalMemberId(rawOtherPartyId)
-                                val list = (currentMap[canonicalOther] ?: emptyList()).toMutableList()
-                                val existingIndex = list.indexOfFirst { it.id == chatMsg.id }
-                                if (existingIndex >= 0) {
-                                    val existing = list[existingIndex]
-                                    val isDelForEveryone = existing.isDeletedForEveryone || chatMsg.isDeletedForEveryone || _deletedForEveryoneMessageIds.contains(chatMsg.id)
-                                    if (isDelForEveryone) _deletedForEveryoneMessageIds.add(chatMsg.id)
-                                    val currentUid = getAuthenticatedUserUid().ifBlank { currentUserId.takeIf { it != "self" } ?: "" }
-                                    val delUsers = (existing.deletedForUsers + chatMsg.deletedForUsers).filter { it.isNotBlank() && it != "self" }.toMutableList()
-                                    if (_deletedForMeMessageIds.contains(chatMsg.id)) {
-                                        if (currentUid.isNotBlank() && !delUsers.contains(currentUid)) {
-                                            delUsers.add(currentUid)
-                                        }
-                                    }
-                                    val finalMsg = chatMsg.copy(
-                                        isDeletedForEveryone = isDelForEveryone,
-                                        textContent = if (isDelForEveryone) "This message was deleted" else chatMsg.textContent,
-                                        mediaUrl = if (isDelForEveryone) null else (if (existing.isDeletedForEveryone) null else chatMsg.mediaUrl),
-                                        deletedForUsers = delUsers.distinct()
-                                    )
-                                    list[existingIndex] = finalMsg
-                                } else {
-                                    val isDelForEveryone = chatMsg.isDeletedForEveryone || _deletedForEveryoneMessageIds.contains(chatMsg.id)
-                                    if (isDelForEveryone) _deletedForEveryoneMessageIds.add(chatMsg.id)
-                                    val currentUid = getAuthenticatedUserUid().ifBlank { currentUserId.takeIf { it != "self" } ?: "" }
-                                    val delUsers = chatMsg.deletedForUsers.filter { it.isNotBlank() && it != "self" }.toMutableList()
-                                    if (_deletedForMeMessageIds.contains(chatMsg.id)) {
-                                        if (currentUid.isNotBlank() && !delUsers.contains(currentUid)) {
-                                            delUsers.add(currentUid)
-                                        }
-                                    }
-                                    val finalMsg = chatMsg.copy(
-                                        isDeletedForEveryone = isDelForEveryone,
-                                        textContent = if (isDelForEveryone) "This message was deleted" else chatMsg.textContent,
-                                        mediaUrl = if (isDelForEveryone) null else chatMsg.mediaUrl,
-                                        deletedForUsers = delUsers.distinct()
-                                    )
-                                    list.add(finalMsg)
-                                }
-                                currentMap[canonicalOther] = list.sortedBy { it.timestamp }
-                                try {
-                                    val savedMsg = list.first { it.id == chatMsg.id }
-                                    database.chatMessageDao().insertMessage(ChatMessageEntity.fromChatMessage(canonicalOther, savedMsg))
-                                } catch (e: Exception) {}
-                            }
-                        }
-                        currentMap
-                    }
-                    saveMessagesToDisk()
-                }
-                _lastServerSyncTime.value = System.currentTimeMillis()
-                isInitialMessageSyncDone = true
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.w(TAG, "Error performing initial Supabase message fetch: ${e.localizedMessage}")
-                isInitialMessageSyncDone = true
-            }
-
-            // 3. Connect Supabase Realtime Channel with auto-reconnect listener
+            // 2. Connect Supabase Realtime Channel with auto-reconnect listener FIRST to prevent race condition
             try {
                 Log.d(TAG, "DIAGNOSTIC messageSyncJob: Calling createMessagingRealtimeChannel for uid='$currentUserId'")
                 supabaseRealtimeChannel = SupabaseMessagingService.createMessagingRealtimeChannel(
@@ -1935,6 +1865,174 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e(TAG, "DIAGNOSTIC Error connecting Supabase Realtime messaging channel: ${e.localizedMessage}", e)
+            }
+
+            // 3. Server catch-up via PostgREST pagination (safe timestamp overlap + message ID deduplication)
+            try {
+                Log.d(TAG, "DIAGNOSTIC messageSyncJob: Starting server catch-up for uid='$currentUserId'")
+                val pageSize = 100L
+                val maxCatchUpMessages = 1000
+                val allCatchUpMessages = mutableListOf<SupabaseMessage>()
+                val seenMessageIds = mutableSetOf<String>()
+                var beforeCursor: String? = null
+
+                val locallyKnownMessageIds = _messagesMap.value.values.flatten().map { it.id }.toHashSet()
+
+                while (allCatchUpMessages.size < maxCatchUpMessages) {
+                    val page = SupabaseMessagingService.fetchRecentMessagesForUser(
+                        currentUserId = currentUserId,
+                        limit = pageSize,
+                        beforeTimestampIso = beforeCursor
+                    )
+                    if (page.isEmpty()) break
+
+                    val newInThisBatch = page.filter { seenMessageIds.add(it.id) }
+                    if (newInThisBatch.isEmpty()) {
+                        break
+                    }
+
+                    allCatchUpMessages.addAll(newInThisBatch)
+
+                    // If every message in this batch is already known locally, we have bridged into previously synced history
+                    if (locallyKnownMessageIds.isNotEmpty() && newInThisBatch.all { locallyKnownMessageIds.contains(it.id) }) {
+                        Log.d(TAG, "DIAGNOSTIC Catch-up reached known local messages boundary with ${allCatchUpMessages.size} messages")
+                        break
+                    }
+
+                    if (page.size < pageSize) {
+                        break
+                    }
+
+                    val oldestInPage = page.lastOrNull()
+                    val nextCursor = oldestInPage?.createdAt
+                    if (nextCursor.isNullOrBlank() || nextCursor == beforeCursor) {
+                        break
+                    }
+                    beforeCursor = nextCursor
+                }
+
+                Log.d(TAG, "DIAGNOSTIC messageSyncJob: Recovered ${allCatchUpMessages.size} catch-up messages via PostgREST")
+
+                if (allCatchUpMessages.isNotEmpty()) {
+                    val entitiesToInsert = mutableListOf<ChatMessageEntity>()
+                    _messagesMap.update { current ->
+                        val currentMap = current.toMutableMap()
+                        allCatchUpMessages.forEach { sMsg ->
+                            val chatMsg = sMsg.toChatMessage(currentUserId)
+                            val rawOtherPartyId = if (chatMsg.senderId == "self" || chatMsg.senderId == currentUserId) chatMsg.receiverId else chatMsg.senderId
+                            if (rawOtherPartyId.isNotBlank()) {
+                                val canonicalOther = getCanonicalMemberId(rawOtherPartyId)
+                                val list = (currentMap[canonicalOther] ?: emptyList()).toMutableList()
+                                val existingIndex = list.indexOfFirst { it.id == chatMsg.id }
+
+                                val finalMsg = if (existingIndex >= 0) {
+                                    val existing = list[existingIndex]
+                                    val isDelForEveryone = existing.isDeletedForEveryone || chatMsg.isDeletedForEveryone || _deletedForEveryoneMessageIds.contains(chatMsg.id)
+                                    if (isDelForEveryone) _deletedForEveryoneMessageIds.add(chatMsg.id)
+                                    val currentUid = getAuthenticatedUserUid().ifBlank { currentUserId.takeIf { it != "self" } ?: "" }
+                                    val combinedDeleted = (existing.deletedForUsers + chatMsg.deletedForUsers)
+                                        .filter { it.isNotBlank() && it != "self" }
+                                        .toMutableList()
+                                    if (_deletedForMeMessageIds.contains(chatMsg.id)) {
+                                        if (currentUid.isNotBlank() && !combinedDeleted.contains(currentUid)) {
+                                            combinedDeleted.add(currentUid)
+                                        }
+                                    }
+                                    val preservedTimestamp = if (existing.timestamp > 0) existing.timestamp else chatMsg.timestamp
+                                    val preservedDelivered = existing.isDelivered || chatMsg.isDelivered
+                                    val preservedRead = existing.isRead || chatMsg.isRead
+                                    val preservedReadAt = chatMsg.readAtTimestamp ?: existing.readAtTimestamp
+                                    val preservedReaction = chatMsg.reaction ?: existing.reaction
+                                    val preservedStarred = existing.isStarred || chatMsg.isStarred
+                                    val preservedPinned = if (chatMsg.isPinned) true else existing.isPinned
+                                    val preservedPinnedBy = chatMsg.pinnedBy ?: existing.pinnedBy
+                                    val preservedEdited = existing.isEdited || chatMsg.isEdited
+                                    val finalText = when {
+                                        isDelForEveryone -> "This message was deleted"
+                                        chatMsg.isEdited -> chatMsg.textContent
+                                        existing.isEdited -> existing.textContent
+                                        else -> chatMsg.textContent.ifBlank { existing.textContent }
+                                    }
+                                    val finalMedia = when {
+                                        isDelForEveryone -> null
+                                        existing.isDeletedForEveryone -> null
+                                        else -> chatMsg.mediaUrl ?: existing.mediaUrl
+                                    }
+                                    val merged = chatMsg.copy(
+                                        timestamp = preservedTimestamp,
+                                        textContent = finalText,
+                                        mediaUrl = finalMedia,
+                                        isDelivered = preservedDelivered,
+                                        isRead = preservedRead,
+                                        readAtTimestamp = preservedReadAt,
+                                        reaction = preservedReaction,
+                                        isStarred = preservedStarred,
+                                        isPinned = preservedPinned,
+                                        pinnedBy = preservedPinnedBy,
+                                        replyToMessageId = chatMsg.replyToMessageId ?: existing.replyToMessageId,
+                                        replyToSenderName = chatMsg.replyToSenderName ?: existing.replyToSenderName,
+                                        replyToText = chatMsg.replyToText ?: existing.replyToText,
+                                        isEdited = preservedEdited,
+                                        isDeletedForEveryone = isDelForEveryone,
+                                        deletedForUsers = combinedDeleted.distinct(),
+                                        isPending = false,
+                                        isUploading = false,
+                                        isFailed = false,
+                                        callType = chatMsg.callType ?: existing.callType,
+                                        callDurationSec = if (chatMsg.callDurationSec > 0) chatMsg.callDurationSec else existing.callDurationSec,
+                                        fileSizeBytes = chatMsg.fileSizeBytes ?: existing.fileSizeBytes
+                                    )
+                                    list[existingIndex] = merged
+                                    merged
+                                } else {
+                                    val isDelForEveryone = chatMsg.isDeletedForEveryone || _deletedForEveryoneMessageIds.contains(chatMsg.id)
+                                    if (isDelForEveryone) _deletedForEveryoneMessageIds.add(chatMsg.id)
+                                    val currentUid = getAuthenticatedUserUid().ifBlank { currentUserId.takeIf { it != "self" } ?: "" }
+                                    val delUsers = chatMsg.deletedForUsers.filter { it.isNotBlank() && it != "self" }.toMutableList()
+                                    if (_deletedForMeMessageIds.contains(chatMsg.id)) {
+                                        if (currentUid.isNotBlank() && !delUsers.contains(currentUid)) {
+                                            delUsers.add(currentUid)
+                                        }
+                                    }
+                                    val newMsg = chatMsg.copy(
+                                        isDeletedForEveryone = isDelForEveryone,
+                                        textContent = if (isDelForEveryone) "This message was deleted" else chatMsg.textContent,
+                                        mediaUrl = if (isDelForEveryone) null else chatMsg.mediaUrl,
+                                        deletedForUsers = delUsers.distinct(),
+                                        isPending = false,
+                                        isUploading = false,
+                                        isFailed = false
+                                    )
+                                    list.add(newMsg)
+                                    newMsg
+                                }
+
+                                val currentUid = getAuthenticatedUserUid().ifBlank { currentUserId.takeIf { it != "self" } ?: "" }
+                                currentMap[canonicalOther] = list.filterNot { msg ->
+                                    _deletedForMeMessageIds.contains(msg.id) ||
+                                    (currentUid.isNotBlank() && msg.deletedForUsers.contains(currentUid))
+                                }.sortedBy { it.timestamp }
+
+                                entitiesToInsert.add(ChatMessageEntity.fromChatMessage(canonicalOther, finalMsg))
+                            }
+                        }
+                        currentMap
+                    }
+                    saveMessagesToDisk()
+                    if (entitiesToInsert.isNotEmpty()) {
+                        try {
+                            database.chatMessageDao().insertMessages(entitiesToInsert)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error inserting catch-up messages to Room: ${e.localizedMessage}")
+                        }
+                    }
+                }
+                _lastServerSyncTime.value = System.currentTimeMillis()
+                isInitialMessageSyncDone = true
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "Error performing Supabase message catch-up: ${e.localizedMessage}")
+                isInitialMessageSyncDone = true
             }
         }
 

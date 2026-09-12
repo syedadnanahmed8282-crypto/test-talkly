@@ -266,7 +266,11 @@ object SupabaseMessagingService {
     suspend fun deleteMessageForYou(messageId: String, deletedForUsers: List<String>): Boolean =
         updateDeletedForUsers(messageId, deletedForUsers)
 
-    suspend fun fetchRecentMessagesForUser(currentUserId: String, limit: Long = 200): List<SupabaseMessage> = withContext(Dispatchers.IO) {
+    suspend fun fetchRecentMessagesForUser(
+        currentUserId: String,
+        limit: Long = 100,
+        beforeTimestampIso: String? = null
+    ): List<SupabaseMessage> = withContext(Dispatchers.IO) {
         try {
             SupabaseClientProvider.client.postgrest["messages"]
                 .select {
@@ -274,6 +278,9 @@ object SupabaseMessagingService {
                         or {
                             eq("sender_id", currentUserId)
                             eq("receiver_id", currentUserId)
+                        }
+                        if (!beforeTimestampIso.isNullOrBlank()) {
+                            lte("created_at", beforeTimestampIso)
                         }
                     }
                     order("created_at", Order.DESCENDING)
