@@ -36,6 +36,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
@@ -83,8 +84,6 @@ import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import com.family.talkly.data.models.ChatMessage
 import com.family.talkly.data.models.MessageType
-import com.family.talkly.ui.theme.WhatsappGreen
-import com.family.talkly.ui.theme.WhatsappTeal
 import com.family.talkly.util.MediaCompressorAndUploader
 import com.family.talkly.util.PhoneUtils
 import kotlinx.coroutines.Dispatchers
@@ -149,8 +148,12 @@ fun MediaAttachmentDialog(
             },
             onMediaSelected = { uris, type ->
                 showGalleryPicker = false
-                previewMediaUris = uris
-                previewMediaType = type
+                // TalklyGalleryPicker already handles selection and preview.
+                // Directly route to existing media compression/upload/send pipeline.
+                for (mediaUrl in uris) {
+                    onSendMediaWithTag("", type, mediaUrl)
+                }
+                onDismiss()
             }
         )
     }
@@ -476,7 +479,8 @@ private fun SecondaryAttachmentRow(
 }
 
 /**
- * Media Preview & Tagging Dialog supporting single or multiple media URIs.
+ * Modern Talkly Media Preview & Tagging Dialog supporting single or multiple media URIs
+ * (Used for camera capture preview and standalone preview flows).
  */
 @Composable
 fun MediaPreviewAndTagDialog(
@@ -495,67 +499,104 @@ fun MediaPreviewAndTagDialog(
     val formattedCreation = remember { dateFormat.format(Date(currentTimeMs)) }
     val formattedExpiry = remember { dateFormat.format(Date(expirationTimeMs)) }
 
-    var captionInput by remember {
-        mutableStateOf(
-            if (mediaType == MessageType.IMAGE) {
-                if (mediaUris.size > 1) "📷 ${mediaUris.size} Family Photos" else "📷 Family Photo"
-            } else {
-                "🎥 Family Video"
-            }
-        )
-    }
+    var captionInput by remember { mutableStateOf("") }
 
     // Compression and Upload State
     var isProcessing by remember { mutableStateOf(false) }
     var progressPercent by remember { mutableStateOf(0) }
     var progressText by remember { mutableStateOf("Preparing media...") }
 
-    Dialog(onDismissRequest = { if (!isProcessing) onDismiss() }) {
+    Dialog(
+        onDismissRequest = { if (!isProcessing) onDismiss() },
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 8.dp
+            shape = RoundedCornerShape(22.dp),
+            color = Color(0xF20F1722),
+            border = BorderStroke(1.dp, Color(0x3322D3EE)),
+            shadowElevation = 18.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 440.dp)
+                .padding(horizontal = 16.dp, vertical = 20.dp)
         ) {
             Column(
                 modifier = Modifier
-                    .padding(20.dp)
-                    .fillMaxWidth(),
+                    .fillMaxWidth()
+                    .padding(18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // Header Row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = if (isProcessing) "Compressing & Uploading..." else if (mediaUris.size > 1) "Send ${mediaUris.size} Items" else "Media Preview",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF111B21)
-                        )
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .background(Color(0x1F22D3EE), RoundedCornerShape(10.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (mediaType == MessageType.VIDEO) Icons.Default.Videocam else Icons.Default.CameraAlt,
+                                contentDescription = null,
+                                tint = Color(0xFF22D3EE),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = if (isProcessing) {
+                                    "Uploading..."
+                                } else if (mediaUris.size > 1) {
+                                    "Send ${mediaUris.size} Items"
+                                } else if (mediaType == MessageType.VIDEO) {
+                                    "Video Preview"
+                                } else {
+                                    "Photo Preview"
+                                },
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFFF8FAFC)
+                            )
+                            Text(
+                                text = if (mediaType == MessageType.VIDEO) "Video attachment" else "Camera capture",
+                                fontSize = 11.sp,
+                                color = Color(0xFFA7B0BA)
+                            )
+                        }
+                    }
+
                     if (!isProcessing) {
                         IconButton(
                             onClick = onDismiss,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier
+                                .size(30.dp)
+                                .background(Color(0x1AFFFFFF), CircleShape)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "Close",
-                                tint = Color.Gray
+                                tint = Color(0xFFA7B0BA),
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 if (isProcessing) {
                     // Processing Overlay UI
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 16.dp),
+                            .padding(vertical = 20.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Box(
@@ -565,15 +606,15 @@ fun MediaPreviewAndTagDialog(
                             CircularProgressIndicator(
                                 progress = { progressPercent / 100f },
                                 modifier = Modifier.size(72.dp),
-                                color = WhatsappGreen,
-                                trackColor = WhatsappGreen.copy(alpha = 0.2f),
+                                color = Color(0xFF22D3EE),
+                                trackColor = Color(0x2422D3EE),
                                 strokeWidth = 6.dp
                             )
                             Text(
                                 text = "$progressPercent%",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 16.sp,
-                                color = WhatsappTeal
+                                color = Color(0xFF22D3EE)
                             )
                         }
 
@@ -583,7 +624,7 @@ fun MediaPreviewAndTagDialog(
                             text = progressText,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 13.sp,
-                            color = Color(0xFF111B21),
+                            color = Color(0xFFF8FAFC),
                             textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -594,34 +635,35 @@ fun MediaPreviewAndTagDialog(
                             progress = { progressPercent / 100f },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(8.dp)
-                                .clip(RoundedCornerShape(4.dp)),
-                            color = WhatsappGreen,
-                            trackColor = Color.LightGray.copy(alpha = 0.4f)
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(3.dp)),
+                            color = Color(0xFF22D3EE),
+                            trackColor = Color(0x2422D3EE)
                         )
                     }
                 } else {
                     // Media Preview Display
                     if (mediaUris.size > 1) {
                         LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(160.dp)
+                                .height(180.dp)
                         ) {
                             items(mediaUris) { uriStr ->
                                 Box(
                                     modifier = Modifier
-                                        .size(160.dp)
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .background(Color.Black.copy(alpha = 0.08f)),
+                                        .size(180.dp)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(Color(0xFF18212B))
+                                        .border(BorderStroke(1.dp, Color(0x2822D3EE)), RoundedCornerShape(14.dp)),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     AsyncImage(
                                         model = PhoneUtils.getCoilMediaModel(uriStr),
                                         contentDescription = "Photo Preview",
                                         contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxWidth().height(160.dp)
+                                        modifier = Modifier.fillMaxSize()
                                     )
                                 }
                             }
@@ -631,9 +673,10 @@ fun MediaPreviewAndTagDialog(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(180.dp)
+                                .height(230.dp)
                                 .clip(RoundedCornerShape(16.dp))
-                                .background(Color.Black.copy(alpha = 0.08f)),
+                                .background(Color(0xFF18212B))
+                                .border(BorderStroke(1.dp, Color(0x2822D3EE)), RoundedCornerShape(16.dp)),
                             contentAlignment = Alignment.Center
                         ) {
                             if (mediaType == MessageType.VIDEO) {
@@ -648,26 +691,27 @@ fun MediaPreviewAndTagDialog(
                                         bitmap = thumbBitmap!!.asImageBitmap(),
                                         contentDescription = "Media Preview",
                                         contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxWidth().height(180.dp)
+                                        modifier = Modifier.fillMaxSize()
                                     )
                                 } else {
                                     AsyncImage(
                                         model = PhoneUtils.getCoilMediaModel(singleUri),
                                         contentDescription = "Media Preview",
                                         contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxWidth().height(180.dp)
+                                        modifier = Modifier.fillMaxSize()
                                     )
                                 }
                                 Box(
                                     modifier = Modifier
-                                        .size(48.dp)
-                                        .background(Color.Black.copy(alpha = 0.6f), CircleShape),
+                                        .size(52.dp)
+                                        .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                                        .border(1.5.dp, Color(0xFF22D3EE), CircleShape),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.PlayArrow,
                                         contentDescription = "Play",
-                                        tint = Color.White,
+                                        tint = Color(0xFF22D3EE),
                                         modifier = Modifier.size(32.dp)
                                     )
                                 }
@@ -676,61 +720,47 @@ fun MediaPreviewAndTagDialog(
                                     model = PhoneUtils.getCoilMediaModel(singleUri),
                                     contentDescription = "Media Preview",
                                     contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxWidth().height(180.dp)
+                                    modifier = Modifier.fillMaxSize()
                                 )
                             }
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
-                    // Expiry Info Badge
-                    Card(
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F2F5)),
+                    // Modern 48-Hour Auto-Expiry Info Badge
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .border(1.dp, Color.LightGray.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+                            .background(Color(0x1222D3EE), RoundedCornerShape(12.dp))
+                            .border(BorderStroke(1.dp, Color(0x2422D3EE)), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(7.dp)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Info,
-                                    contentDescription = "Metadata",
-                                    tint = WhatsappTeal,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "48-HOUR RETENTION METADATA",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = WhatsappTeal
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "Auto-Expires At:",
-                                    fontSize = 11.sp,
-                                    color = Color(0xFFE53935),
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = formattedExpiry,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFE53935)
-                                )
-                            }
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = "Auto-Expiry",
+                                tint = Color(0xFF5EEAD4),
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = "48-Hour Auto-Expiry",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF5EEAD4)
+                            )
                         }
+                        Text(
+                            text = "Expires $formattedExpiry",
+                            fontSize = 11.sp,
+                            color = Color(0xFFA7B0BA),
+                            fontWeight = FontWeight.Medium
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -739,45 +769,80 @@ fun MediaPreviewAndTagDialog(
                     OutlinedTextField(
                         value = captionInput,
                         onValueChange = { captionInput = it },
-                        label = { Text("Add caption (optional)", fontSize = 12.sp) },
+                        placeholder = { Text("Add caption (optional)...", fontSize = 13.sp, color = Color(0xFF64748B)) },
                         singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(14.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = WhatsappGreen,
-                            unfocusedBorderColor = Color.LightGray
+                            focusedBorderColor = Color(0xFF22D3EE),
+                            unfocusedBorderColor = Color(0x2822D3EE),
+                            focusedTextColor = Color(0xFFF8FAFC),
+                            unfocusedTextColor = Color(0xFFF8FAFC),
+                            focusedContainerColor = Color(0xFF16202C),
+                            unfocusedContainerColor = Color(0xFF16202C),
+                            cursorColor = Color(0xFF22D3EE)
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Send Button
-                    Button(
-                        onClick = {
-                            for ((index, mediaUrl) in mediaUris.withIndex()) {
-                                val itemCaption = if (index == 0) captionInput else ""
-                                onSend(itemCaption, mediaType, mediaUrl)
-                            }
-                            onAllDone()
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = WhatsappGreen),
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
+                    // Action Buttons Row: Cancel + Send Button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Send,
-                            contentDescription = "Send",
-                            tint = Color.White,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (mediaUris.size > 1) "Send ${mediaUris.size} Items" else "Send Media",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
-                        )
+                        Button(
+                            onClick = onDismiss,
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF16202C),
+                                contentColor = Color(0xFFA7B0BA)
+                            ),
+                            border = BorderStroke(1.dp, Color(0x2822D3EE)),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp)
+                        ) {
+                            Text(
+                                text = "Cancel",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                val finalCaption = captionInput.trim()
+                                for ((index, mediaUrl) in mediaUris.withIndex()) {
+                                    val itemCaption = if (index == 0) finalCaption else ""
+                                    onSend(itemCaption, mediaType, mediaUrl)
+                                }
+                                onAllDone()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF22D3EE),
+                                contentColor = Color(0xFF080B10)
+                            ),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .weight(2f)
+                                .height(46.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send",
+                                tint = Color(0xFF080B10),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (mediaUris.size > 1) "Send (${mediaUris.size})" else "Send",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = Color(0xFF080B10)
+                            )
+                        }
                     }
                 }
             }
