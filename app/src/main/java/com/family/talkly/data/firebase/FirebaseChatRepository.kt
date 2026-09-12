@@ -32,8 +32,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicBoolean
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.Lifecycle
 
@@ -1717,6 +1719,10 @@ class FirebaseChatRepository private constructor(private val context: Context) {
     @Volatile
     private var isReconnectingMessages = false
 
+    private val catchUpMutex = Mutex()
+    private var catchUpJob: Job? = null
+    private val pendingCatchUpNeeded = AtomicBoolean(false)
+
     fun forceReconnectListeners(reason: String = "manual") {
         val now = System.currentTimeMillis()
         if (now - lastForceReconnectTimestamp < 2500L && isReconnectingMessages && reason != "manual") {
@@ -1740,9 +1746,12 @@ class FirebaseChatRepository private constructor(private val context: Context) {
 
         try {
             val isChannelActive = supabaseRealtimeChannel != null && supabaseRealtimeChannel?.status?.value == RealtimeChannel.Status.SUBSCRIBED
-            // If the channel is already connected and healthy for uid, skip tearing it down for non-manual triggers
+            // If the channel is already connected and healthy for uid, reuse it and trigger catch-up without tearing it down
             if (isChannelActive && currentSyncedUserId == uid && reason != "manual") {
-                Log.d(TAG, "forceReconnectListeners: Messaging channel is already SUBSCRIBED and healthy for uid=$uid, skipping redundant teardown (trigger: $reason)")
+                Log.d(TAG, "forceReconnectListeners: Messaging channel is already SUBSCRIBED and healthy for uid=$uid, reusing channel and running catch-up (trigger: $reason)")
+                triggerServerCatchUp(uid)
+                syncContactsFromSupabase(uid)
+                syncStatusesFromSupabase(uid)
                 return
             }
 
@@ -1772,18 +1781,35 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         )
 
         if (currentUserId.isNullOrBlank() || currentUserId == "self") {
-            Log.d(TAG, "DIAGNOSTIC startRealtimeMessageSync GUARD EXIT: currentUserId is blank or 'self' (uid='$currentUserId')")
+            Log.d(TAG, "DIAGNOSTIC startRealtimeMessageSync: Cleaning up message sync state for blank/null uid")
+            messageSyncJob?.cancel()
+            messageSyncJob = null
+            catchUpJob?.cancel()
+            catchUpJob = null
+            repositoryScope.launch(Dispatchers.IO) {
+                try {
+                    SupabaseMessagingService.unsubscribeChannel(supabaseRealtimeChannel)
+                    supabaseRealtimeChannel = null
+                    SupabaseMessagingService.unsubscribeChannel(supabaseStatusesRealtimeChannel)
+                    supabaseStatusesRealtimeChannel = null
+                } catch (_: Exception) {}
+            }
+            currentSyncedUserId = null
             return
         }
 
-        val isChannelActive = supabaseRealtimeChannel != null && supabaseRealtimeChannel?.status?.value == RealtimeChannel.Status.SUBSCRIBED
-        if (currentSyncedUserId == currentUserId && isChannelActive && !force) {
-            Log.d(TAG, "DIAGNOSTIC startRealtimeMessageSync GUARD EXIT: Channel already active/SUBSCRIBED for uid='$currentUserId' (force=$force)")
+        val isChannelActive = supabaseRealtimeChannel != null &&
+            supabaseRealtimeChannel?.status?.value == RealtimeChannel.Status.SUBSCRIBED &&
+            currentSyncedUserId == currentUserId
+
+        if (isChannelActive && !force) {
+            Log.d(TAG, "DIAGNOSTIC startRealtimeMessageSync: Channel already active/SUBSCRIBED for uid='$currentUserId' (force=$force). Reusing channel and ensuring catch-up.")
+            triggerServerCatchUp(currentUserId)
             return
         }
 
         if (currentSyncedUserId == currentUserId && messageSyncJob?.isActive == true && !force) {
-            Log.d(TAG, "DIAGNOSTIC startRealtimeMessageSync GUARD EXIT: Message sync job already in progress for uid='$currentUserId' (force=$force)")
+            Log.d(TAG, "DIAGNOSTIC startRealtimeMessageSync: Message sync job already in progress for uid='$currentUserId' (force=$force)")
             return
         }
 
@@ -1809,7 +1835,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                 Log.w(TAG, "Error cleaning previous realtime channel: ${e.localizedMessage}")
             }
 
-            // 2. Connect Supabase Realtime Channel with auto-reconnect listener FIRST to prevent race condition
+            // 2. Connect Supabase Realtime Channel FIRST to prevent race condition
             try {
                 Log.d(TAG, "DIAGNOSTIC messageSyncJob: Calling createMessagingRealtimeChannel for uid='$currentUserId'")
                 supabaseRealtimeChannel = SupabaseMessagingService.createMessagingRealtimeChannel(
@@ -1832,6 +1858,8 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                             RealtimeChannel.Status.SUBSCRIBED -> {
                                 Log.i(TAG, "DIAGNOSTIC Messaging Realtime channel successfully SUBSCRIBED for uid='$currentUserId'")
                                 lastMessageSubscribedTimestamp = System.currentTimeMillis()
+                                // Run server catch-up whenever channel becomes SUBSCRIBED to recover any missed messages
+                                triggerServerCatchUp(currentUserId)
                             }
                             RealtimeChannel.Status.SUBSCRIBING -> {
                                 Log.d(TAG, "DIAGNOSTIC Messaging Realtime channel SUBSCRIBING in progress for uid='$currentUserId'")
@@ -1867,24 +1895,52 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                 Log.e(TAG, "DIAGNOSTIC Error connecting Supabase Realtime messaging channel: ${e.localizedMessage}", e)
             }
 
-            // 3. Server catch-up via PostgREST pagination (safe timestamp overlap + message ID deduplication)
+            // 3. Trigger server catch-up AFTER Realtime subscription is established
+            triggerServerCatchUp(currentUserId)
+        }
+
+        setupFirestoreMessageRequestsListener(currentUserId)
+    }
+
+    fun triggerServerCatchUp(targetUserId: String) {
+        if (targetUserId.isBlank() || targetUserId == "self") return
+        if (currentSyncedUserId != targetUserId) return
+
+        if (catchUpJob?.isActive == true) {
+            Log.d(TAG, "DIAGNOSTIC triggerServerCatchUp: Catch-up already in progress for $targetUserId, queueing next pass")
+            pendingCatchUpNeeded.set(true)
+            return
+        }
+
+        catchUpJob = repositoryScope.launch(Dispatchers.IO) {
+            do {
+                pendingCatchUpNeeded.set(false)
+                performServerCatchUp(targetUserId)
+            } while (pendingCatchUpNeeded.getAndSet(false) && currentSyncedUserId == targetUserId && isActive)
+        }
+    }
+
+    private suspend fun performServerCatchUp(currentUserId: String) {
+        if (currentSyncedUserId != currentUserId) return
+        catchUpMutex.withLock {
+            if (currentSyncedUserId != currentUserId) return
             try {
-                Log.d(TAG, "DIAGNOSTIC messageSyncJob: Starting server catch-up for uid='$currentUserId'")
+                Log.d(TAG, "DIAGNOSTIC performServerCatchUp: Starting server catch-up for uid='$currentUserId'")
                 val pageSize = 100L
-                val maxCatchUpMessages = 1000
+                val maxCatchUpMessages = 2000
                 val allCatchUpMessages = mutableListOf<SupabaseMessage>()
                 val seenMessageIds = mutableSetOf<String>()
                 var beforeCursor: String? = null
 
                 val locallyKnownMessageIds = _messagesMap.value.values.flatten().map { it.id }.toHashSet()
 
-                while (allCatchUpMessages.size < maxCatchUpMessages) {
+                while (allCatchUpMessages.size < maxCatchUpMessages && currentSyncedUserId == currentUserId) {
                     val page = SupabaseMessagingService.fetchRecentMessagesForUser(
                         currentUserId = currentUserId,
                         limit = pageSize,
                         beforeTimestampIso = beforeCursor
                     )
-                    if (page.isEmpty()) break
+                    if (page.isEmpty() || currentSyncedUserId != currentUserId) break
 
                     val newInThisBatch = page.filter { seenMessageIds.add(it.id) }
                     if (newInThisBatch.isEmpty()) {
@@ -1893,8 +1949,14 @@ class FirebaseChatRepository private constructor(private val context: Context) {
 
                     allCatchUpMessages.addAll(newInThisBatch)
 
-                    // If every message in this batch is already known locally, we have bridged into previously synced history
-                    if (locallyKnownMessageIds.isNotEmpty() && newInThisBatch.all { locallyKnownMessageIds.contains(it.id) }) {
+                    // Check if this batch has reached known local messages boundary
+                    val oldestInBatch = newInThisBatch.lastOrNull()
+                    val hasReachedKnownBoundary = locallyKnownMessageIds.isNotEmpty() && (
+                        (oldestInBatch != null && locallyKnownMessageIds.contains(oldestInBatch.id)) ||
+                        newInThisBatch.all { locallyKnownMessageIds.contains(it.id) }
+                    )
+
+                    if (hasReachedKnownBoundary) {
                         Log.d(TAG, "DIAGNOSTIC Catch-up reached known local messages boundary with ${allCatchUpMessages.size} messages")
                         break
                     }
@@ -1911,17 +1973,24 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                     beforeCursor = nextCursor
                 }
 
-                Log.d(TAG, "DIAGNOSTIC messageSyncJob: Recovered ${allCatchUpMessages.size} catch-up messages via PostgREST")
+                if (currentSyncedUserId != currentUserId) {
+                    Log.d(TAG, "DIAGNOSTIC Catch-up aborted: user changed from $currentUserId to $currentSyncedUserId")
+                    return
+                }
+
+                Log.d(TAG, "DIAGNOSTIC performServerCatchUp: Recovered ${allCatchUpMessages.size} catch-up messages via PostgREST")
 
                 if (allCatchUpMessages.isNotEmpty()) {
                     val entitiesToInsert = mutableListOf<ChatMessageEntity>()
                     _messagesMap.update { current ->
+                        if (currentSyncedUserId != currentUserId) return@update current
                         val currentMap = current.toMutableMap()
                         allCatchUpMessages.forEach { sMsg ->
                             val chatMsg = sMsg.toChatMessage(currentUserId)
                             val rawOtherPartyId = if (chatMsg.senderId == "self" || chatMsg.senderId == currentUserId) chatMsg.receiverId else chatMsg.senderId
                             if (rawOtherPartyId.isNotBlank()) {
                                 val canonicalOther = getCanonicalMemberId(rawOtherPartyId)
+                                ensureContactInChatList(canonicalOther, fallbackName = chatMsg.senderName)
                                 val list = (currentMap[canonicalOther] ?: emptyList()).toMutableList()
                                 val existingIndex = list.indexOfFirst { it.id == chatMsg.id }
 
@@ -2019,7 +2088,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                         currentMap
                     }
                     saveMessagesToDisk()
-                    if (entitiesToInsert.isNotEmpty()) {
+                    if (entitiesToInsert.isNotEmpty() && currentSyncedUserId == currentUserId) {
                         try {
                             database.chatMessageDao().insertMessages(entitiesToInsert)
                         } catch (e: Exception) {
@@ -2035,8 +2104,6 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                 isInitialMessageSyncDone = true
             }
         }
-
-        setupFirestoreMessageRequestsListener(currentUserId)
     }
 
     private fun handleIncomingSupabaseMessageAction(action: io.github.jan.supabase.realtime.PostgresAction, currentUserId: String) {
@@ -2360,12 +2427,20 @@ class FirebaseChatRepository private constructor(private val context: Context) {
 
     fun resetSessionOnLogout() {
         try {
-            repositoryScope.launch(Dispatchers.IO) {
-                SupabaseMessagingService.unsubscribeChannel(supabaseRealtimeChannel)
-                supabaseRealtimeChannel = null
-            }
-
+            messageSyncJob?.cancel()
+            messageSyncJob = null
+            catchUpJob?.cancel()
+            catchUpJob = null
             currentSyncedUserId = null
+
+            repositoryScope.launch(Dispatchers.IO) {
+                try {
+                    SupabaseMessagingService.unsubscribeChannel(supabaseRealtimeChannel)
+                    supabaseRealtimeChannel = null
+                    SupabaseMessagingService.unsubscribeChannel(supabaseStatusesRealtimeChannel)
+                    supabaseStatusesRealtimeChannel = null
+                } catch (_: Exception) {}
+            }
             _messagesMap.update { emptyMap() }
             _familyMembers.value = emptyList()
             _statuses.value = emptyList()

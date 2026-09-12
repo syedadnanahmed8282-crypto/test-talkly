@@ -108,6 +108,8 @@ fun MediaAttachmentDialog(
     var previewMediaType by remember { mutableStateOf(MessageType.IMAGE) }
 
     var isVisible by remember { mutableStateOf(false) }
+    var showGalleryPicker by remember { mutableStateOf(false) }
+    var initialGalleryTab by remember { mutableStateOf(GalleryTab.ALL) }
 
     LaunchedEffect(Unit) {
         isVisible = true
@@ -118,25 +120,6 @@ fun MediaAttachmentDialog(
             isVisible = false
             delay(160)
             onDismiss()
-        }
-    }
-
-    // System Media Picker Launchers for Multiple Media
-    val photoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents()
-    ) { uris: List<Uri> ->
-        if (uris.isNotEmpty()) {
-            previewMediaUris = uris.map { it.toString() }
-            previewMediaType = MessageType.IMAGE
-        }
-    }
-
-    val videoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents()
-    ) { uris: List<Uri> ->
-        if (uris.isNotEmpty()) {
-            previewMediaUris = uris.map { it.toString() }
-            previewMediaType = MessageType.VIDEO
         }
     }
 
@@ -156,6 +139,20 @@ fun MediaAttachmentDialog(
                 e.printStackTrace()
             }
         }
+    }
+
+    if (showGalleryPicker) {
+        TalklyGalleryPicker(
+            initialTab = initialGalleryTab,
+            onDismiss = {
+                showGalleryPicker = false
+            },
+            onMediaSelected = { uris, type ->
+                showGalleryPicker = false
+                previewMediaUris = uris
+                previewMediaType = type
+            }
+        )
     }
 
     if (previewMediaUris != null && previewMediaUris!!.isNotEmpty()) {
@@ -285,7 +282,8 @@ fun MediaAttachmentDialog(
                                     iconBg = Color(0x1F22D3EE),
                                     modifier = Modifier.weight(1f),
                                     onClick = {
-                                        photoPickerLauncher.launch("image/*")
+                                        initialGalleryTab = GalleryTab.ALL
+                                        showGalleryPicker = true
                                     }
                                 )
 
@@ -321,7 +319,8 @@ fun MediaAttachmentDialog(
                                 iconTint = Color(0xFF0EA5A4),
                                 iconBg = Color(0x1F0EA5A4),
                                 onClick = {
-                                    videoPickerLauncher.launch("video/*")
+                                    initialGalleryTab = GalleryTab.VIDEOS
+                                    showGalleryPicker = true
                                 }
                             )
 

@@ -284,6 +284,7 @@ object SupabaseMessagingService {
                         }
                     }
                     order("created_at", Order.DESCENDING)
+                    order("id", Order.DESCENDING)
                     limit(limit)
                 }
                 .decodeList<SupabaseMessage>()
