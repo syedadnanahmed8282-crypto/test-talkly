@@ -153,7 +153,7 @@ dependencies {
 
   // Firebase Cloud Messaging (FCM push delivery only)
   implementation(libs.firebase.messaging)
-  implementation("io.agora.rtc:full-rtc-basic:4.3.0")
+  implementation("io.agora.rtc:full-rtc-basic:4.3.2")
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

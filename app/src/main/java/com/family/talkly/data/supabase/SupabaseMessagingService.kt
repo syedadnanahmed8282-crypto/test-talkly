@@ -289,9 +289,7 @@ object SupabaseMessagingService {
                 }
                 .decodeList<SupabaseMessage>()
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) {
-                return@withContext emptyList()
-            }
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.w(TAG, "Error fetching recent messages: ${e.localizedMessage}")
             emptyList()
         }

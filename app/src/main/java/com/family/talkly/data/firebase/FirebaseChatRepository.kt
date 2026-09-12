@@ -1927,7 +1927,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             try {
                 Log.d(TAG, "DIAGNOSTIC performServerCatchUp: Starting server catch-up for uid='$currentUserId'")
                 val pageSize = 100L
-                val maxCatchUpMessages = 2000
+                val maxCatchUpMessages = 1000
                 val allCatchUpMessages = mutableListOf<SupabaseMessage>()
                 val seenMessageIds = mutableSetOf<String>()
                 var beforeCursor: String? = null
@@ -1947,7 +1947,18 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                         break
                     }
 
-                    allCatchUpMessages.addAll(newInThisBatch)
+                    val allowedCount = maxCatchUpMessages - allCatchUpMessages.size
+                    val messagesToAdd = if (newInThisBatch.size > allowedCount) {
+                        newInThisBatch.take(allowedCount)
+                    } else {
+                        newInThisBatch
+                    }
+                    allCatchUpMessages.addAll(messagesToAdd)
+
+                    if (allCatchUpMessages.size >= maxCatchUpMessages) {
+                        Log.d(TAG, "DIAGNOSTIC Catch-up reached maximum limit of $maxCatchUpMessages messages")
+                        break
+                    }
 
                     // Check if this batch has reached known local messages boundary
                     val oldestInBatch = newInThisBatch.lastOrNull()
@@ -1968,6 +1979,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                     val oldestInPage = page.lastOrNull()
                     val nextCursor = oldestInPage?.createdAt
                     if (nextCursor.isNullOrBlank() || nextCursor == beforeCursor) {
+                        Log.d(TAG, "DIAGNOSTIC Catch-up cursor reached end or cannot advance further ($nextCursor), stopping pagination")
                         break
                     }
                     beforeCursor = nextCursor
