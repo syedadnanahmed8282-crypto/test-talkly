@@ -81,8 +81,34 @@ object PhoneUtils {
     }
 
     /**
-     * Decodes Base64 data strings or returns URL/Uri for Coil AsyncImage model.
-     * Prevents blank images when media is sent as Base64 fallback or data URI across devices.
+     * In-memory LRU cache for video thumbnails to prevent UI flickering or repeated frame extraction.
+     */
+    private val videoThumbnailMemoryCache = object : android.util.LruCache<String, Bitmap>(
+        (Runtime.getRuntime().maxMemory() / 1024 / 8).toInt().coerceAtLeast(2048)
+    ) {
+        override fun sizeOf(key: String, value: Bitmap): Int {
+            return (value.byteCount / 1024).coerceAtLeast(1)
+        }
+    }
+
+    fun getCachedVideoThumbnail(key: String?): Bitmap? {
+        if (key.isNullOrBlank()) return null
+        return synchronized(videoThumbnailMemoryCache) {
+            videoThumbnailMemoryCache.get(key)
+        }
+    }
+
+    fun cacheVideoThumbnail(key: String?, bitmap: Bitmap?) {
+        if (key.isNullOrBlank() || bitmap == null) return
+        synchronized(videoThumbnailMemoryCache) {
+            videoThumbnailMemoryCache.put(key, bitmap)
+        }
+    }
+
+    /**
+     * Decodes Base64 data strings or returns stable URL/Uri/File for Coil AsyncImage model.
+     * Prevents blank images when media is sent as Base64 fallback or data URI across devices,
+     * and avoids dynamic cache-busting so Coil's memory and disk cache remain hit across recompositions.
      */
     fun getCoilMediaModel(mediaUrl: String?): Any? {
         if (mediaUrl.isNullOrBlank()) return null
@@ -95,18 +121,27 @@ object PhoneUtils {
                 mediaUrl
             }
         }
-        return appendCacheBuster(mediaUrl) ?: mediaUrl
+        if (mediaUrl.startsWith("content://") || mediaUrl.startsWith("file://")) {
+            return Uri.parse(mediaUrl)
+        }
+        if (mediaUrl.startsWith("/")) {
+            return File(mediaUrl)
+        }
+        return mediaUrl
     }
 
     /**
-     * Extracts a frame thumbnail from video URL, Uri or base64 stream safely.
+     * Extracts a frame thumbnail from video URL, Uri or base64 stream safely,
+     * leveraging the in-memory thumbnail cache for immediate frame-accurate presentation.
      */
     fun getVideoThumbnail(context: Context, videoUrl: String?): Bitmap? {
         if (videoUrl.isNullOrBlank()) return null
+        getCachedVideoThumbnail(videoUrl)?.let { return it }
+
         val cachedFile = VideoCacheManager.getCachedVideoFile(context, videoUrl)
         if (cachedFile != null && cachedFile.exists()) {
             val retriever = MediaMetadataRetriever()
-            return try {
+            val frame = try {
                 retriever.setDataSource(cachedFile.absolutePath)
                 retriever.frameAtTime
             } catch (e: Throwable) {
@@ -114,6 +149,10 @@ object PhoneUtils {
             } finally {
                 try { retriever.release() } catch (_: Exception) {}
             }
+            if (frame != null) {
+                cacheVideoThumbnail(videoUrl, frame)
+            }
+            return frame
         }
 
         val retriever = MediaMetadataRetriever()
@@ -136,6 +175,9 @@ object PhoneUtils {
                 retriever.setDataSource(videoUrl)
             }
             val frame = retriever.frameAtTime
+            if (frame != null) {
+                cacheVideoThumbnail(videoUrl, frame)
+            }
             frame
         } catch (e: Throwable) {
             Log.w("PhoneUtils", "Error getting video thumbnail: ${e.localizedMessage}")

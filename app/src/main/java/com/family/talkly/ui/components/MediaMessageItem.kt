@@ -47,12 +47,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.compose.rememberAsyncImagePainter
 import com.family.talkly.data.models.ChatMessage
 import com.family.talkly.data.models.MessageType
 import com.family.talkly.ui.theme.ExpiredBgLight
@@ -64,6 +66,56 @@ import kotlinx.coroutines.withContext
 private val TalklyCyan = Color(0xFF22D3EE)
 private val TalklyCard = Color(0xFF18212B)
 private val TalklyElevated = Color(0xFF222F3E)
+
+/**
+ * Renders an image message stably across the upload lifecycle (local URI -> compressed file -> remote URL).
+ * Never blanks or flickers when mediaUrl updates: holds the last valid rendered painter as a persistent
+ * visual until the new image model successfully finishes loading. Crossfade is disabled to eliminate flash.
+ */
+@Composable
+private fun StableMediaImage(
+    mediaUrl: String?,
+    messageId: String,
+    contentDescription: String?,
+    contentScale: ContentScale,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var lastValidPainter by remember(messageId) {
+        mutableStateOf<Painter?>(null)
+    }
+
+    val model = remember(mediaUrl) {
+        com.family.talkly.util.PhoneUtils.getCoilMediaModel(mediaUrl)
+    }
+
+    val imagePainter = rememberAsyncImagePainter(
+        model = coil.request.ImageRequest.Builder(context)
+            .data(model)
+            .crossfade(false)
+            .build(),
+        placeholder = lastValidPainter,
+        error = lastValidPainter
+    )
+
+    val state = imagePainter.state
+    if (state is coil.compose.AsyncImagePainter.State.Success) {
+        lastValidPainter = state.painter
+    }
+
+    val painterToDraw = if (state is coil.compose.AsyncImagePainter.State.Success) {
+        imagePainter
+    } else {
+        lastValidPainter ?: imagePainter
+    }
+
+    Image(
+        painter = painterToDraw,
+        contentDescription = contentDescription,
+        contentScale = contentScale,
+        modifier = modifier
+    )
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -79,12 +131,29 @@ fun MediaMessageItem(
     val context = LocalContext.current
     val isExpired = message.isMediaExpired(simulatedTimeOffsetMs)
 
-    var videoThumbnail by remember(message.mediaUrl) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    // Preserve thumbnail across mediaUrl lifecycle (local -> compressed -> remote)
+    var videoThumbnail by remember(message.id) {
+        mutableStateOf<android.graphics.Bitmap?>(
+            com.family.talkly.util.PhoneUtils.getCachedVideoThumbnail(message.id)
+                ?: com.family.talkly.util.PhoneUtils.getCachedVideoThumbnail(message.mediaUrl)
+        )
+    }
 
     LaunchedEffect(message.mediaUrl, message.messageType) {
         if (message.messageType == MessageType.VIDEO && !message.mediaUrl.isNullOrBlank()) {
-            withContext(Dispatchers.IO) {
-                videoThumbnail = com.family.talkly.util.PhoneUtils.getVideoThumbnail(context, message.mediaUrl)
+            if (videoThumbnail == null) {
+                withContext(Dispatchers.IO) {
+                    val extracted = com.family.talkly.util.PhoneUtils.getVideoThumbnail(context, message.mediaUrl)
+                    if (extracted != null) {
+                        com.family.talkly.util.PhoneUtils.cacheVideoThumbnail(message.id, extracted)
+                        com.family.talkly.util.PhoneUtils.cacheVideoThumbnail(message.mediaUrl, extracted)
+                        videoThumbnail = extracted
+                    }
+                }
+            } else {
+                // Link current mediaUrl to already-cached thumbnail to avoid repeated extractions
+                com.family.talkly.util.PhoneUtils.cacheVideoThumbnail(message.id, videoThumbnail)
+                com.family.talkly.util.PhoneUtils.cacheVideoThumbnail(message.mediaUrl, videoThumbnail)
             }
         }
     }
@@ -165,21 +234,35 @@ fun MediaMessageItem(
                             }
                         )
                 ) {
-                if (message.messageType == MessageType.VIDEO && videoThumbnail != null) {
-                    Image(
-                        bitmap = videoThumbnail!!.asImageBitmap(),
-                        contentDescription = message.textContent,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .widthIn(min = 160.dp, max = 280.dp)
-                            .heightIn(min = 140.dp, max = 310.dp)
-                    )
+                if (message.messageType == MessageType.VIDEO) {
+                    if (videoThumbnail != null) {
+                        Image(
+                            bitmap = videoThumbnail!!.asImageBitmap(),
+                            contentDescription = message.textContent,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .widthIn(min = 160.dp, max = 280.dp)
+                                .heightIn(min = 140.dp, max = 310.dp)
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .widthIn(min = 160.dp, max = 280.dp)
+                                .heightIn(min = 140.dp, max = 310.dp)
+                                .background(Color(0xFF080B10)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                color = TalklyCyan.copy(alpha = 0.6f),
+                                modifier = Modifier.size(28.dp),
+                                strokeWidth = 2.dp
+                            )
+                        }
+                    }
                 } else {
-                    AsyncImage(
-                        model = coil.request.ImageRequest.Builder(LocalContext.current)
-                            .data(com.family.talkly.util.PhoneUtils.getCoilMediaModel(message.mediaUrl))
-                            .crossfade(true)
-                            .build(),
+                    StableMediaImage(
+                        mediaUrl = message.mediaUrl,
+                        messageId = message.id,
                         contentDescription = message.textContent,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
@@ -623,29 +706,57 @@ private fun MediaTile(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var videoThumb by remember(message.mediaUrl) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var videoThumb by remember(message.id) {
+        mutableStateOf<android.graphics.Bitmap?>(
+            com.family.talkly.util.PhoneUtils.getCachedVideoThumbnail(message.id)
+                ?: com.family.talkly.util.PhoneUtils.getCachedVideoThumbnail(message.mediaUrl)
+        )
+    }
     LaunchedEffect(message.mediaUrl, message.messageType) {
         if (message.messageType == MessageType.VIDEO && !message.mediaUrl.isNullOrBlank()) {
-            withContext(Dispatchers.IO) {
-                videoThumb = com.family.talkly.util.PhoneUtils.getVideoThumbnail(context, message.mediaUrl)
+            if (videoThumb == null) {
+                withContext(Dispatchers.IO) {
+                    val extracted = com.family.talkly.util.PhoneUtils.getVideoThumbnail(context, message.mediaUrl)
+                    if (extracted != null) {
+                        com.family.talkly.util.PhoneUtils.cacheVideoThumbnail(message.id, extracted)
+                        com.family.talkly.util.PhoneUtils.cacheVideoThumbnail(message.mediaUrl, extracted)
+                        videoThumb = extracted
+                    }
+                }
+            } else {
+                com.family.talkly.util.PhoneUtils.cacheVideoThumbnail(message.id, videoThumb)
+                com.family.talkly.util.PhoneUtils.cacheVideoThumbnail(message.mediaUrl, videoThumb)
             }
         }
     }
 
     Box(modifier = modifier.fillMaxSize().background(Color(0xFF080B10))) {
-        if (message.messageType == MessageType.VIDEO && videoThumb != null) {
-            Image(
-                bitmap = videoThumb!!.asImageBitmap(),
-                contentDescription = message.textContent,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
+        if (message.messageType == MessageType.VIDEO) {
+            if (videoThumb != null) {
+                Image(
+                    bitmap = videoThumb!!.asImageBitmap(),
+                    contentDescription = message.textContent,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFF080B10)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        color = TalklyCyan.copy(alpha = 0.6f),
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp
+                    )
+                }
+            }
         } else {
-            AsyncImage(
-                model = coil.request.ImageRequest.Builder(LocalContext.current)
-                    .data(com.family.talkly.util.PhoneUtils.getCoilMediaModel(message.mediaUrl))
-                    .crossfade(true)
-                    .build(),
+            StableMediaImage(
+                mediaUrl = message.mediaUrl,
+                messageId = message.id,
                 contentDescription = message.textContent,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
