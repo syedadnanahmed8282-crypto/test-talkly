@@ -180,6 +180,8 @@ import com.family.talkly.ui.components.MediaGroupCluster
 import com.family.talkly.ui.components.MediaMessageItem
 import com.family.talkly.ui.components.MessageLoadingState
 import com.family.talkly.ui.components.OnlinePresenceIndicator
+import com.family.talkly.ui.components.ParticleDissolveWrapper
+import com.family.talkly.ui.components.rememberParticleDissolveManager
 import com.family.talkly.ui.components.WallpaperSelectionDialog
 import com.family.talkly.util.AudioRecorder
 import com.family.talkly.util.MediaCompressorAndUploader
@@ -312,6 +314,7 @@ fun ChatDetailScreen(
     var selectedMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showBulkDeleteDialog by remember { mutableStateOf(false) }
     val isSelectionMode = selectedMessageIds.isNotEmpty()
+    val dissolveManager = rememberParticleDissolveManager()
 
     // Intercept back presses to close overlays or go back to chat list
     BackHandler(enabled = true) {
@@ -411,7 +414,9 @@ fun ChatDetailScreen(
 
     val combinedMessages = remember(activeMessages, localPendingMessages) {
         val serverIds = activeMessages.map { it.id }.toSet()
-        (activeMessages + localPendingMessages.filter { it.id !in serverIds }).sortedBy { it.timestamp }
+        (activeMessages + localPendingMessages.filter { it.id !in serverIds })
+            .distinctBy { it.id }
+            .sortedBy { it.timestamp }
     }
 
     val displayedMessages = remember(combinedMessages, isSearchActive, searchQuery) {
@@ -982,9 +987,12 @@ fun ChatDetailScreen(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .clickable {
-                                                onDeleteForYou(selectedMsg.id)
+                                                val msgId = selectedMsg.id
                                                 reactionDialogMessage = null
-                                                Toast.makeText(context, "Deleted for you", Toast.LENGTH_SHORT).show()
+                                                dissolveManager.startDissolve(setOf(msgId)) {
+                                                    onDeleteForYou(msgId)
+                                                    Toast.makeText(context, "Deleted for you", Toast.LENGTH_SHORT).show()
+                                                }
                                             }
                                     ) {
                                         Row(
@@ -1016,12 +1024,15 @@ fun ChatDetailScreen(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clickable {
-                                                    val success = onDeleteForEveryone(selectedMsg.id)
+                                                    val msgId = selectedMsg.id
                                                     reactionDialogMessage = null
-                                                    if (success) {
-                                                        Toast.makeText(context, "Deleted for everyone", Toast.LENGTH_SHORT).show()
-                                                    } else {
-                                                        Toast.makeText(context, "Could not delete for everyone", Toast.LENGTH_SHORT).show()
+                                                    dissolveManager.startDissolve(setOf(msgId)) {
+                                                        val success = onDeleteForEveryone(msgId)
+                                                        if (success) {
+                                                            Toast.makeText(context, "Deleted for everyone", Toast.LENGTH_SHORT).show()
+                                                        } else {
+                                                            Toast.makeText(context, "Could not delete for everyone", Toast.LENGTH_SHORT).show()
+                                                        }
                                                     }
                                                 }
                                         ) {
@@ -1162,16 +1173,18 @@ fun ChatDetailScreen(
                                         val idsToDelete = selectedMessageIds.toSet()
                                         showBulkDeleteDialog = false
                                         selectedMessageIds = emptySet()
-                                        if (onDeleteMessagesForYou != null) {
-                                            onDeleteMessagesForYou(idsToDelete)
-                                        } else {
-                                            idsToDelete.forEach { onDeleteForYou(it) }
+                                        dissolveManager.startDissolve(idsToDelete) {
+                                            if (onDeleteMessagesForYou != null) {
+                                                onDeleteMessagesForYou(idsToDelete)
+                                            } else {
+                                                idsToDelete.forEach { onDeleteForYou(it) }
+                                            }
+                                            Toast.makeText(
+                                                context,
+                                                if (idsToDelete.size == 1) "Deleted for you" else "Deleted ${idsToDelete.size} messages for you",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
                                         }
-                                        Toast.makeText(
-                                            context,
-                                            if (idsToDelete.size == 1) "Deleted for you" else "Deleted ${idsToDelete.size} messages for you",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
                                     }
                             ) {
                                 Row(
@@ -1206,16 +1219,18 @@ fun ChatDetailScreen(
                                             val ownIdsToDelete = currentOwnMsgs.map { it.id }.toSet()
                                             showBulkDeleteDialog = false
                                             selectedMessageIds = emptySet()
-                                            if (onDeleteMessagesForEveryone != null) {
-                                                onDeleteMessagesForEveryone(ownIdsToDelete)
-                                            } else {
-                                                ownIdsToDelete.forEach { onDeleteForEveryone(it) }
+                                            dissolveManager.startDissolve(ownIdsToDelete) {
+                                                if (onDeleteMessagesForEveryone != null) {
+                                                    onDeleteMessagesForEveryone(ownIdsToDelete)
+                                                } else {
+                                                    ownIdsToDelete.forEach { onDeleteForEveryone(it) }
+                                                }
+                                                Toast.makeText(
+                                                    context,
+                                                    if (ownIdsToDelete.size == 1) "Deleted for everyone" else "Deleted ${ownIdsToDelete.size} messages for everyone",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
                                             }
-                                            Toast.makeText(
-                                                context,
-                                                if (ownIdsToDelete.size == 1) "Deleted for everyone" else "Deleted ${ownIdsToDelete.size} messages for everyone",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
                                         }
                                 ) {
                                     Row(
@@ -1486,7 +1501,7 @@ fun ChatDetailScreen(
                 }
             },
             text = {
-                val starredList = activeMessages.filter { it.isStarred }
+                val starredList = combinedMessages.filter { it.isStarred }
                 if (starredList.isEmpty()) {
                     Text(
                         "No starred messages in this chat yet.\n\nLong-press any message and tap Star ⭐ to save important notes!",
@@ -2689,8 +2704,19 @@ fun ChatDetailScreen(
                                         }
                                     }
 
-                                    Box {
-                                        when (item) {
+                                    val dissolveProgress = when (item) {
+                                        is ChatUiItem.SingleMessage -> dissolveManager.getProgress(item.message.id)
+                                        is ChatUiItem.MediaCluster -> item.messages.firstNotNullOfOrNull { dissolveManager.getProgress(it.id) }
+                                    }
+
+                                    ParticleDissolveWrapper(
+                                        progress = dissolveProgress,
+                                        isSelf = isSelf,
+                                        messageType = msg.messageType,
+                                        hasMedia = hasMedia
+                                    ) {
+                                        Box {
+                                            when (item) {
                                             is ChatUiItem.MediaCluster -> {
                                                 MediaGroupCluster(
                                                     messages = item.messages,
@@ -3272,6 +3298,7 @@ fun ChatDetailScreen(
                                                 }
                                             }
                                         }
+                                    }
                                     }
                                 }
                             }
