@@ -2,7 +2,7 @@ package com.family.talkly.ui.components
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
@@ -63,11 +63,11 @@ data class DisintegrateParticle(
     val width: Float,
     val height: Float,
     val color: Color,
-    val detachProgress: Float, // Progress (0.05..0.65) when this particle detaches
+    val detachProgress: Float, // Progress when this particle detaches
     val velocityX: Float,      // Outward drift velocity
     val liftY: Float,          // Initial upward flutter before gravity takes over
     val gravityY: Float,       // Downward gravity drift
-    val maxRotation: Float     // Subtle rotation in degrees (-35..+35)
+    val maxRotation: Float     // Subtle rotation in degrees (within ±15°)
 )
 
 /**
@@ -102,15 +102,15 @@ class ParticleDissolveManager(private val coroutineScope: CoroutineScope) {
                     animatables[id] = Animatable(0f)
                 }
 
-                // Run animations in parallel over 800ms
+                // Run animations in parallel over ~1350ms with smooth progressive easing
                 val jobs = messageIds.map { id ->
                     async {
                         val anim = animatables[id] ?: return@async
                         anim.animateTo(
                             targetValue = 1f,
                             animationSpec = tween(
-                                durationMillis = 800,
-                                easing = FastOutSlowInEasing
+                                durationMillis = 1350,
+                                easing = CubicBezierEasing(0.35f, 0.0f, 0.25f, 1.0f)
                             )
                         )
                     }
@@ -152,7 +152,7 @@ fun rememberParticleDissolveManager(): ParticleDissolveManager {
 }
 
 /**
- * Generates an adaptive set of rectangular/square pixel fragments that visually mirror
+ * Generates an adaptive, dense set of micro-pixel fragments (150 to 800) that visually mirror
  * the message or media surface.
  */
 fun generateDisintegrateParticles(
@@ -169,78 +169,110 @@ fun generateDisintegrateParticles(
     val heightDp = with(density) { height.toDp().value }
     val baseArea = widthDp * heightDp
 
-    // Adaptive particle count based on visible message dimensions (36 to 110 fragments)
-    val count = (baseArea / 160f).toInt().coerceIn(36, 110)
+    // Adaptive particle count based on visible message surface size:
+    // - Small text bubble: ~150–250 particles
+    // - Normal image/message: ~300–500 particles
+    // - Large media/message/cluster: ~500–800 particles
+    val count = when {
+        baseArea < 5000f -> (150f + (baseArea / 5000f) * 70f).toInt().coerceIn(150, 220)
+        baseArea < 25000f -> (220f + ((baseArea - 5000f) / 20000f) * 130f).toInt().coerceIn(220, 350)
+        baseArea < 55000f -> (350f + ((baseArea - 25000f) / 30000f) * 170f).toInt().coerceIn(350, 520)
+        else -> (520f + ((baseArea - 55000f) / 40000f) * 280f).toInt().coerceIn(520, 800)
+    }
 
     val palette = when {
         hasMedia -> listOf(
             TalklySkyBlue, TalklyCyan, TalklyAqua,
             TalklyMidBlue, TalklyDarkBlue,
             Color(0xFF334155), Color(0xFF475569), Color(0xFF64748B),
-            Color(0xFF94A3B8), TalklyTextPrimary
+            Color(0xFF94A3B8), TalklyTextPrimary, Color(0xFF020617),
+            Color(0xFFE0F2FE), Color(0xFF1E293B)
         )
         messageType == MessageType.VOICE_NOTE -> listOf(
             TalklyCyan, TalklyAqua, TalklyMint,
-            TalklySkyBlue, TalklyElevated, TalklyTextPrimary
+            TalklySkyBlue, TalklyElevated, TalklyTextPrimary,
+            Color(0xFF18212B), Color(0xFF334155), TalklyTextSecondary
         )
         isSelf -> listOf(
             TalklyCyan, TalklyAqua, TalklyMint,
             TalklySkyBlue, Color(0xFF06B6D4),
-            TalklyTextPrimary, Color(0xFFE2E8F0)
+            TalklyTextPrimary, Color(0xFFE2E8F0), Color(0xFFCBD5E1),
+            Color(0xFF0F766E), Color(0xFF14B8A6)
         )
         else -> listOf(
             TalklyCard, TalklyElevated, TalklyMidBlue,
             Color(0xFF253342), TalklyTextPrimary,
-            TalklyTextSecondary, TalklyCyan.copy(alpha = 0.7f)
+            TalklyTextSecondary, Color(0xFF334155), Color(0xFF475569),
+            TalklyCyan.copy(alpha = 0.5f), Color(0xFF1E293B)
         )
     }
 
     val rnd = Random((width.toLong() xor (height.toLong() shl 16)) + (if (isSelf) 17 else 31))
     val particles = ArrayList<DisintegrateParticle>(count)
 
-    val cols = sqrt(count * (width / height.coerceAtLeast(1f))).toInt().coerceIn(4, 20)
-    val rows = (count / cols).coerceAtLeast(2)
+    val aspectRatio = (width / height.coerceAtLeast(1f)).coerceIn(0.25f, 4.0f)
+    val cols = sqrt(count * aspectRatio).toInt().coerceIn(12, 60)
+    val rows = ((count.toFloat() / cols) + 0.5f).toInt().coerceAtLeast(6)
 
-    val minSizePx = with(density) { 3.5.dp.toPx() }
-    val maxSizePx = with(density) { 7.5.dp.toPx() }
+    val cellW = width / cols
+    val cellH = height / rows
 
     for (r in 0 until rows) {
         for (c in 0 until cols) {
             if (particles.size >= count) break
 
-            // Spatial jitter across the grid
-            val jitterX = (c + 0.5f + (rnd.nextFloat() - 0.5f) * 0.7f) / cols * width
-            val jitterY = (r + 0.5f + (rnd.nextFloat() - 0.5f) * 0.7f) / rows * height
+            // Controlled spatial jitter within each cell: prevents grid lines, avoids outside borders
+            val jitterX = ((c + 0.5f + (rnd.nextFloat() - 0.5f) * 0.85f) * cellW).coerceIn(1f, width - 1f)
+            val jitterY = ((r + 0.5f + (rnd.nextFloat() - 0.5f) * 0.85f) * cellH).coerceIn(1f, height - 1f)
 
-            val pWidth = minSizePx + rnd.nextFloat() * (maxSizePx - minSizePx)
-            // Some square, some slightly rectangular
-            val pHeight = if (rnd.nextBoolean()) pWidth else pWidth * (0.8f + rnd.nextFloat() * 0.4f)
+            // Particle dimensions (in physical pixels):
+            // ~70%: 1.2–2.2 px
+            // ~25%: 2.2–3.2 px
+            // ~5%: 3.2–4.2 px
+            val sizeRoll = rnd.nextFloat()
+            val pWidth = when {
+                sizeRoll < 0.70f -> 1.2f + rnd.nextFloat() * 1.0f
+                sizeRoll < 0.95f -> 2.2f + rnd.nextFloat() * 1.0f
+                else -> 3.2f + rnd.nextFloat() * 1.0f
+            }
+            val pHeight = if (rnd.nextBoolean()) {
+                pWidth
+            } else {
+                pWidth * (0.75f + rnd.nextFloat() * 0.55f)
+            }
 
-            // Sweep position determines detachment phase
+            // Sweep position determines detachment phase along erosion direction
             val sweepPos = if (isSelf) {
                 (1f - jitterX / width.coerceAtLeast(1f)).coerceIn(0f, 1f)
             } else {
                 (jitterX / width.coerceAtLeast(1f)).coerceIn(0f, 1f)
             }
 
-            val detach = (0.06f + sweepPos * 0.50f + (rnd.nextFloat() - 0.5f) * 0.08f).coerceIn(0.04f, 0.65f)
+            // Progressive detachment:
+            // 0-12%: intact
+            // 12-68%: progressive erosion
+            // 68-100%: drift, shrink, fade
+            val detach = (0.12f + sweepPos * 0.54f + (rnd.nextFloat() - 0.5f) * 0.06f).coerceIn(0.08f, 0.72f)
 
-            // Outward velocity + subtle flutter
+            // Organic subtle motion:
+            // Outward X displacement: small-to-moderate (self -> right, other -> left)
             val velX = if (isSelf) {
-                with(density) { (6f + rnd.nextFloat() * 22f).dp.toPx() }
+                with(density) { (3f + rnd.nextFloat() * 10f).dp.toPx() }
             } else {
-                with(density) { (-6f - rnd.nextFloat() * 22f).dp.toPx() }
+                with(density) { (-3f - rnd.nextFloat() * 10f).dp.toPx() }
             }
-            val liftY = with(density) { (4f + rnd.nextFloat() * 10f).dp.toPx() }
-            val gravityY = with(density) { (18f + rnd.nextFloat() * 26f).dp.toPx() }
-            val maxRot = -35f + rnd.nextFloat() * 70f
+            // Vertical movement: downward Y displacement slightly greater than X
+            val liftY = with(density) { (1f + rnd.nextFloat() * 3f).dp.toPx() }
+            val gravityY = with(density) { (6f + rnd.nextFloat() * 14f).dp.toPx() }
+            // Subtle rotation within ±15 degrees
+            val maxRot = -15f + rnd.nextFloat() * 30f
 
             val color = palette[rnd.nextInt(palette.size)]
 
             particles.add(
                 DisintegrateParticle(
-                    initialX = jitterX.coerceIn(0f, width),
-                    initialY = jitterY.coerceIn(0f, height),
+                    initialX = jitterX,
+                    initialY = jitterY,
                     width = pWidth,
                     height = pHeight,
                     color = color,
@@ -258,7 +290,7 @@ fun generateDisintegrateParticles(
 }
 
 /**
- * Calculates a stepped, jagged pixel erosion path into the provided reusable Path instance.
+ * Calculates a fine stepped, jagged pixel erosion path into the provided reusable Path instance.
  */
 fun calculateErosionPathInto(
     path: Path,
@@ -280,20 +312,21 @@ fun calculateErosionPathInto(
         return
     }
 
-    val bands = 8
+    val bands = 20
     val bandHeight = height / bands
 
     if (isSelf) {
-        // Erode from right to left
+        // Erode from right to left with fine stepped pixel offsets
         path.moveTo(0f, 0f)
         for (i in 0 until bands) {
             val bandTop = i * bandHeight
             val bandBottom = (i + 1) * bandHeight
-            val stagger = when (i % 4) {
-                0 -> 0.06f
-                1 -> -0.05f
-                2 -> 0.08f
-                else -> -0.04f
+            val stagger = when (i % 5) {
+                0 -> 0.035f
+                1 -> -0.030f
+                2 -> 0.045f
+                3 -> -0.020f
+                else -> 0.015f
             }
             val bandSweep = (sweep + stagger).coerceIn(0f, 1f)
             val currentRight = width * (1f - bandSweep)
@@ -303,8 +336,8 @@ fun calculateErosionPathInto(
         path.lineTo(0f, height)
         path.close()
     } else {
-        // Erode from left to right
-        val firstStagger = -0.04f
+        // Erode from left to right with fine stepped pixel offsets
+        val firstStagger = -0.025f
         val firstSweep = (sweep + firstStagger).coerceIn(0f, 1f)
         val startLeft = width * firstSweep
         path.moveTo(startLeft, 0f)
@@ -313,11 +346,12 @@ fun calculateErosionPathInto(
         for (i in bands - 1 downTo 0) {
             val bandTop = i * bandHeight
             val bandBottom = (i + 1) * bandHeight
-            val stagger = when (i % 4) {
-                0 -> -0.06f
-                1 -> 0.05f
-                2 -> -0.08f
-                else -> 0.04f
+            val stagger = when (i % 5) {
+                0 -> -0.035f
+                1 -> 0.030f
+                2 -> -0.045f
+                3 -> 0.020f
+                else -> -0.015f
             }
             val bandSweep = (sweep + stagger).coerceIn(0f, 1f)
             val currentLeft = width * bandSweep
@@ -329,7 +363,7 @@ fun calculateErosionPathInto(
 }
 
 /**
- * Draws active flying fragments on a DrawScope canvas.
+ * Draws active flying micro-pixel fragments on a DrawScope canvas.
  */
 fun DrawScope.drawDissolveParticles(
     particles: List<DisintegrateParticle>,
@@ -337,50 +371,64 @@ fun DrawScope.drawDissolveParticles(
 ) {
     if (particles.isEmpty() || progress <= 0f) return
 
-    for (i in particles.indices) {
+    for (i in 0 until particles.size) {
         val p = particles[i]
         if (progress < p.detachProgress) continue
 
-        val tau = ((progress - p.detachProgress) / (1f - p.detachProgress)).coerceIn(0f, 1f)
+        val lifetime = 1f - p.detachProgress
+        if (lifetime <= 0f) continue
+        val tau = ((progress - p.detachProgress) / lifetime).coerceIn(0f, 1f)
         if (tau >= 1f) continue
 
-        // Non-linear horizontal displacement
-        val curX = p.initialX + p.velocityX * (tau * (2f - tau))
+        // Non-linear horizontal displacement (subtle drag deceleration)
+        val curX = p.initialX + p.velocityX * (tau * (1.7f - 0.7f * tau))
 
-        // Vertical movement: subtle lift then gravity drop
-        val liftProgress = sin(tau * PI.toFloat() * 0.5f)
+        // Vertical movement: subtle lift then gentle gravity drop
+        val liftProgress = sin(tau * PI.toFloat()).coerceAtLeast(0f) * (1f - tau)
         val gravityProgress = tau * tau
         val curY = p.initialY - p.liftY * liftProgress + p.gravityY * gravityProgress
 
-        // Subtle rotation
+        // Subtle rotation within ±15 degrees
         val rot = p.maxRotation * tau
 
-        // Progressive shrink
-        val scale = if (tau < 0.25f) {
-            1f
+        // Progressive shrink: full size until tau=0.35, then smoothly scales down to 0.15
+        val scale = if (tau < 0.35f) {
+            1.0f
         } else {
-            (1f - (tau - 0.25f) / 0.75f).coerceIn(0f, 1f)
+            (1.0f - ((tau - 0.35f) / 0.65f) * 0.85f).coerceIn(0.15f, 1.0f)
         }
 
-        // Progressive alpha decay
-        val alpha = if (tau < 0.35f) {
-            1f
+        // Progressive smooth alpha decay: full until tau=0.40, then smoothstep fade to 0
+        val alpha = if (tau < 0.40f) {
+            1.0f
         } else {
-            (1f - (tau - 0.35f) / 0.65f).coerceIn(0f, 1f)
+            val fadeTau = ((tau - 0.40f) / 0.60f).coerceIn(0f, 1f)
+            (1.0f - fadeTau * fadeTau * (3f - 2f * fadeTau)).coerceIn(0f, 1f)
         }
 
         val partW = p.width * scale
         val partH = p.height * scale
 
-        if (partW <= 0.5f || partH <= 0.5f || alpha <= 0.01f) continue
+        if (partW <= 0.2f || partH <= 0.2f || alpha <= 0.005f) continue
 
-        withTransform({
-            translate(curX, curY)
-            rotate(rot)
-        }) {
+        val finalColor = p.color.copy(alpha = p.color.alpha * alpha)
+
+        // Performance optimization: 1-2px micro particles bypass canvas save/restore overhead
+        if (rot != 0f && (partW > 2.2f || partH > 2.2f)) {
+            withTransform({
+                translate(curX, curY)
+                rotate(rot)
+            }) {
+                drawRect(
+                    color = finalColor,
+                    topLeft = Offset(-partW / 2f, -partH / 2f),
+                    size = Size(partW, partH)
+                )
+            }
+        } else {
             drawRect(
-                color = p.color.copy(alpha = p.color.alpha * alpha),
-                topLeft = Offset(-partW / 2f, -partH / 2f),
+                color = finalColor,
+                topLeft = Offset(curX - partW / 2f, curY - partH / 2f),
                 size = Size(partW, partH)
             )
         }
@@ -427,21 +475,22 @@ fun ParticleDissolveWrapper(
 
     val erosionPath = remember { Path() }
 
+    // Content stays fully solid in the beginning (0-30%), then smoothly fades as erosion sweeps through 72%
     val contentAlpha = when {
-        progress < 0.15f -> 1.0f
-        progress < 0.70f -> (1.0f - (progress - 0.15f) / 0.55f).coerceIn(0f, 1f)
+        progress < 0.30f -> 1.0f
+        progress < 0.72f -> (1.0f - (progress - 0.30f) / 0.42f).coerceIn(0f, 1f)
         else -> 0.0f
     }
 
     Box(
         modifier = modifier.onSizeChanged { bubbleSize = it }
     ) {
-        // Base content with physical erosion mask and alpha decay
+        // Base content with physical stepped erosion mask and alpha decay
         Box(
             modifier = Modifier
                 .drawWithContent {
-                    if (progress < 0.70f) {
-                        val sweep = (progress / 0.70f).coerceIn(0f, 1f)
+                    if (progress < 0.72f) {
+                        val sweep = if (progress <= 0.12f) 0f else ((progress - 0.12f) / 0.56f).coerceIn(0f, 1f)
                         calculateErosionPathInto(erosionPath, size, sweep, isSelf)
                         clipPath(erosionPath) {
                             this@drawWithContent.drawContent()
@@ -455,7 +504,7 @@ fun ParticleDissolveWrapper(
             content()
         }
 
-        // Particle Canvas overlay: rectangular pixel fragments taking flight
+        // Particle Canvas overlay: dense micro-pixel fragments taking flight
         Canvas(
             modifier = Modifier.matchParentSize()
         ) {
@@ -463,3 +512,4 @@ fun ParticleDissolveWrapper(
         }
     }
 }
+
