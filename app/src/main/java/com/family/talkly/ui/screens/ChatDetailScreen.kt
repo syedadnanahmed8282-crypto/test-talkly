@@ -58,12 +58,16 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -543,6 +547,13 @@ fun ChatDetailScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     val listState = rememberSaveable(member.id, saver = LazyListState.Saver) { LazyListState() }
+    val nearBottomThresholdPx = with(LocalDensity.current) { 140.dp.roundToPx() }
+    val isUserAtBottom by remember {
+        derivedStateOf {
+            isUserNearBottom(listState.layoutInfo, nearBottomThresholdPx)
+        }
+    }
+    var ownSendPendingScroll by remember(member.id) { mutableStateOf(false) }
 
     fun sendPendingMediaMessage(
         textContent: String,
@@ -550,6 +561,9 @@ fun ChatDetailScreen(
         localMediaUrl: String?
     ) {
         if (localMediaUrl.isNullOrBlank()) return
+        if (isUserAtBottom) {
+            ownSendPendingScroll = true
+        }
         val tempId = java.util.UUID.randomUUID().toString()
         val replyId = replyingToMessage?.id
         val replyName = replyingToMessage?.senderName
@@ -654,41 +668,117 @@ fun ChatDetailScreen(
         }
     }
 
-    // --- SAFE SCROLL ENGINE ---
-    val nearBottomThresholdPx = with(LocalDensity.current) { 120.dp.roundToPx() }
-    var hasPositionedInitially by remember(member.id) { mutableStateOf(false) }
+    // --- SAFE DETERMINISTIC SCROLL ENGINE ---
+    var hasPositionedInitially by rememberSaveable(member.id) { mutableStateOf(false) }
     var knownMessageIds by remember(member.id) { mutableStateOf<Set<String>>(emptySet()) }
+    var unreadCountWhileScrolledUp by remember(member.id) { mutableIntStateOf(0) }
+
     val currentMessageIds = remember(combinedMessages) {
         combinedMessages.map { it.id }.toSet()
     }
 
-    // Initial position on opening and new-message-only auto-scroll
-    LaunchedEffect(member.id, uiItems.size, currentMessageIds, isSearchActive) {
-        if (uiItems.isEmpty()) return@LaunchedEffect
+    // Clear unread count when user reaches the bottom
+    LaunchedEffect(isUserAtBottom) {
+        if (isUserAtBottom) {
+            unreadCountWhileScrolledUp = 0
+            ownSendPendingScroll = false
+        }
+    }
 
+    // Cancel ownSendPendingScroll if user intentionally scrolled away during touch gesture
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress && !isUserAtBottom) {
+            ownSendPendingScroll = false
+        }
+    }
+
+    // STEP A: Initial chat opening position
+    // Suspends until list is actually laid out (totalItemsCount > 0)
+    // Uses the real last LazyColumn index from layoutInfo, not an assumption
+    LaunchedEffect(member.id) {
         if (!hasPositionedInitially) {
-            // STEP 2: Initial chat opening position (only once when initial non-empty uiItems exist and search is inactive)
+            snapshotFlow {
+                val count = listState.layoutInfo.totalItemsCount
+                val hasItems = uiItems.isNotEmpty()
+                Pair(count, hasItems)
+            }.filter { (count, hasItems) ->
+                hasItems && count > 0
+            }.first()
+
             if (!isSearchActive) {
-                listState.scrollToItem(uiItems.size)
-                hasPositionedInitially = true
-                knownMessageIds = currentMessageIds
+                val targetIndex = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+                listState.scrollToItem(targetIndex)
             }
+            hasPositionedInitially = true
+            knownMessageIds = currentMessageIds
         } else {
-            // STEP 3: New-message-only auto-scroll (compare stable message IDs)
-            val newIds = currentMessageIds - knownMessageIds
-            if (newIds.isNotEmpty()) {
-                // STEP 4: Determine scroll policy based on user's own viewport distance from bottom
-                val wasNearBottom = isUserNearBottom(listState.layoutInfo, nearBottomThresholdPx)
-                knownMessageIds = currentMessageIds
-                if (wasNearBottom && !isSearchActive) {
-                    listState.animateScrollToItem(uiItems.size)
-                }
-            } else {
-                // Non-new-message updates (read/delivery receipts, reactions, edits, upload progress)
-                // keep the ID set up to date without moving the scroll position
+            if (knownMessageIds.isEmpty()) {
                 knownMessageIds = currentMessageIds
             }
         }
+    }
+
+    // STEP B, C, D, G: Deterministic New Message Scroll Engine
+    // Strictly separates new genuine messages from existing message updates
+    LaunchedEffect(currentMessageIds, isSearchActive) {
+        if (!hasPositionedInitially) return@LaunchedEffect
+        if (uiItems.isEmpty()) return@LaunchedEffect
+
+        val newIds = currentMessageIds - knownMessageIds
+        if (newIds.isNotEmpty()) {
+            val wasNearBottom = isUserAtBottom || ownSendPendingScroll
+            ownSendPendingScroll = false
+            knownMessageIds = currentMessageIds
+
+            if (isSearchActive) {
+                return@LaunchedEffect
+            }
+
+            if (wasNearBottom) {
+                // If user was near bottom or sent this message: smoothly reveal new message
+                if (!listState.isScrollInProgress) {
+                    kotlinx.coroutines.yield()
+                    val target = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+                    listState.animateScrollToItem(target)
+                }
+            } else {
+                // User intentionally scrolled upward reading older messages: DO NOT SCROLL
+                unreadCountWhileScrolledUp += newIds.size
+            }
+        } else {
+            // Existing message updates (read/delivery receipts, reactions, edits, upload progress, media URLs):
+            // NEVER auto-scroll, just update knownMessageIds cleanly
+            knownMessageIds = currentMessageIds
+        }
+    }
+
+    // STEP E: Typing indicator room adjustment
+    // When typing indicator appears and user is near bottom, smoothly make room so latest messages remain visible
+    LaunchedEffect(member.isTyping) {
+        if (member.isTyping && hasPositionedInitially && !isSearchActive) {
+            if (isUserAtBottom && !listState.isScrollInProgress) {
+                kotlinx.coroutines.delay(60)
+                val target = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+                listState.animateScrollToItem(target)
+            }
+        }
+    }
+
+    // STEP F: Keyboard / IME adjustment
+    // When keyboard opens and user is near bottom / composing, smoothly adjust so latest content remains visible
+    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+    val isImeOpen = imeBottom > 0
+    var wasImeOpen by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isImeOpen) {
+        if (isImeOpen && !wasImeOpen) {
+            if (hasPositionedInitially && isUserAtBottom && !isSearchActive && !listState.isScrollInProgress) {
+                kotlinx.coroutines.delay(60)
+                val target = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+                listState.animateScrollToItem(target)
+            }
+        }
+        wasImeOpen = isImeOpen
     }
 
     // Mark messages as read when opening or receiving new messages in chat screen (debounced to avoid fighting scroll animations)
@@ -702,7 +792,7 @@ fun ChatDetailScreen(
         derivedStateOf {
             val totalItems = listState.layoutInfo.totalItemsCount
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            totalItems > 0 && lastVisible < totalItems - 3
+            totalItems > 0 && lastVisible < totalItems - 2
         }
     }
 
@@ -3304,36 +3394,7 @@ fun ChatDetailScreen(
                             }
                         }
 
-                        // LIVE TYPING INDICATOR BUBBLE (Small compact bubble with 3 animated dots)
-                        if (member.isTyping) {
-                            item {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(start = 6.dp, top = 2.dp, bottom = 4.dp),
-                                    horizontalArrangement = Arrangement.Start
-                                ) {
-                                    Surface(
-                                        shape = RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp),
-                                        color = TalklyCard,
-                                        border = BorderStroke(0.5.dp, TalklyCyan.copy(alpha = 0.35f)),
-                                        shadowElevation = 2.dp
-                                    ) {
-                                        Box(
-                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            AnimatedTypingDotsIndicator(
-                                                dotColor = TalklyCyan,
-                                                dotSize = 5.dp
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        item { Spacer(modifier = Modifier.height(8.dp)) }
+                        item(key = "bottom_spacer") { Spacer(modifier = Modifier.height(8.dp)) }
                     }
 
                     // FLOATING SCROLL TO BOTTOM BUTTON (MANUAL USER ACTION ONLY)
@@ -3356,6 +3417,7 @@ fun ChatDetailScreen(
                                     scope.launch {
                                         val target = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
                                         listState.animateScrollToItem(target)
+                                        unreadCountWhileScrolledUp = 0
                                     }
                                 }
                         ) {
@@ -3375,6 +3437,22 @@ fun ChatDetailScreen(
                                     tint = TalklyCyan,
                                     modifier = Modifier.size(26.dp)
                                 )
+                                if (unreadCountWhileScrolledUp > 0) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .offset(x = 2.dp, y = (-2).dp)
+                                            .background(TalklyCyan, CircleShape)
+                                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                                    ) {
+                                        Text(
+                                            text = if (unreadCountWhileScrolledUp > 99) "99+" else "$unreadCountWhileScrolledUp",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF080B10)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -3393,6 +3471,44 @@ fun ChatDetailScreen(
                         bottomComposerHeightPx = coords.size.height
                     }
             ) {
+                // LIVE TYPING INDICATOR BUBBLE (Visually anchored immediately ABOVE message composer)
+                AnimatedVisibility(
+                    visible = member.isTyping,
+                    enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(tween(180)),
+                    exit = slideOutVertically(targetOffsetY = { it / 2 }) + fadeOut(tween(150))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, bottom = 4.dp),
+                        horizontalArrangement = Arrangement.Start
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp),
+                            color = TalklyCard.copy(alpha = 0.95f),
+                            border = BorderStroke(0.5.dp, TalklyCyan.copy(alpha = 0.35f)),
+                            shadowElevation = 3.dp
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "${member.name} is typing",
+                                    fontSize = 11.5.sp,
+                                    color = TalklyTextSecondary,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                AnimatedTypingDotsIndicator(
+                                    dotColor = TalklyCyan,
+                                    dotSize = 4.5.dp
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // EDITING BANNER BAR
                 AnimatedVisibility(
                     visible = editingMessage != null,
@@ -3863,6 +3979,9 @@ fun ChatDetailScreen(
                                                     }
                                                     editingMessage = null
                                                 } else {
+                                                    if (isUserAtBottom) {
+                                                        ownSendPendingScroll = true
+                                                    }
                                                     onSendMessage(
                                                         textInput, MessageType.TEXT, null,
                                                         replyingToMessage?.id,
@@ -3919,6 +4038,9 @@ fun ChatDetailScreen(
                                                 }
                                                 editingMessage = null
                                             } else {
+                                                if (isUserAtBottom) {
+                                                    ownSendPendingScroll = true
+                                                }
                                                 onSendMessage(
                                                     textInput, MessageType.TEXT, null,
                                                     replyingToMessage?.id,
@@ -4314,13 +4436,14 @@ private fun isUserNearBottom(
     thresholdPx: Int
 ): Boolean {
     val totalItems = layoutInfo.totalItemsCount
-    if (totalItems <= 1) return true
+    if (totalItems <= 2) return true
     val visibleItems = layoutInfo.visibleItemsInfo
     if (visibleItems.isEmpty()) return true
     val lastVisible = visibleItems.last()
-    // In LazyColumn, the last item is at index (totalItems - 1).
-    // If the last item or second-to-last item is visible (accounting for optional typing indicator bubble):
-    if (lastVisible.index >= totalItems - 2) {
+    // If the bottom-most item in the list (the bottom spacer) is visible:
+    if (lastVisible.index == totalItems - 1) return true
+    // If the last message or second-to-last message is visible:
+    if (lastVisible.index >= totalItems - 3) {
         val lastItemBottom = lastVisible.offset + lastVisible.size
         val viewportBottom = layoutInfo.viewportEndOffset - layoutInfo.afterContentPadding
         val distanceFromBottom = lastItemBottom - viewportBottom
