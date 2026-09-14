@@ -169,6 +169,8 @@ class ZegoCallEngineManager(private val context: Context) {
 
     private var timerJob: Job? = null
     private var ringingTimeoutJob: Job? = null
+    private var lastStatsLogMs: Long = 0L
+    private var lastNetworkQualityLogMs: Long = 0L
     private val scope = CoroutineScope(Dispatchers.Main)
     private val callScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     var onCallLogAdded: ((CallLog) -> Unit)? = null
@@ -267,6 +269,46 @@ class ZegoCallEngineManager(private val context: Context) {
                     override fun onError(err: Int) {
                         Log.e(TAG, "[AGORA_SEQ_6] onError: code=$err (${getAgoraErrorCodeName(err)})")
                     }
+
+                    override fun onRtcStats(stats: RtcStats?) {
+                        val now = System.currentTimeMillis()
+                        if (stats != null && now - lastStatsLogMs >= 10_000L) {
+                            lastStatsLogMs = now
+                            Log.i(
+                                TAG,
+                                "[AGORA_DIAG] RtcStats: duration=${stats.totalDuration}s, RTT=${stats.lastmileDelay}ms, txRate=${stats.txKBitRate}kbps (txLoss=${stats.txPacketLossRate}%), rxRate=${stats.rxKBitRate}kbps (rxLoss=${stats.rxPacketLossRate}%), users=${stats.users}"
+                            )
+                        }
+                    }
+
+                    override fun onLocalVideoStats(source: Constants.VideoSourceType?, stats: LocalVideoStats?) {
+                        val now = System.currentTimeMillis()
+                        if (stats != null && (stats.sentFrameRate > 0 || stats.sentBitrate > 0) && now - lastStatsLogMs < 500L) {
+                            Log.i(
+                                TAG,
+                                "[AGORA_DIAG] LocalVideo: encRes=${stats.encodedFrameWidth}x${stats.encodedFrameHeight}, sentFps=${stats.sentFrameRate}, sentBitrate=${stats.sentBitrate}kbps, txLoss=${stats.txPacketLossRate}%"
+                            )
+                        }
+                    }
+
+                    override fun onRemoteVideoStats(stats: RemoteVideoStats?) {
+                        val now = System.currentTimeMillis()
+                        if (stats != null && now - lastStatsLogMs < 500L) {
+                            Log.i(
+                                TAG,
+                                "[AGORA_DIAG] RemoteVideo (uid=${stats.uid}): res=${stats.width}x${stats.height}, fps=${stats.rendererOutputFrameRate}, rxBitrate=${stats.receivedBitrate}kbps, rxLoss=${stats.packetLossRate}%, delay=${stats.delay}ms"
+                            )
+                        }
+                    }
+
+                    override fun onNetworkQuality(uid: Int, txQuality: Int, rxQuality: Int) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastNetworkQualityLogMs >= 15_000L) {
+                            lastNetworkQualityLogMs = now
+                            val target = if (uid == 0) "Local" else "Remote ($uid)"
+                            Log.i(TAG, "[AGORA_DIAG] NetworkQuality ($target): txQuality=$txQuality, rxQuality=$rxQuality")
+                        }
+                    }
                 }
             }
 
@@ -277,7 +319,7 @@ class ZegoCallEngineManager(private val context: Context) {
                 setChannelProfile(Constants.CHANNEL_PROFILE_COMMUNICATION)
                 setVideoEncoderConfiguration(
                     VideoEncoderConfiguration(
-                        VideoEncoderConfiguration.VD_960x540,
+                        VideoEncoderConfiguration.VD_1280x720,
                         VideoEncoderConfiguration.FRAME_RATE.FRAME_RATE_FPS_30,
                         VideoEncoderConfiguration.COMPATIBLE_BITRATE,
                         VideoEncoderConfiguration.ORIENTATION_MODE.ORIENTATION_MODE_ADAPTIVE
