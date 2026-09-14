@@ -277,9 +277,9 @@ class ZegoCallEngineManager(private val context: Context) {
                 setChannelProfile(Constants.CHANNEL_PROFILE_COMMUNICATION)
                 setVideoEncoderConfiguration(
                     VideoEncoderConfiguration(
-                        VideoEncoderConfiguration.VD_640x360,
-                        VideoEncoderConfiguration.FRAME_RATE.FRAME_RATE_FPS_15,
-                        VideoEncoderConfiguration.STANDARD_BITRATE,
+                        VideoEncoderConfiguration.VD_960x540,
+                        VideoEncoderConfiguration.FRAME_RATE.FRAME_RATE_FPS_24,
+                        1000,
                         VideoEncoderConfiguration.ORIENTATION_MODE.ORIENTATION_MODE_ADAPTIVE
                     )
                 )
@@ -484,7 +484,9 @@ class ZegoCallEngineManager(private val context: Context) {
         // Attach local preview if view is already bound
         localViewRef?.let { view ->
             if (isVideoCall) {
-                val canvas = VideoCanvas(view, VideoCanvas.RENDER_MODE_HIDDEN, 0)
+                val canvas = VideoCanvas(view, VideoCanvas.RENDER_MODE_HIDDEN, 0).apply {
+                    mirrorMode = Constants.VIDEO_MIRROR_MODE_AUTO
+                }
                 rtcEngine?.setupLocalVideo(canvas)
                 rtcEngine?.startPreview()
             }
@@ -581,11 +583,13 @@ class ZegoCallEngineManager(private val context: Context) {
         val isVideo = (_callState.value.callType == CallType.VIDEO)
         if (view != null && isVideo) {
             rtcEngine?.enableVideo()
-            val canvas = VideoCanvas(view, VideoCanvas.RENDER_MODE_HIDDEN, 0)
+            val canvas = VideoCanvas(view, VideoCanvas.RENDER_MODE_HIDDEN, 0).apply {
+                mirrorMode = Constants.VIDEO_MIRROR_MODE_AUTO
+            }
             rtcEngine?.setupLocalVideo(canvas)
             rtcEngine?.startPreview()
             enableBeautyFilter(true)
-            Log.d(TAG, "Attached local video preview to Agora VideoCanvas")
+            Log.d(TAG, "Attached local video preview to Agora VideoCanvas (mirrorMode=AUTO)")
         } else if (view == null) {
             rtcEngine?.setupLocalVideo(VideoCanvas(null, VideoCanvas.RENDER_MODE_HIDDEN, 0))
         }
@@ -619,7 +623,10 @@ class ZegoCallEngineManager(private val context: Context) {
         if (view != null && rUid > 0) {
             bindRemoteView(rUid)
         } else if (view == null && rUid > 0) {
-            rtcEngine?.setupRemoteVideo(VideoCanvas(null, VideoCanvas.RENDER_MODE_HIDDEN, rUid))
+            val canvas = VideoCanvas(null, VideoCanvas.RENDER_MODE_HIDDEN, rUid).apply {
+                mirrorMode = Constants.VIDEO_MIRROR_MODE_DISABLED
+            }
+            rtcEngine?.setupRemoteVideo(canvas)
         }
     }
 
@@ -627,10 +634,12 @@ class ZegoCallEngineManager(private val context: Context) {
         if (uid <= 0) return
         val view = remoteViewRef
         if (view != null) {
-            val canvas = VideoCanvas(view, VideoCanvas.RENDER_MODE_HIDDEN, uid)
+            val canvas = VideoCanvas(view, VideoCanvas.RENDER_MODE_HIDDEN, uid).apply {
+                mirrorMode = Constants.VIDEO_MIRROR_MODE_DISABLED
+            }
             rtcEngine?.setupRemoteVideo(canvas)
             _callState.value = _callState.value.copy(isRemoteStreamPlaying = true)
-            Log.d(TAG, "Bound remote video for uid=$uid")
+            Log.d(TAG, "Bound remote video for uid=$uid with mirrorMode=DISABLED")
         } else {
             Log.d(TAG, "Awaiting remote view binding for uid=$uid")
         }
