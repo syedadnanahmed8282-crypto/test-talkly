@@ -269,9 +269,18 @@ class CallForegroundService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun getCallForegroundServiceType(): Int {
+    private fun getCallForegroundServiceType(callType: String = ""): Int {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+            var type = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                if (callType.equals("VIDEO", ignoreCase = true)) {
+                    type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                }
+            }
+            type
         } else {
             0
         }
@@ -512,14 +521,11 @@ class CallForegroundService : Service() {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
         val notification = notificationBuilder.build()
-        val foregroundType = getCallForegroundServiceType()
+        val foregroundType = getCallForegroundServiceType(callType)
 
-        if (!isForegroundStarted) {
-            safeStartForeground(NOTIFICATION_ID, notification, foregroundType)
-        } else {
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            notificationManager?.notify(NOTIFICATION_ID, notification)
-        }
+        safeStartForeground(NOTIFICATION_ID, notification, foregroundType)
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        notificationManager?.notify(NOTIFICATION_ID, notification)
     }
 
     private fun declineCallInSupabase(roomId: String, callerUid: String, callerPhone: String) {

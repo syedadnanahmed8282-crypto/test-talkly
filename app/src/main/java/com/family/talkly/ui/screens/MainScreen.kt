@@ -68,7 +68,8 @@ fun MainScreen(
     onLogout: (() -> Unit)? = null,
     onSaveProfile: ((name: String, bio: String, photoUrl: String, coverPhotoUrl: String) -> Unit)? = null,
     initialOpenChatMemberId: String? = null,
-    onClearOpenChatMemberId: (() -> Unit)? = null
+    onClearOpenChatMemberId: (() -> Unit)? = null,
+    isInPipMode: Boolean = false
 ) {
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -294,6 +295,7 @@ fun MainScreen(
     if (callInfo.state == CallState.ACTIVE || callInfo.state == CallState.OUTGOING_RINGING || callInfo.state == CallState.OUTGOING_CALLING) {
         CallScreen(
             callInfo = callInfo,
+            isInPipMode = isInPipMode,
             onEndCall = { zegoManager.endCall() },
             onToggleMute = { zegoManager.toggleMute() },
             onToggleCamera = { zegoManager.toggleCamera() },

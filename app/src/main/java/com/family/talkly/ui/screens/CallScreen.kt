@@ -293,6 +293,7 @@ fun RemoteVideoView(
 @Composable
 fun CallScreen(
     callInfo: CurrentCallInfo,
+    isInPipMode: Boolean = false,
     onEndCall: () -> Unit,
     onToggleMute: () -> Unit,
     onToggleCamera: () -> Unit,
@@ -378,7 +379,7 @@ fun CallScreen(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) {
-                    if (isVideo) {
+                    if (isVideo && !isInPipMode) {
                         areControlsVisible = !areControlsVisible
                     }
                 }
@@ -387,7 +388,8 @@ fun CallScreen(
                 // ==========================================
                 // ACTIVE VIDEO CALL VIEW
                 // ==========================================
-                if (isSplitScreen) {
+                val effectiveSwapped = if (isInPipMode) false else isSwapped
+                if (isSplitScreen && !isInPipMode) {
                     // Split Screen: Top (Remote) and Bottom (Local)
                     Column(modifier = Modifier.fillMaxSize()) {
                         Box(
@@ -489,7 +491,7 @@ fun CallScreen(
                 } else {
                     // Full Screen Feed with Picture-in-Picture Floating Window
                     Box(modifier = Modifier.fillMaxSize()) {
-                        if (!isSwapped) {
+                        if (!effectiveSwapped) {
                             RemoteVideoView(
                                 member = member,
                                 isRemotePlaying = callInfo.isRemoteStreamPlaying,
@@ -521,35 +523,44 @@ fun CallScreen(
                             }
                         }
 
-                        // Top Gradient Scrim
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(140.dp)
-                                .align(Alignment.TopCenter)
-                                .background(
-                                    Brush.verticalGradient(
-                                        listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)
+                        if (!isInPipMode) {
+                            // Top Gradient Scrim
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(140.dp)
+                                    .align(Alignment.TopCenter)
+                                    .background(
+                                        Brush.verticalGradient(
+                                            listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)
+                                        )
                                     )
-                                )
-                        )
+                            )
 
-                        // Bottom Gradient Scrim
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(180.dp)
-                                .align(Alignment.BottomCenter)
-                                .background(
-                                    Brush.verticalGradient(
-                                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))
+                            // Bottom Gradient Scrim
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp)
+                                    .align(Alignment.BottomCenter)
+                                    .background(
+                                        Brush.verticalGradient(
+                                            listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))
+                                        )
                                     )
-                                )
-                        )
+                            )
+                        }
 
-                        // Draggable Local/Remote Picture-in-Picture Popup
-                        Surface(
-                            modifier = Modifier
+                        // Floating Preview Overlay (Draggable in full screen, corner overlay in native PiP)
+                        val overlayModifier = if (isInPipMode) {
+                            Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(8.dp)
+                                .size(width = 44.dp, height = 66.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .border(1.dp, ElectricCyan.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
+                        } else {
+                            Modifier
                                 .align(Alignment.TopEnd)
                                 .statusBarsPadding()
                                 .padding(top = 70.dp, end = 16.dp)
@@ -565,11 +576,15 @@ fun CallScreen(
                                         pipOffsetY += dragAmount.y
                                     }
                                 }
-                                .clickable { isSwapped = !isSwapped },
+                                .clickable { isSwapped = !isSwapped }
+                        }
+
+                        Surface(
+                            modifier = overlayModifier,
                             color = BackgroundDark
                         ) {
                             Box(modifier = Modifier.fillMaxSize()) {
-                                if (!isSwapped) {
+                                if (!effectiveSwapped) {
                                     if (!callInfo.isCameraOff) {
                                         CameraPreviewView(
                                             onBindLocalView = onBindLocalView,
@@ -587,7 +602,7 @@ fun CallScreen(
                                                 imageVector = Icons.Default.VideocamOff,
                                                 contentDescription = "Camera Off",
                                                 tint = TextSecondary,
-                                                modifier = Modifier.size(32.dp)
+                                                modifier = Modifier.size(if (isInPipMode) 18.dp else 32.dp)
                                             )
                                         }
                                     }
@@ -601,42 +616,44 @@ fun CallScreen(
                                     )
                                 }
 
-                                // Bottom PIP Tag
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomCenter)
-                                        .fillMaxWidth()
-                                        .background(Color.Black.copy(alpha = 0.7f))
-                                        .padding(4.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = if (!isSwapped) {
-                                            if (callInfo.isFrontCamera) "You (Front)" else "You (Rear)"
-                                        } else {
-                                            member?.name?.take(8) ?: "Partner"
-                                        },
-                                        color = TextPrimary,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
+                                if (!isInPipMode) {
+                                    // Bottom PIP Tag
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomCenter)
+                                            .fillMaxWidth()
+                                            .background(Color.Black.copy(alpha = 0.7f))
+                                            .padding(4.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = if (!isSwapped) {
+                                                if (callInfo.isFrontCamera) "You (Front)" else "You (Rear)"
+                                            } else {
+                                                member?.name?.take(8) ?: "Partner"
+                                            },
+                                            color = TextPrimary,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
 
-                                // Top Right Split Screen Icon
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(4.dp)
-                                        .background(SurfaceCard.copy(alpha = 0.8f), CircleShape)
-                                        .clickable { isSplitScreen = true }
-                                        .padding(4.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Splitscreen,
-                                        contentDescription = "Split Screen Mode",
-                                        tint = ElectricCyan,
-                                        modifier = Modifier.size(16.dp)
-                                    )
+                                    // Top Right Split Screen Icon
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(4.dp)
+                                            .background(SurfaceCard.copy(alpha = 0.8f), CircleShape)
+                                            .clickable { isSplitScreen = true }
+                                            .padding(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Splitscreen,
+                                            contentDescription = "Split Screen Mode",
+                                            tint = ElectricCyan,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -802,7 +819,7 @@ fun CallScreen(
             // ==========================================
             if (isVideo && callInfo.state == CallState.ACTIVE) {
                 AnimatedVisibility(
-                    visible = areControlsVisible,
+                    visible = areControlsVisible && !isInPipMode,
                     enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
                     exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
                     modifier = Modifier
@@ -882,7 +899,7 @@ fun CallScreen(
             // FLOATING CALL CONTROLS DOCK (Both Audio & Video)
             // ==========================================
             AnimatedVisibility(
-                visible = areControlsVisible || !isVideo,
+                visible = (areControlsVisible || !isVideo) && !isInPipMode,
                 enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
                 exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
                 modifier = Modifier

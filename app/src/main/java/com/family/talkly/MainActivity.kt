@@ -1,8 +1,10 @@
 package com.family.talkly
 
 import android.app.KeyguardManager
+import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -13,13 +15,17 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
+import android.util.Rational
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +44,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.family.talkly.data.models.CallType
+import com.family.talkly.data.zego.CallState
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,6 +82,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var themePreferences: ThemePreferences
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var pendingOpenChatMemberId by mutableStateOf<String?>(null)
+    private var isInPipMode by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -126,6 +137,9 @@ class MainActivity : ComponentActivity() {
 
         handleIncomingCallIntent(intent)
         handleOpenChatIntent(intent)
+
+        // Setup native Picture-in-Picture sync for active video calls
+        setupPipLifecycleSync()
 
         setContent {
             val currentThemeMode by themePreferences.themeMode.collectAsState()
@@ -260,7 +274,8 @@ class MainActivity : ComponentActivity() {
                                         )
                                     },
                                     initialOpenChatMemberId = pendingOpenChatMemberId,
-                                    onClearOpenChatMemberId = { pendingOpenChatMemberId = null }
+                                    onClearOpenChatMemberId = { pendingOpenChatMemberId = null },
+                                    isInPipMode = isInPipMode
                                 )
                             }
 
@@ -292,18 +307,20 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        // Small floating debug button, always on top-right of every screen
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(top = 48.dp, end = 12.dp)
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xAA000000))
-                                .clickable { showDebugLog = true },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("🐞", fontSize = 16.sp)
+                        // Small floating debug button, always on top-right of every screen (hidden in PiP mode)
+                        if (!isInPipMode) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(top = 48.dp, end = 12.dp)
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xAA000000))
+                                    .clickable { showDebugLog = true },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("🐞", fontSize = 16.sp)
+                            }
                         }
 
                         if (showDebugLog) {
@@ -453,7 +470,103 @@ class MainActivity : ComponentActivity() {
         // ProcessLifecycleOwner foreground observer (above) handles app foreground transitions.
     }
 
+    private fun setupPipLifecycleSync() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.CREATED) {
+                zegoManager.callState.collect { callInfo ->
+                    val isActiveVideo = (callInfo.state == CallState.ACTIVE && callInfo.callType == CallType.VIDEO)
+                    updatePipParams(isActiveVideo)
+                    if (isInPipMode && (callInfo.state == CallState.ENDED || callInfo.state == CallState.IDLE)) {
+                        restoreFromPipIfEnded()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun updatePipParams(isActiveVideoCall: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                val params = buildPipParams(autoEnter = isActiveVideoCall)
+                if (params != null) {
+                    setPictureInPictureParams(params)
+                }
+            } catch (e: Exception) {
+                Log.w("MainActivity", "Failed to set PictureInPictureParams: ${e.message}")
+            }
+        }
+    }
+
+    private fun buildPipParams(autoEnter: Boolean): PictureInPictureParams? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val builder = PictureInPictureParams.Builder()
+                .setAspectRatio(Rational(9, 16))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                builder.setAutoEnterEnabled(autoEnter)
+                builder.setSeamlessResizeEnabled(true)
+            }
+            return builder.build()
+        }
+        return null
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val isAlreadyInPip = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) isInPictureInPictureMode else false
+            if (!isAlreadyInPip) {
+                val call = zegoManager.callState.value
+                if (call.state == CallState.ACTIVE && call.callType == CallType.VIDEO) {
+                    try {
+                        val params = buildPipParams(autoEnter = true)
+                        if (params != null) {
+                            enterPictureInPictureMode(params)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "onUserLeaveHint enterPictureInPictureMode failed: ${e.message}")
+                    }
+                }
+            }
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        isInPipMode = isInPictureInPictureMode
+        Log.d("MainActivity", "onPictureInPictureModeChanged: isInPipMode=$isInPictureInPictureMode")
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean) {
+        @Suppress("DEPRECATION")
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode)
+        isInPipMode = isInPictureInPictureMode
+    }
+
+    private fun restoreFromPipIfEnded() {
+        try {
+            val intent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Failed to restore from PiP: ${e.message}")
+        }
+    }
+
     override fun onDestroy() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode) {
+            Log.d("MainActivity", "Activity destroyed while in PiP -> ending active call")
+            try {
+                zegoManager.endCall()
+                com.family.talkly.service.CallForegroundService.stopCallService(applicationContext)
+            } catch (e: Exception) {
+                Log.w("MainActivity", "Error ending call on PiP destroy: ${e.localizedMessage}")
+            }
+        }
         super.onDestroy()
         try {
             networkCallback?.let {
