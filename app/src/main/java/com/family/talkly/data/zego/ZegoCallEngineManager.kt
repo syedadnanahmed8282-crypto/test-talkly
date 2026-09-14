@@ -278,8 +278,8 @@ class ZegoCallEngineManager(private val context: Context) {
                 setVideoEncoderConfiguration(
                     VideoEncoderConfiguration(
                         VideoEncoderConfiguration.VD_960x540,
-                        VideoEncoderConfiguration.FRAME_RATE.FRAME_RATE_FPS_24,
-                        1000,
+                        VideoEncoderConfiguration.FRAME_RATE.FRAME_RATE_FPS_30,
+                        VideoEncoderConfiguration.COMPATIBLE_BITRATE,
                         VideoEncoderConfiguration.ORIENTATION_MODE.ORIENTATION_MODE_ADAPTIVE
                     )
                 )
@@ -488,6 +488,7 @@ class ZegoCallEngineManager(private val context: Context) {
                     mirrorMode = Constants.VIDEO_MIRROR_MODE_AUTO
                 }
                 rtcEngine?.setupLocalVideo(canvas)
+                rtcEngine?.setLocalRenderMode(VideoCanvas.RENDER_MODE_HIDDEN, Constants.VIDEO_MIRROR_MODE_AUTO)
                 rtcEngine?.startPreview()
             }
         }
@@ -587,6 +588,7 @@ class ZegoCallEngineManager(private val context: Context) {
                 mirrorMode = Constants.VIDEO_MIRROR_MODE_AUTO
             }
             rtcEngine?.setupLocalVideo(canvas)
+            rtcEngine?.setLocalRenderMode(VideoCanvas.RENDER_MODE_HIDDEN, Constants.VIDEO_MIRROR_MODE_AUTO)
             rtcEngine?.startPreview()
             enableBeautyFilter(true)
             Log.d(TAG, "Attached local video preview to Agora VideoCanvas (mirrorMode=AUTO)")
@@ -627,6 +629,7 @@ class ZegoCallEngineManager(private val context: Context) {
                 mirrorMode = Constants.VIDEO_MIRROR_MODE_DISABLED
             }
             rtcEngine?.setupRemoteVideo(canvas)
+            rtcEngine?.setRemoteRenderMode(rUid, VideoCanvas.RENDER_MODE_HIDDEN, Constants.VIDEO_MIRROR_MODE_DISABLED)
         }
     }
 
@@ -638,6 +641,7 @@ class ZegoCallEngineManager(private val context: Context) {
                 mirrorMode = Constants.VIDEO_MIRROR_MODE_DISABLED
             }
             rtcEngine?.setupRemoteVideo(canvas)
+            rtcEngine?.setRemoteRenderMode(uid, VideoCanvas.RENDER_MODE_HIDDEN, Constants.VIDEO_MIRROR_MODE_DISABLED)
             _callState.value = _callState.value.copy(isRemoteStreamPlaying = true)
             Log.d(TAG, "Bound remote video for uid=$uid with mirrorMode=DISABLED")
         } else {
@@ -939,35 +943,44 @@ class ZegoCallEngineManager(private val context: Context) {
     }
 
     private fun handleActiveCallSignal(call: SupabaseActiveCall) {
+        val authUid = try { SupabaseClientProvider.auth.currentUserOrNull()?.id } catch (e: Exception) { null }
         val myProfile = currentUserProfile ?: getLocalUserProfile()
-        val myUid = myProfile.uid
+        val effectiveMyUid = if (!authUid.isNullOrBlank()) authUid else myProfile.uid.takeIf { it.isNotBlank() && !it.equals("self", ignoreCase = true) } ?: ""
         val myPhone = PhoneUtils.cleanPhoneNumber(myProfile.phoneNumber)
-        val mySuffix = myProfile.phoneSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(myPhone) }
+        val mySuffix = myProfile.phoneSuffix.trim().takeIf { it.isNotBlank() } ?: PhoneUtils.extractPhoneSuffix(myPhone)
 
         val callerUid = call.callerId
-        val callerPhone = PhoneUtils.cleanPhoneNumber(call.callerPhone)
-        val callerSuffix = call.callerSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(callerPhone) }
+        val callerPhone = call.callerPhone
+        val callerSuffix = call.callerSuffix
 
-        val receiverUid = call.receiverId ?: ""
-        val receiverPhone = PhoneUtils.cleanPhoneNumber(call.receiverPhone)
-        val receiverSuffix = call.receiverSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(receiverPhone) }
+        val receiverUid = call.receiverId
+        val receiverPhone = call.receiverPhone
+        val receiverSuffix = call.receiverSuffix
 
         val callType = try { CallType.valueOf(call.callType.uppercase()) } catch (e: Exception) { CallType.VIDEO }
         val status = call.status.uppercase()
         val roomID = call.roomId.ifBlank { call.id }
 
-        val isCallerByUid = myUid.isNotBlank() && myUid != "self" && callerUid == myUid
-        val isCallerBySuffix = mySuffix.isNotBlank() && callerSuffix.isNotBlank() && callerSuffix == mySuffix
-        val isCallerByPhone = myPhone.isNotBlank() && callerPhone.isNotBlank() && callerPhone == myPhone
-        val isMeCaller = isCallerByUid || isCallerBySuffix || isCallerByPhone
+        val isMeCaller = SupabaseCallService.matchesParticipant(
+            queryId = effectiveMyUid,
+            queryPhone = myPhone,
+            querySuffix = mySuffix,
+            targetId = callerUid,
+            targetPhone = callerPhone,
+            targetSuffix = callerSuffix
+        )
 
-        val isReceiverByUid = myUid.isNotBlank() && myUid != "self" && receiverUid == myUid
-        val isReceiverBySuffix = mySuffix.isNotBlank() && receiverSuffix.isNotBlank() && receiverSuffix == mySuffix
-        val isReceiverByPhone = myPhone.isNotBlank() && receiverPhone.isNotBlank() && receiverPhone == myPhone
-        val isMeReceiver = !isMeCaller && (isReceiverByUid || isReceiverBySuffix || isReceiverByPhone)
+        val isMeReceiver = !isMeCaller && SupabaseCallService.matchesParticipant(
+            queryId = effectiveMyUid,
+            queryPhone = myPhone,
+            querySuffix = mySuffix,
+            targetId = receiverUid,
+            targetPhone = receiverPhone,
+            targetSuffix = receiverSuffix
+        )
 
         if (!isMeCaller && !isMeReceiver) {
-            Log.d(TAG, "[CALL_RACE] Ignoring active call signal: not a participant (myUid=$myUid, caller=$callerUid, receiver=$receiverUid)")
+            Log.d(TAG, "[CALL_RACE] Ignoring active call signal: not a participant (myUid=$effectiveMyUid, caller=$callerUid, receiver=$receiverUid)")
             return
         }
 
@@ -1004,9 +1017,9 @@ class ZegoCallEngineManager(private val context: Context) {
                     }
 
                     // Case C: Stale call check (> 45s)
-                    val callCreatedMillis = SupabaseMessage.parseIsoTimestampToMillis(call.createdAt)
-                    val callAgeMs = if (callCreatedMillis > 0) System.currentTimeMillis() - callCreatedMillis else 0L
-                    if (callAgeMs > 45_000L) {
+                    val callCreatedMillis = SupabaseCallService.parseTimestampSafe(call.createdAt)
+                    val callAgeMs = if (callCreatedMillis > 0L) System.currentTimeMillis() - callCreatedMillis else 0L
+                    if (callCreatedMillis > 0L && callAgeMs > 45_000L) {
                         Log.d(TAG, "[CALL_RACE] Ignoring stale incoming call (age: ${callAgeMs}ms)")
                         scope.launch(Dispatchers.IO) {
                             SupabaseCallService.updateActiveCallStatus(call.id, "MISSED")
@@ -1107,7 +1120,7 @@ class ZegoCallEngineManager(private val context: Context) {
         }
 
         val authUid = SupabaseClientProvider.auth.currentUserOrNull()?.id
-        val effectiveCallerUid = if (!authUid.isNullOrBlank()) authUid else callerProfile.uid
+        val effectiveCallerUid = if (!authUid.isNullOrBlank()) authUid else callerProfile.uid.takeIf { it.isNotBlank() && !it.equals("self", ignoreCase = true) } ?: ""
 
         val targetUid = member.firebaseUid ?: if (!member.id.startsWith("contact_") && !member.id.contains(" ")) member.id else ""
         val targetPhone = member.phone
@@ -1169,13 +1182,17 @@ class ZegoCallEngineManager(private val context: Context) {
             } else null
 
             val nowIso = SupabaseMessage.millisToIsoTimestamp(System.currentTimeMillis())
+            val effectiveCallerPhone = callerProfile.phoneNumber
+            val effectiveCallerSuffix = callerProfile.phoneSuffix.trim().takeIf { it.isNotBlank() }
+                ?: PhoneUtils.extractPhoneSuffix(effectiveCallerPhone)
+
             val activeCall = SupabaseActiveCall(
                 id = roomID,
                 roomId = roomID,
                 callerId = effectiveCallerUid,
                 callerName = callerProfile.name,
-                callerPhone = callerProfile.phoneNumber,
-                callerSuffix = callerProfile.phoneSuffix,
+                callerPhone = effectiveCallerPhone,
+                callerSuffix = effectiveCallerSuffix,
                 callerAvatarUrl = callerProfile.profilePicUrl ?: "",
                 receiverId = finalReceiverId,
                 receiverPhone = targetPhone,

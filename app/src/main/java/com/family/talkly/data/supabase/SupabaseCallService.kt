@@ -14,6 +14,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
+import java.util.UUID
 
 class ActiveCallConflictException(
     message: String = "Active call conflict: an active call is already in progress",
@@ -25,6 +30,106 @@ object SupabaseCallService {
 
     private const val TAG = "SupabaseCallService"
 
+    fun parseTimestampSafe(isoString: String?): Long {
+        if (isoString.isNullOrBlank()) return 0L
+        return try {
+            val clean = isoString.trim()
+                .replace("Z", "+0000")
+                .replace("+00:00", "+0000")
+                .replace("+00", "+0000")
+            val patterns = listOf(
+                "yyyy-MM-dd'T'HH:mm:ss.SSSSSSZ",
+                "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+                "yyyy-MM-dd'T'HH:mm:ssZ",
+                "yyyy-MM-dd HH:mm:ss.SSSSSSZ",
+                "yyyy-MM-dd HH:mm:ss.SSSZ",
+                "yyyy-MM-dd HH:mm:ssZ",
+                "yyyy-MM-dd'T'HH:mm:ss.SSSSSS",
+                "yyyy-MM-dd'T'HH:mm:ss.SSS",
+                "yyyy-MM-dd'T'HH:mm:ss",
+                "yyyy-MM-dd HH:mm:ss"
+            )
+            var parsedDate: Date? = null
+            for (p in patterns) {
+                try {
+                    val sdf = SimpleDateFormat(p, Locale.US).apply {
+                        timeZone = TimeZone.getTimeZone("UTC")
+                    }
+                    parsedDate = sdf.parse(clean)
+                    if (parsedDate != null) break
+                } catch (ignored: Exception) {}
+            }
+            parsedDate?.time ?: 0L
+        } catch (e: Exception) {
+            0L
+        }
+    }
+
+    fun isValidUuid(id: String?): Boolean {
+        if (id.isNullOrBlank() || id.equals("self", ignoreCase = true)) return false
+        return try {
+            UUID.fromString(id.trim())
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Strict participant matching with authoritative UUID priority:
+     * 1. Valid Supabase UUID (caller_id / receiver_id) is authoritative.
+     * 2. Phone / suffix ONLY as fallback when UUID is genuinely unavailable on at least one side.
+     * 3. Blank phone/suffix MUST NEVER match anything.
+     * 4. "self" MUST NEVER be treated as a real user ID.
+     */
+    fun matchesParticipant(
+        queryId: String?,
+        queryPhone: String?,
+        querySuffix: String?,
+        targetId: String?,
+        targetPhone: String?,
+        targetSuffix: String?
+    ): Boolean {
+        val qCleanId = queryId?.trim()?.takeIf { it.isNotBlank() && !it.equals("self", ignoreCase = true) }
+        val tCleanId = targetId?.trim()?.takeIf { it.isNotBlank() && !it.equals("self", ignoreCase = true) }
+
+        val qIsUuid = isValidUuid(qCleanId)
+        val tIsUuid = isValidUuid(tCleanId)
+
+        // 1. Authoritative UUID matching:
+        // If BOTH sides have valid UUIDs, they MUST match. If they differ, they are definitely different users.
+        if (qIsUuid && tIsUuid) {
+            return qCleanId.equals(tCleanId, ignoreCase = true)
+        }
+
+        // If both sides have identical non-blank IDs (e.g. identical custom IDs, neither being "self"):
+        if (qCleanId != null && tCleanId != null && qCleanId == tCleanId) {
+            return true
+        }
+
+        // 2. Phone / suffix ONLY as fallback when UUID is genuinely unavailable (null on at least one side).
+        // 3. Blank phone/suffix MUST NEVER match anything.
+        val qPhone = PhoneUtils.cleanPhoneNumber(queryPhone.orEmpty())
+        val tPhone = PhoneUtils.cleanPhoneNumber(targetPhone.orEmpty())
+
+        if (qPhone.isNotBlank() && tPhone.isNotBlank()) {
+            if (qPhone.length >= 7 && tPhone.length >= 7 && qPhone == tPhone) {
+                return true
+            }
+        }
+
+        val qSuffix = querySuffix?.trim()?.takeIf { it.isNotBlank() } ?: PhoneUtils.extractPhoneSuffix(qPhone)
+        val tSuffix = targetSuffix?.trim()?.takeIf { it.isNotBlank() } ?: PhoneUtils.extractPhoneSuffix(tPhone)
+
+        if (qSuffix.isNotBlank() && tSuffix.isNotBlank()) {
+            if (qSuffix.length >= 7 && tSuffix.length >= 7 && qSuffix == tSuffix) {
+                return true
+            }
+        }
+
+        return false
+    }
+
     suspend fun findActiveCallForParticipant(
         userId: String?,
         userPhone: String,
@@ -32,13 +137,26 @@ object SupabaseCallService {
         excludeRoomId: String? = null
     ): SupabaseActiveCall? = withContext(Dispatchers.IO) {
         try {
+            val hasValidId = !userId.isNullOrBlank() && !userId.equals("self", ignoreCase = true)
             val cleanPhone = PhoneUtils.cleanPhoneNumber(userPhone)
-            val cleanSuffix = userSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(cleanPhone) }
-            val validUid = if (!userId.isNullOrBlank() && userId != "self") userId else null
+            val cleanSuffix = userSuffix.trim().takeIf { it.isNotBlank() } ?: PhoneUtils.extractPhoneSuffix(cleanPhone)
+            val hasValidPhone = cleanPhone.length >= 7
+            val hasValidSuffix = cleanSuffix.length >= 7
+
+            if (!hasValidId && !hasValidPhone && !hasValidSuffix) {
+                return@withContext null
+            }
 
             val list = SupabaseClientProvider.client.postgrest["active_calls"]
                 .select()
                 .decodeList<SupabaseActiveCall>()
+
+            if (list.isEmpty()) return@withContext null
+
+            val now = System.currentTimeMillis()
+            val terminalStatuses = setOf(
+                "ENDED", "REJECTED", "BUSY", "MISSED", "TIMEOUT", "TIMED_OUT", "CANCELLED", "DECLINED", "TERMINATED"
+            )
 
             for (call in list) {
                 val callRoom = call.roomId.ifBlank { call.id }
@@ -47,25 +165,46 @@ object SupabaseCallService {
                 }
 
                 val statusUpper = call.status.uppercase()
-                val isTerminal = statusUpper in listOf("ENDED", "REJECTED", "BUSY", "MISSED", "TIMEOUT", "CANCELLED")
-                if (isTerminal) continue
-
-                val ageMs = SupabaseMessage.parseIsoTimestampToMillis(call.createdAt).let {
-                    if (it > 0) System.currentTimeMillis() - it else 0L
+                if (statusUpper in terminalStatuses) {
+                    continue
                 }
-                val maxValidAgeMs = if (statusUpper == "ACCEPTED") 4 * 60 * 60 * 1000L else 60_000L
-                if (ageMs >= maxValidAgeMs) continue
 
-                val matchesCaller = (validUid != null && call.callerId == validUid) ||
-                        (cleanPhone.isNotBlank() && PhoneUtils.cleanPhoneNumber(call.callerPhone) == cleanPhone) ||
-                        (cleanSuffix.isNotBlank() && (call.callerSuffix == cleanSuffix || PhoneUtils.extractPhoneSuffix(call.callerPhone) == cleanSuffix))
+                val updatedAtMillis = parseTimestampSafe(call.updatedAt)
+                val createdAtMillis = parseTimestampSafe(call.createdAt)
+                val effectiveTime = if (updatedAtMillis > 0L) updatedAtMillis else createdAtMillis
 
-                val receiverUid = call.receiverId
-                val matchesReceiver = (validUid != null && receiverUid != null && receiverUid == validUid) ||
-                        (cleanPhone.isNotBlank() && PhoneUtils.cleanPhoneNumber(call.receiverPhone) == cleanPhone) ||
-                        (cleanSuffix.isNotBlank() && (call.receiverSuffix == cleanSuffix || PhoneUtils.extractPhoneSuffix(call.receiverPhone) == cleanSuffix))
+                if (effectiveTime > 0L) {
+                    val ageMs = now - effectiveTime
+                    val maxValidAgeMs = if (statusUpper == "ACCEPTED") 2 * 60 * 60 * 1000L else 45_000L
+                    if (ageMs >= maxValidAgeMs) {
+                        Log.d(TAG, "[CALL_RACE] Skipping aged-out active_call ${call.id} (status=$statusUpper, ageMs=$ageMs)")
+                        continue
+                    }
+                } else {
+                    Log.w(TAG, "[CALL_RACE] Skipping active_call ${call.id} with invalid/unparseable timestamp")
+                    continue
+                }
+
+                val matchesCaller = matchesParticipant(
+                    queryId = userId,
+                    queryPhone = userPhone,
+                    querySuffix = userSuffix,
+                    targetId = call.callerId,
+                    targetPhone = call.callerPhone,
+                    targetSuffix = call.callerSuffix
+                )
+
+                val matchesReceiver = matchesParticipant(
+                    queryId = userId,
+                    queryPhone = userPhone,
+                    querySuffix = userSuffix,
+                    targetId = call.receiverId,
+                    targetPhone = call.receiverPhone,
+                    targetSuffix = call.receiverSuffix
+                )
 
                 if (matchesCaller || matchesReceiver) {
+                    Log.i(TAG, "[CALL_BUSY] Genuine active call found for participant: callId=${call.id}, status=${call.status}, isCaller=$matchesCaller, isReceiver=$matchesReceiver")
                     return@withContext call
                 }
             }
@@ -81,11 +220,16 @@ object SupabaseCallService {
             // Check if an active call already exists in DB for this room
             val existing = getActiveCall(activeCall.id).getOrNull()
             if (existing != null) {
-                val isTerminal = existing.status in listOf("ENDED", "REJECTED", "BUSY", "MISSED", "TIMEOUT", "CANCELLED")
-                val ageMs = SupabaseMessage.parseIsoTimestampToMillis(existing.createdAt).let {
-                    if (it > 0) System.currentTimeMillis() - it else 0L
-                }
-                if (!isTerminal && ageMs < 60_000L) {
+                val statusUpper = existing.status.uppercase()
+                val isTerminal = statusUpper in listOf(
+                    "ENDED", "REJECTED", "BUSY", "MISSED", "TIMEOUT", "TIMED_OUT", "CANCELLED", "DECLINED", "TERMINATED"
+                )
+                val updatedAtMillis = parseTimestampSafe(existing.updatedAt)
+                val createdAtMillis = parseTimestampSafe(existing.createdAt)
+                val effectiveTime = if (updatedAtMillis > 0L) updatedAtMillis else createdAtMillis
+                val ageMs = if (effectiveTime > 0L) System.currentTimeMillis() - effectiveTime else Long.MAX_VALUE
+
+                if (!isTerminal && ageMs < 45_000L) {
                     Log.w(TAG, "[CALL_RACE] Active call conflict detected before insert: room ${activeCall.id} has existing active call with status=${existing.status}, caller=${existing.callerId}")
                     return@withContext Result.failure(ActiveCallConflictException("Active call already in progress", existing))
                 } else {
