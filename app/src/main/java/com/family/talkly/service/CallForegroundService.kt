@@ -16,6 +16,7 @@ import androidx.core.app.NotificationCompat
 import com.family.talkly.MainActivity
 import com.family.talkly.R
 import com.family.talkly.data.supabase.SupabaseCallService
+import com.family.talkly.data.zego.CallState
 import com.family.talkly.data.zego.ZegoCallEngineManager
 import com.family.talkly.util.TalklyNotificationHelper
 import kotlinx.coroutines.CoroutineScope
@@ -135,7 +136,13 @@ class CallForegroundService : Service() {
             }
         }
 
-        fun stopCallService(context: Context) {
+        fun stopCallService(context: Context, roomId: String? = null) {
+            val currentCall = ZegoCallEngineManager.getInstance(context.applicationContext).callState.value
+            if (roomId != null && currentCall.roomID.isNotBlank() && currentCall.roomID != roomId &&
+                (currentCall.state == CallState.ACTIVE || currentCall.state == CallState.OUTGOING_CALLING || currentCall.state == CallState.OUTGOING_RINGING)) {
+                Log.d(TAG, "[CALL_SCOPE] Ignoring stopCallService for unrelated roomId=$roomId because current call is ${currentCall.state} in room=${currentCall.roomID}")
+                return
+            }
             // First stop ringtone in memory immediately to avoid any OS Intent delivery latency delay
             stopRingtoneImmediately()
             try {
@@ -205,6 +212,20 @@ class CallForegroundService : Service() {
                 if (isSelfCall) {
                     Log.d(TAG, "Ignoring ACTION_START_INCOMING_CALL for self-call (callerUid=$callerUid)")
                     stopSelfAndRingtone()
+                    return START_NOT_STICKY
+                }
+
+                val currentCall = ZegoCallEngineManager.getInstance(applicationContext).callState.value
+                val isUserBusy = (currentCall.state != CallState.IDLE &&
+                        currentCall.state != CallState.ENDED &&
+                        currentCall.roomID.isNotBlank() &&
+                        currentCall.roomID != roomId)
+
+                if (isUserBusy) {
+                    Log.w(TAG, "[CALL_BUSY] CallForegroundService ignoring ACTION_START_INCOMING_CALL for room $roomId because user is in call (${currentCall.state}, room=${currentCall.roomID})")
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                        com.family.talkly.data.supabase.SupabaseCallService.updateActiveCallStatus(roomId, "BUSY")
+                    }
                     return START_NOT_STICKY
                 }
 

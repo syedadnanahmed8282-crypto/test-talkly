@@ -554,6 +554,7 @@ fun ChatDetailScreen(
         }
     }
     var ownSendPendingScroll by remember(member.id) { mutableStateOf(false) }
+    var wasNearBottomBeforeIme by remember(member.id) { mutableStateOf(true) }
 
     fun sendPendingMediaMessage(
         textContent: String,
@@ -561,7 +562,7 @@ fun ChatDetailScreen(
         localMediaUrl: String?
     ) {
         if (localMediaUrl.isNullOrBlank()) return
-        if (isUserAtBottom) {
+        if (isUserAtBottom || wasNearBottomBeforeIme) {
             ownSendPendingScroll = true
         }
         val tempId = java.util.UUID.randomUUID().toString()
@@ -671,10 +672,15 @@ fun ChatDetailScreen(
     // --- SAFE DETERMINISTIC SCROLL ENGINE ---
     var hasPositionedInitially by rememberSaveable(member.id) { mutableStateOf(false) }
     var knownMessageIds by remember(member.id) { mutableStateOf<Set<String>>(emptySet()) }
+    var knownFinalMediaIds by remember(member.id) { mutableStateOf<Set<String>>(emptySet()) }
     var unreadCountWhileScrolledUp by remember(member.id) { mutableIntStateOf(0) }
 
     val currentMessageIds = remember(combinedMessages) {
         combinedMessages.map { it.id }.toSet()
+    }
+
+    val currentFinalMediaIds = remember(combinedMessages) {
+        combinedMessages.filter { isFinalMediaAvailable(it) }.map { it.id }.toSet()
     }
 
     // Clear unread count when user reaches the bottom
@@ -711,44 +717,56 @@ fun ChatDetailScreen(
             }
             hasPositionedInitially = true
             knownMessageIds = currentMessageIds
+            knownFinalMediaIds = currentFinalMediaIds
         } else {
             if (knownMessageIds.isEmpty()) {
                 knownMessageIds = currentMessageIds
             }
+            if (knownFinalMediaIds.isEmpty()) {
+                knownFinalMediaIds = currentFinalMediaIds
+            }
         }
     }
 
-    // STEP B, C, D, G: Deterministic New Message Scroll Engine
-    // Strictly separates new genuine messages from existing message updates
-    LaunchedEffect(currentMessageIds, isSearchActive) {
+    // STEP B, C, D, G: Deterministic New Message & Media Transition Scroll Engine
+    // Strictly separates new genuine messages and final media transitions from non-scroll updates
+    LaunchedEffect(currentMessageIds, currentFinalMediaIds, isSearchActive) {
         if (!hasPositionedInitially) return@LaunchedEffect
         if (uiItems.isEmpty()) return@LaunchedEffect
 
         val newIds = currentMessageIds - knownMessageIds
-        if (newIds.isNotEmpty()) {
+        val newMediaIds = currentFinalMediaIds - knownFinalMediaIds
+        val hasNewMessages = newIds.isNotEmpty()
+        val hasMediaTransition = newMediaIds.isNotEmpty()
+
+        if (hasNewMessages || hasMediaTransition) {
             val wasNearBottom = isUserAtBottom || ownSendPendingScroll
             ownSendPendingScroll = false
             knownMessageIds = currentMessageIds
+            knownFinalMediaIds = currentFinalMediaIds
 
             if (isSearchActive) {
                 return@LaunchedEffect
             }
 
             if (wasNearBottom) {
-                // If user was near bottom or sent this message: smoothly reveal new message
+                // If user was near bottom or sent this message: smoothly reveal new message / media
                 if (!listState.isScrollInProgress) {
-                    kotlinx.coroutines.yield()
-                    val target = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+                    kotlinx.coroutines.delay(40)
+                    val target = maxOf(listState.layoutInfo.totalItemsCount - 1, uiItems.size + 1).coerceAtLeast(0)
                     listState.animateScrollToItem(target)
                 }
             } else {
                 // User intentionally scrolled upward reading older messages: DO NOT SCROLL
-                unreadCountWhileScrolledUp += newIds.size
+                if (hasNewMessages) {
+                    unreadCountWhileScrolledUp += newIds.size
+                }
             }
         } else {
-            // Existing message updates (read/delivery receipts, reactions, edits, upload progress, media URLs):
-            // NEVER auto-scroll, just update knownMessageIds cleanly
+            // Existing message updates (read/delivery receipts, reactions, edits, upload progress):
+            // NEVER auto-scroll, just update known sets cleanly
             knownMessageIds = currentMessageIds
+            knownFinalMediaIds = currentFinalMediaIds
         }
     }
 
@@ -770,12 +788,21 @@ fun ChatDetailScreen(
     val isImeOpen = imeBottom > 0
     var wasImeOpen by remember { mutableStateOf(false) }
 
+    LaunchedEffect(isImeOpen, isUserAtBottom) {
+        if (!isImeOpen) {
+            wasNearBottomBeforeIme = isUserAtBottom
+        }
+    }
+
     LaunchedEffect(isImeOpen) {
         if (isImeOpen && !wasImeOpen) {
-            if (hasPositionedInitially && isUserAtBottom && !isSearchActive && !listState.isScrollInProgress) {
-                kotlinx.coroutines.delay(60)
-                val target = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
-                listState.animateScrollToItem(target)
+            if (hasPositionedInitially && wasNearBottomBeforeIme && !isSearchActive && !listState.isScrollInProgress) {
+                // Wait for the layout/IME transition to settle before scrolling
+                kotlinx.coroutines.delay(140)
+                if (!listState.isScrollInProgress) {
+                    val target = maxOf(listState.layoutInfo.totalItemsCount - 1, uiItems.size + 1).coerceAtLeast(0)
+                    listState.animateScrollToItem(target)
+                }
             }
         }
         wasImeOpen = isImeOpen
@@ -3979,7 +4006,7 @@ fun ChatDetailScreen(
                                                     }
                                                     editingMessage = null
                                                 } else {
-                                                    if (isUserAtBottom) {
+                                                    if (isUserAtBottom || wasNearBottomBeforeIme) {
                                                         ownSendPendingScroll = true
                                                     }
                                                     onSendMessage(
@@ -4038,7 +4065,7 @@ fun ChatDetailScreen(
                                                 }
                                                 editingMessage = null
                                             } else {
-                                                if (isUserAtBottom) {
+                                                if (isUserAtBottom || wasNearBottomBeforeIme) {
                                                     ownSendPendingScroll = true
                                                 }
                                                 onSendMessage(
@@ -4430,6 +4457,8 @@ fun VoiceNotePreviewBar(
  * Checks if the user is currently looking at or near the bottom of the message list.
  * Evaluates actual pixel distance of the last visible item from the bottom of the viewport
  * to avoid arbitrary index-based jumps.
+ * Allows approximately 0–3 messages below the user's current position to auto-scroll,
+ * while preventing jumps when 5–8+ messages are below.
  */
 private fun isUserNearBottom(
     layoutInfo: androidx.compose.foundation.lazy.LazyListLayoutInfo,
@@ -4442,12 +4471,29 @@ private fun isUserNearBottom(
     val lastVisible = visibleItems.last()
     // If the bottom-most item in the list (the bottom spacer) is visible:
     if (lastVisible.index == totalItems - 1) return true
-    // If the last message or second-to-last message is visible:
-    if (lastVisible.index >= totalItems - 3) {
+    // If within ~0-3 messages of the bottom (allowing up to 3 newer messages below):
+    if (lastVisible.index >= totalItems - 5) {
         val lastItemBottom = lastVisible.offset + lastVisible.size
         val viewportBottom = layoutInfo.viewportEndOffset - layoutInfo.afterContentPadding
         val distanceFromBottom = lastItemBottom - viewportBottom
         return distanceFromBottom <= thresholdPx
     }
     return false
+}
+
+/**
+ * Checks if an IMAGE or VIDEO message has completed its upload lifecycle and
+ * has reached an available final remote URL (not temporary/local/uploading).
+ */
+private fun isFinalMediaAvailable(message: ChatMessage): Boolean {
+    if (message.messageType != MessageType.IMAGE && message.messageType != MessageType.VIDEO) {
+        return false
+    }
+    val url = message.mediaUrl
+    if (url.isNullOrBlank()) return false
+    val isLocalOrTemp = url.startsWith("content://") ||
+            url.startsWith("file://") ||
+            url.startsWith("/") ||
+            message.isUploading
+    return !isLocalOrTemp
 }

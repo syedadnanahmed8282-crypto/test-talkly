@@ -359,7 +359,18 @@ class MainActivity : ComponentActivity() {
                 return
             }
 
-            com.family.talkly.service.CallForegroundService.stopCallService(applicationContext)
+            val currentCall = zegoManager.callState.value
+            val isUserBusy = (currentCall.state != com.family.talkly.data.zego.CallState.IDLE &&
+                    currentCall.state != com.family.talkly.data.zego.CallState.ENDED &&
+                    currentCall.roomID.isNotBlank() &&
+                    currentCall.roomID != roomId)
+
+            if (isUserBusy) {
+                android.util.Log.w("MainActivity", "[CALL_BUSY] Discarding open_incoming_call intent for room $roomId because user is already in call (${currentCall.state}, room=${currentCall.roomID})")
+                return
+            }
+
+            com.family.talkly.service.CallForegroundService.stopCallService(applicationContext, roomId)
 
             if (roomId.isNotBlank()) {
                 val callType = try {

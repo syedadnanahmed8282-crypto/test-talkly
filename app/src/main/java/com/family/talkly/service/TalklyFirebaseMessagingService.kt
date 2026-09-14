@@ -6,6 +6,9 @@ import com.family.talkly.util.FcmTokenManager
 import com.family.talkly.util.TalklyNotificationHelper
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class TalklyFirebaseMessagingService : FirebaseMessagingService() {
 
@@ -96,6 +99,21 @@ class TalklyFirebaseMessagingService : FirebaseMessagingService() {
 
                     when (callStatus.uppercase()) {
                         "RINGING" -> {
+                            val callEngine = com.family.talkly.data.zego.ZegoCallEngineManager.getInstance(applicationContext)
+                            val currentCall = callEngine.callState.value
+                            val isUserBusy = (currentCall.state != com.family.talkly.data.zego.CallState.IDLE &&
+                                    currentCall.state != com.family.talkly.data.zego.CallState.ENDED &&
+                                    currentCall.roomID.isNotBlank() &&
+                                    currentCall.roomID != roomId)
+
+                            if (isUserBusy) {
+                                Log.w(TAG, "[CALL_BUSY] Discarding incoming call FCM for room $roomId because user is already in call (${currentCall.state}, room=${currentCall.roomID})")
+                                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                                    com.family.talkly.data.supabase.SupabaseCallService.updateActiveCallStatus(roomId, "BUSY")
+                                }
+                                return
+                            }
+
                             CallForegroundService.startCallService(
                                 context = applicationContext,
                                 callerName = callerName,
@@ -106,7 +124,13 @@ class TalklyFirebaseMessagingService : FirebaseMessagingService() {
                                 callType = callType
                             )
                         }
-                        "ENDED", "DECLINED", "CANCELLED", "TIMED_OUT", "ACCEPTED", "ANSWERED", "PEER_ANSWERED" -> {
+                        "ENDED", "DECLINED", "CANCELLED", "TIMED_OUT", "ACCEPTED", "ANSWERED", "PEER_ANSWERED", "BUSY" -> {
+                            val callEngine = com.family.talkly.data.zego.ZegoCallEngineManager.getInstance(applicationContext)
+                            val currentCall = callEngine.callState.value
+                            if (currentCall.roomID.isNotBlank() && roomId.isNotBlank() && currentCall.roomID != roomId) {
+                                Log.d(TAG, "[CALL_SCOPE] Ignoring FCM terminal status for unrelated room $roomId (current active room is ${currentCall.roomID})")
+                                return
+                            }
                             CallForegroundService.stopCallService(applicationContext)
                         }
                     }

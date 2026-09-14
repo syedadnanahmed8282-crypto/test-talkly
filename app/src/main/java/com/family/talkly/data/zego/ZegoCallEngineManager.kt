@@ -13,6 +13,7 @@ import com.family.talkly.data.models.CallLog
 import com.family.talkly.data.models.CallType
 import com.family.talkly.data.models.FamilyMember
 import com.family.talkly.data.models.UserProfile
+import com.family.talkly.data.supabase.ActiveCallConflictException
 import com.family.talkly.data.supabase.SupabaseActiveCall
 import com.family.talkly.data.supabase.SupabaseCallLog
 import com.family.talkly.data.supabase.SupabaseCallService
@@ -858,15 +859,74 @@ class ZegoCallEngineManager(private val context: Context) {
                 }
             }
             is PostgresAction.Delete -> {
-                scope.launch(Dispatchers.Main) {
-                    val currentState = _callState.value.state
-                    if (currentState != CallState.IDLE && currentState != CallState.ENDED) {
-                        endCallInternal("Call Ended")
+                try {
+                    val deletedId = try {
+                        action.oldRecord["id"]?.toString()?.replace("\"", "")?.trim()
+                    } catch (e: Exception) { null }
+
+                    scope.launch(Dispatchers.Main) {
+                        val currentRoom = _callState.value.roomID
+                        val currentState = _callState.value.state
+                        if (currentState != CallState.IDLE && currentState != CallState.ENDED) {
+                            if (!deletedId.isNullOrBlank() && currentRoom.isNotBlank() && deletedId != currentRoom) {
+                                Log.d(TAG, "[CALL_RACE] Ignoring Delete for stale/unrelated call id=$deletedId (current=$currentRoom)")
+                                return@launch
+                            }
+                            Log.d(TAG, "[CALL_RACE] Realtime Delete received for call room $currentRoom, ending call")
+                            endCallInternal("Call Ended", deleteFromDb = false, targetRoomId = currentRoom)
+                        }
                     }
+                } catch (e: Exception) {
+                    Log.w(TAG, "[CALL_RACE] Error processing Delete action: ${e.localizedMessage}")
                 }
             }
             else -> {}
         }
+    }
+
+    private fun setupAndShowIncomingCall(
+        call: SupabaseActiveCall,
+        callerUid: String,
+        callerSuffix: String,
+        roomID: String,
+        callType: CallType
+    ) {
+        // Acknowledge ringing back to caller via Supabase
+        scope.launch(Dispatchers.IO) {
+            SupabaseCallService.updateActiveCallStatus(call.id, "RINGING")
+        }
+
+        callSoundManager.startIncomingRingtone()
+        val incomingCaller = FamilyMember(
+            id = if (callerSuffix.isNotBlank()) callerSuffix else callerUid,
+            name = call.callerName.ifBlank { "Talkly User" },
+            phone = call.callerPhone,
+            relation = "Family Member",
+            status = "Incoming call...",
+            avatarUrl = if (call.callerAvatarUrl.isNotBlank()) call.callerAvatarUrl else null,
+            isOnline = true,
+            firebaseUid = callerUid,
+            isRegisteredOnTalkly = true
+        )
+        _callState.value = CurrentCallInfo(
+            state = CallState.INCOMING_RINGING,
+            callType = callType,
+            targetMember = incomingCaller,
+            roomID = roomID,
+            durationSeconds = 0,
+            isOutgoing = false
+        )
+        Log.d(TAG, "[CALL_RACE] Transitioned to INCOMING_RINGING: caller=${incomingCaller.name}, roomID=$roomID, callType=$callType")
+
+        com.family.talkly.service.CallForegroundService.startIncomingCallService(
+            context = context,
+            callerName = call.callerName.ifBlank { "Talkly User" },
+            callerUid = callerUid,
+            callerPhone = call.callerPhone,
+            callerAvatar = call.callerAvatarUrl,
+            roomId = roomID,
+            callType = callType.name
+        )
     }
 
     private fun handleActiveCallSignal(call: SupabaseActiveCall) {
@@ -887,94 +947,82 @@ class ZegoCallEngineManager(private val context: Context) {
         val status = call.status.uppercase()
         val roomID = call.roomId.ifBlank { call.id }
 
-        val isMeCaller = (myUid.isNotBlank() && myUid != "self" && callerUid == myUid) ||
-                (mySuffix.isNotBlank() && callerSuffix.isNotBlank() && callerSuffix == mySuffix) ||
-                (myPhone.isNotBlank() && callerPhone.isNotBlank() && callerPhone == myPhone) ||
-                _callState.value.isOutgoing ||
-                ((_callState.value.state == CallState.OUTGOING_CALLING || _callState.value.state == CallState.OUTGOING_RINGING) && _callState.value.roomID == roomID)
+        val isCallerByUid = myUid.isNotBlank() && myUid != "self" && callerUid == myUid
+        val isCallerBySuffix = mySuffix.isNotBlank() && callerSuffix.isNotBlank() && callerSuffix == mySuffix
+        val isCallerByPhone = myPhone.isNotBlank() && callerPhone.isNotBlank() && callerPhone == myPhone
+        val isMeCaller = isCallerByUid || isCallerBySuffix || isCallerByPhone
 
-        val isMeReceiver = !isMeCaller && (
-                (myUid.isNotBlank() && myUid != "self" && receiverUid == myUid) ||
-                (mySuffix.isNotBlank() && receiverSuffix.isNotBlank() && receiverSuffix == mySuffix) ||
-                (myPhone.isNotBlank() && receiverPhone.isNotBlank() && receiverPhone == myPhone)
-        )
+        val isReceiverByUid = myUid.isNotBlank() && myUid != "self" && receiverUid == myUid
+        val isReceiverBySuffix = mySuffix.isNotBlank() && receiverSuffix.isNotBlank() && receiverSuffix == mySuffix
+        val isReceiverByPhone = myPhone.isNotBlank() && receiverPhone.isNotBlank() && receiverPhone == myPhone
+        val isMeReceiver = !isMeCaller && (isReceiverByUid || isReceiverBySuffix || isReceiverByPhone)
 
-        Log.e(TAG, "[DIAGNOSTIC] handleActiveCallSignal: raw call.callType='${call.callType}', parsed callType=$callType, status=$status, isMeCaller=$isMeCaller, isMeReceiver=$isMeReceiver")
+        if (!isMeCaller && !isMeReceiver) {
+            Log.d(TAG, "[CALL_RACE] Ignoring active call signal: not a participant (myUid=$myUid, caller=$callerUid, receiver=$receiverUid)")
+            return
+        }
+
+        val currentState = _callState.value.state
+        val currentRoom = _callState.value.roomID
+
+        Log.d(TAG, "[CALL_RACE] handleActiveCallSignal: id=${call.id}, room=$roomID, status=$status, isMeCaller=$isMeCaller, isMeReceiver=$isMeReceiver, currentState=$currentState, currentRoom=$currentRoom")
 
         when (status) {
             "CALLING" -> {
-                if (isMeReceiver && !isMeCaller) {
-                    val currentState = _callState.value.state
-                    if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING || currentState == CallState.ACTIVE) {
-                        Log.d(TAG, "User is busy in existing call ($currentState), updating status to BUSY")
+                if (isMeReceiver) {
+                    // Case A: Simultaneous call collision (I was attempting an outgoing call for this same room/peer)
+                    if ((currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) && currentRoom == roomID) {
+                        Log.d(TAG, "[CALL_RACE] Simultaneous call collision: peer $callerUid already created active call $roomID. Yielding local outgoing attempt to winning incoming call.")
+                        ringingTimeoutJob?.cancel()
+                        callSoundManager.stopAllSounds()
+                        try {
+                            com.family.talkly.service.CallForegroundService.stopCallService(context)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error stopping foreground service: ${e.localizedMessage}")
+                        }
+                        setupAndShowIncomingCall(call, callerUid, callerSuffix, roomID, callType)
+                        return
+                    }
+
+                    // Case B: User is busy in an existing DIFFERENT active, ringing, or outgoing call
+                    val isEngagedInOtherCall = (currentState != CallState.IDLE && currentState != CallState.ENDED && currentRoom.isNotBlank() && currentRoom != roomID)
+                    if (isEngagedInOtherCall) {
+                        Log.w(TAG, "[CALL_BUSY] User is already engaged in call ($currentState, room=$currentRoom), updating status to BUSY for incoming call ${call.id}")
                         scope.launch(Dispatchers.IO) {
                             SupabaseCallService.updateActiveCallStatus(call.id, "BUSY")
                         }
                         return
                     }
 
+                    // Case C: Stale call check (> 45s)
                     val callCreatedMillis = SupabaseMessage.parseIsoTimestampToMillis(call.createdAt)
                     val callAgeMs = if (callCreatedMillis > 0) System.currentTimeMillis() - callCreatedMillis else 0L
                     if (callAgeMs > 45_000L) {
-                        Log.d(TAG, "Ignoring stale incoming call (age: ${callAgeMs}ms)")
+                        Log.d(TAG, "[CALL_RACE] Ignoring stale incoming call (age: ${callAgeMs}ms)")
                         scope.launch(Dispatchers.IO) {
                             SupabaseCallService.updateActiveCallStatus(call.id, "MISSED")
                         }
                         return
                     }
 
-                    // Acknowledge ringing back to caller via Supabase
-                    scope.launch(Dispatchers.IO) {
-                        SupabaseCallService.updateActiveCallStatus(call.id, "RINGING")
-                    }
-
+                    // Case D: User is idle or call already ended -> normal incoming call
                     if (currentState == CallState.IDLE || currentState == CallState.ENDED) {
-                        callSoundManager.startIncomingRingtone()
-                        val incomingCaller = FamilyMember(
-                            id = if (callerSuffix.isNotBlank()) callerSuffix else callerUid,
-                            name = call.callerName.ifBlank { "Talkly User" },
-                            phone = call.callerPhone,
-                            relation = "Family Member",
-                            status = "Incoming call...",
-                            avatarUrl = if (call.callerAvatarUrl.isNotBlank()) call.callerAvatarUrl else null,
-                            isOnline = true,
-                            firebaseUid = callerUid,
-                            isRegisteredOnTalkly = true
-                        )
-                        _callState.value = CurrentCallInfo(
-                            state = CallState.INCOMING_RINGING,
-                            callType = callType,
-                            targetMember = incomingCaller,
-                            roomID = roomID,
-                            durationSeconds = 0
-                        )
-                        Log.e(TAG, "[DIAGNOSTIC] _callState emitted (INCOMING_RINGING): callType=${_callState.value.callType}, caller=${incomingCaller.name}, roomID=$roomID")
-
-                        com.family.talkly.service.CallForegroundService.startIncomingCallService(
-                            context = context,
-                            callerName = call.callerName.ifBlank { "Talkly User" },
-                            callerUid = callerUid,
-                            callerPhone = call.callerPhone,
-                            callerAvatar = call.callerAvatarUrl,
-                            roomId = roomID,
-                            callType = callType.name
-                        )
+                        setupAndShowIncomingCall(call, callerUid, callerSuffix, roomID, callType)
                     }
                 }
             }
             "RINGING", "PEER_RINGING" -> {
                 if (isMeCaller) {
-                    val currentState = _callState.value.state
-                    if (currentState == CallState.OUTGOING_CALLING) {
-                        Log.d(TAG, "Recipient device ringing. Transitioning state to OUTGOING_RINGING")
+                    if (currentRoom == roomID && currentState == CallState.OUTGOING_CALLING) {
+                        Log.d(TAG, "[CALL_RACE] Recipient device ringing. Transitioning state to OUTGOING_RINGING for room $roomID")
                         _callState.value = _callState.value.copy(state = CallState.OUTGOING_RINGING)
                     }
                 }
             }
             "ACCEPTED", "PEER_ANSWERED" -> {
                 if (isMeCaller) {
-                    val currentState = _callState.value.state
-                    if (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING) {
+                    if (currentRoom == roomID && (currentState == CallState.OUTGOING_CALLING || currentState == CallState.OUTGOING_RINGING)) {
+                        Log.d(TAG, "[CALL_RACE] Caller received ACCEPTED signal for room $roomID, transitioning to ACTIVE and joining Agora")
                         ringingTimeoutJob?.cancel()
                         try {
                             com.family.talkly.service.CallForegroundService.stopCallService(context)
@@ -997,27 +1045,27 @@ class ZegoCallEngineManager(private val context: Context) {
                 }
             }
             "REJECTED", "DECLINED" -> {
-                val currentState = _callState.value.state
-                if (currentState != CallState.IDLE && currentState != CallState.ENDED) {
+                if (currentRoom == roomID && currentState != CallState.IDLE && currentState != CallState.ENDED) {
+                    Log.d(TAG, "[CALL_RACE] Received REJECTED/DECLINED for room $roomID")
                     if (isMeCaller) {
                         android.widget.Toast.makeText(context, "Call declined", android.widget.Toast.LENGTH_SHORT).show()
                     }
-                    endCallInternal("Call Declined")
+                    endCallInternal("Call Declined", deleteFromDb = true, targetRoomId = roomID)
                 }
             }
             "BUSY" -> {
-                val currentState = _callState.value.state
-                if (currentState != CallState.IDLE && currentState != CallState.ENDED) {
+                if (currentRoom == roomID && currentState != CallState.IDLE && currentState != CallState.ENDED) {
+                    Log.d(TAG, "[CALL_RACE] Received BUSY for room $roomID")
                     if (isMeCaller) {
                         android.widget.Toast.makeText(context, "User is busy", android.widget.Toast.LENGTH_SHORT).show()
                     }
-                    endCallInternal("User Busy")
+                    endCallInternal("User Busy", deleteFromDb = true, targetRoomId = roomID)
                 }
             }
             "ENDED", "TIMED_OUT", "TIMEOUT", "MISSED", "CANCELLED" -> {
-                val currentState = _callState.value.state
-                if (currentState != CallState.IDLE && currentState != CallState.ENDED) {
-                    endCallInternal("Call Ended")
+                if (currentRoom == roomID && currentState != CallState.IDLE && currentState != CallState.ENDED) {
+                    Log.d(TAG, "[CALL_RACE] Received terminal status $status for room $roomID, ending call")
+                    endCallInternal("Call Ended", deleteFromDb = false, targetRoomId = roomID)
                 }
             }
         }
@@ -1038,7 +1086,14 @@ class ZegoCallEngineManager(private val context: Context) {
         if (isBlocked) {
             Log.w(TAG, "Cannot start call: ${member.name} is blocked")
             android.widget.Toast.makeText(context, "Call failed: User is blocked", android.widget.Toast.LENGTH_SHORT).show()
-            endCallInternal("User Blocked")
+            endCallInternal("User Blocked", deleteFromDb = false)
+            return
+        }
+
+        val currentState = _callState.value.state
+        if (currentState != CallState.IDLE && currentState != CallState.ENDED) {
+            Log.w(TAG, "[CALL_BUSY] Outgoing call blocked: already in call state $currentState (room=${_callState.value.roomID})")
+            android.widget.Toast.makeText(context, "Cannot place call: You are already in an active call", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -1072,10 +1127,7 @@ class ZegoCallEngineManager(private val context: Context) {
             callType = callType.name,
             roomId = roomID
         )
-        Log.d(TAG, "Starting outgoing ${callType.name} call to ${member.name} in room $roomID")
-
-        // Join Agora RTC channel early for outgoing call
-        joinCallRoom(roomID, isVideo)
+        Log.d(TAG, "[CALL_RACE] Starting outgoing ${callType.name} call to ${member.name} in room $roomID (waiting for DB insert before joining Agora)")
 
         // Async resolve receiver UUID if needed and insert active_call row in Supabase
         scope.launch(Dispatchers.IO) {
@@ -1127,33 +1179,72 @@ class ZegoCallEngineManager(private val context: Context) {
 
             Log.e("Talkly_AgoraEngine", "[CALLER_DIAGNOSTIC] Inserting into Supabase: callerId=$effectiveCallerUid, receiverId=$finalReceiverId, roomId=$roomID, callType=${callType.name}")
             val createResult = SupabaseCallService.createActiveCall(activeCall)
-            if (createResult.isFailure) {
-                val errorMsg = createResult.exceptionOrNull()?.localizedMessage ?: "Unknown error"
-                Log.e(TAG, "Failed to create active call in Supabase: $errorMsg")
-                withContext(Dispatchers.Main) {
-                    android.widget.Toast.makeText(context, "কল সংযোগ স্থাপন করা যায়নি: $errorMsg", android.widget.Toast.LENGTH_LONG).show()
-                    endCallInternal("Call Setup Failed")
-                }
-                return@launch
-            }
 
-            // Send high priority FCM push for incoming calls (for killed/background recipient)
-            val fcmPayload = mapOf(
-                "type" to "INCOMING_CALL",
-                "callerName" to callerProfile.name,
-                "callerUid" to effectiveCallerUid,
-                "caller_id" to effectiveCallerUid,
-                "callerPhone" to callerProfile.phoneNumber,
-                "callerAvatarUrl" to (callerProfile.profilePicUrl ?: ""),
-                "roomID" to roomID,
-                "callType" to callType.name,
-                "status" to "RINGING"
-            )
-            com.family.talkly.util.FcmTokenManager.sendHighPriorityPush(
-                targetUid = (finalReceiverId ?: resolvedTargetId).ifBlank { member.id },
-                targetPhoneSuffix = targetSuffix,
-                dataPayload = fcmPayload
-            )
+            withContext(Dispatchers.Main) {
+                val stateAfterDb = _callState.value.state
+                val roomAfterDb = _callState.value.roomID
+
+                if (createResult.isSuccess) {
+                    Log.d(TAG, "[CALL_RACE] DB win: Active call created successfully for room $roomID")
+                    if (stateAfterDb != CallState.OUTGOING_CALLING || roomAfterDb != roomID) {
+                        Log.d(TAG, "[CALL_RACE] Outgoing call cancelled locally during DB creation (state=$stateAfterDb). Deleting created row.")
+                        scope.launch(Dispatchers.IO) {
+                            SupabaseCallService.deleteActiveCall(roomID)
+                        }
+                        return@withContext
+                    }
+
+                    // Only now join Agora channel!
+                    Log.d(TAG, "[CALL_RACE] Joining Agora room $roomID after confirmed DB win")
+                    joinCallRoom(roomID, isVideo)
+
+                    // Send high priority FCM push for incoming calls (for killed/background recipient)
+                    val fcmPayload = mapOf(
+                        "type" to "INCOMING_CALL",
+                        "callerName" to callerProfile.name,
+                        "callerUid" to effectiveCallerUid,
+                        "caller_id" to effectiveCallerUid,
+                        "callerPhone" to callerProfile.phoneNumber,
+                        "callerAvatarUrl" to (callerProfile.profilePicUrl ?: ""),
+                        "roomID" to roomID,
+                        "callType" to callType.name,
+                        "status" to "RINGING"
+                    )
+                    com.family.talkly.util.FcmTokenManager.sendHighPriorityPush(
+                        targetUid = (finalReceiverId ?: resolvedTargetId).ifBlank { member.id },
+                        targetPhoneSuffix = targetSuffix,
+                        dataPayload = fcmPayload
+                    )
+                } else {
+                    val ex = createResult.exceptionOrNull()
+                    val isConflict = ex is ActiveCallConflictException
+                    Log.w(TAG, "[CALL_RACE] DB loss: active_call creation failed: isConflict=$isConflict, err=${ex?.localizedMessage}")
+
+                    // If local state already yielded to an incoming call for this room, do not revert to IDLE!
+                    if (stateAfterDb == CallState.INCOMING_RINGING && roomAfterDb == roomID) {
+                        Log.d(TAG, "[CALL_RACE] Local state already yielded to winning incoming call for room $roomID. Keeping INCOMING_RINGING.")
+                        return@withContext
+                    }
+
+                    // Clean only this local failed attempt without deleting DB winner
+                    callSoundManager.stopAllSounds()
+                    callSoundManager.resetAudioMode()
+                    ringingTimeoutJob?.cancel()
+                    try {
+                        com.family.talkly.service.CallForegroundService.stopCallService(context)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error stopping foreground service: ${e.localizedMessage}")
+                    }
+                    _callState.value = CurrentCallInfo(state = CallState.IDLE)
+
+                    val userMessage = if (isConflict) {
+                        "User is busy / another call is in progress"
+                    } else {
+                        "Call failed: ${ex?.localizedMessage ?: "Network error"}"
+                    }
+                    android.widget.Toast.makeText(context, userMessage, android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
         }
 
         ringingTimeoutJob?.cancel()
@@ -1180,12 +1271,21 @@ class ZegoCallEngineManager(private val context: Context) {
                 )
                 addCallLog(callLog)
 
-                endCallInternal("No Answer")
+                endCallInternal("No Answer", deleteFromDb = true, targetRoomId = roomID)
             }
         }
     }
 
     fun setIncomingCallFromKilledState(member: FamilyMember, roomID: String, callType: CallType) {
+        val currentCall = _callState.value
+        if (currentCall.state != CallState.IDLE && currentCall.state != CallState.ENDED && currentCall.roomID.isNotBlank() && currentCall.roomID != roomID) {
+            Log.w(TAG, "[CALL_BUSY] Ignoring setIncomingCallFromKilledState for room $roomID: user is in ${currentCall.state} for room ${currentCall.roomID}")
+            scope.launch(Dispatchers.IO) {
+                SupabaseCallService.updateActiveCallStatus(roomID, "BUSY")
+            }
+            return
+        }
+
         try {
             com.family.talkly.service.CallForegroundService.stopCallService(context)
         } catch (e: Exception) {
@@ -1203,6 +1303,12 @@ class ZegoCallEngineManager(private val context: Context) {
     }
 
     fun triggerIncomingCall(member: FamilyMember, callType: CallType) {
+        val currentCall = _callState.value
+        if (currentCall.state != CallState.IDLE && currentCall.state != CallState.ENDED) {
+            Log.w(TAG, "[CALL_BUSY] Ignoring triggerIncomingCall: user already in ${currentCall.state} for room ${currentCall.roomID}")
+            return
+        }
+
         val myProfile = currentUserProfile ?: getLocalUserProfile()
         val myUid = myProfile.uid
         val myPhone = myProfile.phoneNumber
@@ -1242,25 +1348,49 @@ class ZegoCallEngineManager(private val context: Context) {
         }
         callSoundManager.stopAllSounds()
         val current = _callState.value
+        val roomID = current.roomID
         val member = current.targetMember
 
-        val isVideo = (current.callType == CallType.VIDEO)
-        callSoundManager.configureAudioForActiveCall(isSpeakerOn = isVideo, isMuted = current.isMuted)
-
-        scope.launch(Dispatchers.IO) {
-            SupabaseCallService.updateActiveCallStatus(current.roomID, "ACCEPTED")
+        if (current.state != CallState.INCOMING_RINGING) {
+            Log.w(TAG, "[CALL_RACE] acceptCall called while state is ${current.state} (expected INCOMING_RINGING), ignoring")
+            return
         }
 
-        _callState.value = current.copy(state = CallState.ACTIVE, isSpeakerOn = isVideo, isOutgoing = false)
-        Log.e(TAG, "[DIAGNOSTIC] _callState emitted (acceptCall): state=${_callState.value.state}, callType=${_callState.value.callType}, isCameraOff=${_callState.value.isCameraOff}")
-        com.family.talkly.service.CallForegroundService.startActiveCallService(
-            context = context,
-            callerName = member?.name ?: "Talkly User",
-            callType = current.callType.name,
-            roomId = current.roomID
-        )
-        joinCallRoom(current.roomID, isVideo)
-        startCallTimer()
+        // DB First: Update Supabase active_calls row to ACCEPTED before entering ACTIVE & joining Agora
+        scope.launch(Dispatchers.IO) {
+            val updateResult = SupabaseCallService.updateActiveCallStatus(roomID, "ACCEPTED")
+            withContext(Dispatchers.Main) {
+                // Verify room and state haven't changed while DB update was in progress
+                val stateNow = _callState.value.state
+                val roomNow = _callState.value.roomID
+                if (roomNow != roomID || stateNow != CallState.INCOMING_RINGING) {
+                    Log.w(TAG, "[CALL_RACE] State or room changed during DB accept (roomNow=$roomNow, stateNow=$stateNow). Aborting accept transition.")
+                    return@withContext
+                }
+
+                if (updateResult.isSuccess) {
+                    Log.i(TAG, "[CALL_RACE] Successfully updated DB status to ACCEPTED for room $roomID. Joining Agora.")
+                    val isVideo = (current.callType == CallType.VIDEO)
+                    callSoundManager.configureAudioForActiveCall(isSpeakerOn = isVideo, isMuted = current.isMuted)
+
+                    _callState.value = current.copy(state = CallState.ACTIVE, isSpeakerOn = isVideo, isOutgoing = false)
+                    Log.e(TAG, "[DIAGNOSTIC] _callState emitted (acceptCall): state=${_callState.value.state}, callType=${_callState.value.callType}, isCameraOff=${_callState.value.isCameraOff}")
+                    com.family.talkly.service.CallForegroundService.startActiveCallService(
+                        context = context,
+                        callerName = member?.name ?: "Talkly User",
+                        callType = current.callType.name,
+                        roomId = roomID
+                    )
+                    joinCallRoom(roomID, isVideo)
+                    startCallTimer()
+                } else {
+                    val ex = updateResult.exceptionOrNull()
+                    Log.w(TAG, "[CALL_RACE] Failed to update DB status to ACCEPTED for room $roomID: ${ex?.localizedMessage}")
+                    android.widget.Toast.makeText(context, "Call is no longer available", android.widget.Toast.LENGTH_SHORT).show()
+                    endCallInternal("Call no longer available", deleteFromDb = false, targetRoomId = roomID)
+                }
+            }
+        }
     }
 
     fun declineCall() {
@@ -1272,10 +1402,13 @@ class ZegoCallEngineManager(private val context: Context) {
         }
         callSoundManager.stopAllSounds()
         val current = _callState.value
+        val roomID = current.roomID
         val member = current.targetMember
 
-        scope.launch(Dispatchers.IO) {
-            SupabaseCallService.updateActiveCallStatus(current.roomID, "REJECTED")
+        if (roomID.isNotBlank()) {
+            scope.launch(Dispatchers.IO) {
+                SupabaseCallService.updateActiveCallStatus(roomID, "REJECTED")
+            }
         }
 
         if (member != null) {
@@ -1290,7 +1423,7 @@ class ZegoCallEngineManager(private val context: Context) {
             )
             addCallLog(callLog)
         }
-        endCallInternal("Call Declined")
+        endCallInternal("Call Declined", deleteFromDb = false, targetRoomId = roomID)
     }
 
     fun endCall() {
@@ -1302,10 +1435,13 @@ class ZegoCallEngineManager(private val context: Context) {
         }
         callSoundManager.stopAllSounds()
         val current = _callState.value
+        val roomID = current.roomID
         val member = current.targetMember
 
-        scope.launch(Dispatchers.IO) {
-            SupabaseCallService.updateActiveCallStatus(current.roomID, "ENDED")
+        if (roomID.isNotBlank()) {
+            scope.launch(Dispatchers.IO) {
+                SupabaseCallService.updateActiveCallStatus(roomID, "ENDED")
+            }
         }
 
         if (member != null) {
@@ -1322,11 +1458,34 @@ class ZegoCallEngineManager(private val context: Context) {
             )
             addCallLog(callLog)
         }
-        endCallInternal("Call Ended")
+        endCallInternal("Call Ended", deleteFromDb = true, targetRoomId = roomID)
     }
 
-    private fun endCallInternal(reason: String) {
+    private fun endCallInternal(
+        reason: String,
+        deleteFromDb: Boolean = true,
+        targetRoomId: String? = null
+    ) {
         val currentRoom = _callState.value.roomID
+        val effectiveRoom = targetRoomId ?: currentRoom
+
+        // Call-scoped guard: If targetRoomId was specified and doesn't match our active room,
+        // do not tear down our ongoing call! Clean up the targetRoom from DB if requested and return.
+        if (targetRoomId != null && currentRoom.isNotBlank() && currentRoom != targetRoomId) {
+            Log.w(TAG, "[CALL_SCOPE] Ignoring endCallInternal for targetRoomId '$targetRoomId' because active room is '$currentRoom'")
+            if (deleteFromDb) {
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        SupabaseCallService.deleteActiveCall(targetRoomId)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error deleting stale active call: ${e.localizedMessage}")
+                    }
+                }
+            }
+            return
+        }
+
+        Log.d(TAG, "[CALL_SCOPE] Ending call for room '$effectiveRoom' (reason=$reason, deleteFromDb=$deleteFromDb)")
         ringingTimeoutJob?.cancel()
         timerJob?.cancel()
         try {
@@ -1340,19 +1499,21 @@ class ZegoCallEngineManager(private val context: Context) {
         _callState.value = _callState.value.copy(state = CallState.ENDED)
 
         // Delete active call row from Supabase
-        scope.launch(Dispatchers.IO) {
-            try {
-                if (currentRoom.isNotBlank()) {
-                    SupabaseCallService.deleteActiveCall(currentRoom)
+        if (deleteFromDb && effectiveRoom.isNotBlank()) {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    SupabaseCallService.deleteActiveCall(effectiveRoom)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error deleting active call from Supabase: ${e.localizedMessage}")
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "Error deleting active call from Supabase: ${e.localizedMessage}")
             }
         }
 
         scope.launch {
             delay(1000)
-            _callState.value = CurrentCallInfo(state = CallState.IDLE)
+            if (_callState.value.roomID == effectiveRoom || _callState.value.state == CallState.ENDED) {
+                _callState.value = CurrentCallInfo(state = CallState.IDLE)
+            }
         }
     }
 

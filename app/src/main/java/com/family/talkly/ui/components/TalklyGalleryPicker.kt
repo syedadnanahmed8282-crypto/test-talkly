@@ -146,7 +146,15 @@ data class LocalMediaItem(
     val size: Long = 0L,
     val bucketId: String = "",
     val bucketDisplayName: String = "All Media"
-)
+) {
+    /**
+     * Stable unique media identity combining media type (photo vs video), MediaStore ID, and content URI.
+     * Guarantees unique Compose keys across lazy grids and rows even when photo and video tables
+     * share identical IDs, or when MediaStore queries return duplicate entries.
+     */
+    val uniqueKey: String
+        get() = "${if (isVideo) "video" else "image"}_${id}_$uri"
+}
 
 /**
  * Media Album / Folder model
@@ -281,8 +289,9 @@ fun TalklyGalleryPicker(
             isLoadingMedia = true
             withContext(Dispatchers.IO) {
                 val mediaList = queryDeviceMediaStore(context)
+                val distinctMediaList = mediaList.distinctBy { it.uniqueKey }
                 withContext(Dispatchers.Main) {
-                    allMediaItems = mediaList
+                    allMediaItems = distinctMediaList
                     isLoadingMedia = false
                 }
             }
@@ -340,11 +349,12 @@ fun TalklyGalleryPicker(
             allMediaItems.filter { it.bucketId == selectedAlbumId }
         }
 
-        when (currentTab) {
+        val tabFiltered = when (currentTab) {
             GalleryTab.ALL -> albumFiltered
             GalleryTab.PHOTOS -> albumFiltered.filter { !it.isVideo }
             GalleryTab.VIDEOS -> albumFiltered.filter { it.isVideo }
         }
+        tabFiltered.distinctBy { it.uniqueKey }
     }
 
     val photoCount = remember(allMediaItems, selectedAlbumId) {
@@ -636,9 +646,9 @@ fun TalklyGalleryPicker(
                             ) {
                                 items(
                                     items = displayedItems,
-                                    key = { it.id }
+                                    key = { it.uniqueKey }
                                 ) { item ->
-                                    val selectedIndex = selectedItems.indexOfFirst { it.id == item.id }
+                                    val selectedIndex = selectedItems.indexOfFirst { it.uniqueKey == item.uniqueKey }
                                     val isSelected = selectedIndex >= 0
 
                                     // Selection compatibility check
@@ -653,7 +663,7 @@ fun TalklyGalleryPicker(
                                         isIncompatible = isIncompatible,
                                         onClick = {
                                             if (isSelected) {
-                                                selectedItems.removeAll { it.id == item.id }
+                                                selectedItems.removeAll { it.uniqueKey == item.uniqueKey }
                                             } else {
                                                 if (hasSelection) {
                                                     if (firstIsVideo != item.isVideo) {
@@ -663,10 +673,14 @@ fun TalklyGalleryPicker(
                                                             "Select photos only for this batch."
                                                         }
                                                     } else {
-                                                        selectedItems.add(item)
+                                                        if (!selectedItems.any { it.uniqueKey == item.uniqueKey }) {
+                                                            selectedItems.add(item)
+                                                        }
                                                     }
                                                 } else {
-                                                    selectedItems.add(item)
+                                                    if (!selectedItems.any { it.uniqueKey == item.uniqueKey }) {
+                                                        selectedItems.add(item)
+                                                    }
                                                 }
                                             }
                                         },
@@ -713,7 +727,7 @@ fun TalklyGalleryPicker(
                         ) {
                             items(
                                 items = selectedItems,
-                                key = { it.id }
+                                key = { it.uniqueKey }
                             ) { selectedItem ->
                                 Box(
                                     modifier = Modifier
@@ -750,7 +764,7 @@ fun TalklyGalleryPicker(
                                             .clip(CircleShape)
                                             .background(Color.Black.copy(alpha = 0.75f))
                                             .clickable {
-                                                selectedItems.removeAll { it.id == selectedItem.id }
+                                                selectedItems.removeAll { it.uniqueKey == selectedItem.uniqueKey }
                                             },
                                         contentAlignment = Alignment.Center
                                     ) {
@@ -938,7 +952,7 @@ fun TalklyGalleryPicker(
             // 4. Full-Screen Interactive Media Preview (Pinch-to-zoom, Pan, Video Playback)
             if (previewingItem != null) {
                 val currentPreview = previewingItem!!
-                val isSelected = selectedItems.any { it.id == currentPreview.id }
+                val isSelected = selectedItems.any { it.uniqueKey == currentPreview.uniqueKey }
                 val hasSelection = selectedItems.isNotEmpty()
                 val firstIsVideo = if (hasSelection) selectedItems.first().isVideo else false
                 val isIncompatible = hasSelection && (firstIsVideo != currentPreview.isVideo)
@@ -949,16 +963,20 @@ fun TalklyGalleryPicker(
                     isIncompatible = isIncompatible,
                     onToggleSelect = {
                         if (isSelected) {
-                            selectedItems.removeAll { it.id == currentPreview.id }
+                            selectedItems.removeAll { it.uniqueKey == currentPreview.uniqueKey }
                         } else {
                             if (hasSelection) {
                                 if (firstIsVideo != currentPreview.isVideo) {
                                     batchWarningMessage = if (firstIsVideo) "Select videos only for this batch." else "Select photos only for this batch."
                                 } else {
-                                    selectedItems.add(currentPreview)
+                                    if (!selectedItems.any { it.uniqueKey == currentPreview.uniqueKey }) {
+                                        selectedItems.add(currentPreview)
+                                    }
                                 }
                             } else {
-                                selectedItems.add(currentPreview)
+                                if (!selectedItems.any { it.uniqueKey == currentPreview.uniqueKey }) {
+                                    selectedItems.add(currentPreview)
+                                }
                             }
                         }
                     },
@@ -1060,7 +1078,7 @@ private fun ModernGalleryGridThumbnail(
             .clip(RoundedCornerShape(4.dp))
             .background(Color(0xFF141C24))
             .border(if (isSelected) 2.dp else 0.dp, borderTint, RoundedCornerShape(4.dp))
-            .pointerInput(item.id) {
+            .pointerInput(item.uniqueKey) {
                 detectTapGestures(
                     onTap = { onClick() },
                     onLongPress = { onLongClick() }
@@ -1216,7 +1234,7 @@ private fun FullScreenInteractivePreview(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(item.id) {
+                        .pointerInput(item.uniqueKey) {
                             detectTransformGestures { _, pan, zoom, _ ->
                                 scale = (scale * zoom).coerceIn(1f, 4.5f)
                                 if (scale > 1f) {
@@ -1230,7 +1248,7 @@ private fun FullScreenInteractivePreview(
                                 }
                             }
                         }
-                        .pointerInput(item.id) {
+                        .pointerInput(item.uniqueKey) {
                             detectTapGestures(
                                 onDoubleTap = {
                                     if (scale > 1f) {
@@ -1406,7 +1424,7 @@ private fun PreviewVideoPlayer(
     var videoViewRef by remember { mutableStateOf<VideoView?>(null) }
     var mediaPlayerRef by remember { mutableStateOf<MediaPlayer?>(null) }
 
-    DisposableEffect(item.id) {
+    DisposableEffect(item.uniqueKey) {
         onDispose {
             try {
                 videoViewRef?.stopPlayback()
@@ -1510,9 +1528,9 @@ private fun VideoThumbnailView(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var thumbnailBitmap by remember(item.id) { mutableStateOf(VideoThumbnailCache.get(item.id)) }
+    var thumbnailBitmap by remember(item.uniqueKey) { mutableStateOf(VideoThumbnailCache.get(item.id)) }
 
-    LaunchedEffect(item.id) {
+    LaunchedEffect(item.uniqueKey) {
         if (thumbnailBitmap == null) {
             withContext(Dispatchers.IO) {
                 val bitmap = try {
@@ -1782,6 +1800,6 @@ private suspend fun queryDeviceMediaStore(context: Context): List<LocalMediaItem
 
     // Sort combined list newest first
     items.sortByDescending { it.dateModified }
-    items
+    items.distinctBy { it.uniqueKey }
 }
 
