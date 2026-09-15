@@ -416,9 +416,10 @@ fun ChatDetailScreen(
 
     val activeMessages = if (localClearedMessages) emptyList() else messages
 
-    val combinedMessages = remember(activeMessages, localPendingMessages) {
+    val combinedMessages = remember(activeMessages, localPendingMessages, dissolveManager.dissolvingCount) {
         val serverIds = activeMessages.map { it.id }.toSet()
-        (activeMessages + localPendingMessages.filter { it.id !in serverIds })
+        val retainedDissolving = dissolveManager.getDissolvingMessages().filter { it.id !in serverIds }
+        (activeMessages + localPendingMessages.filter { it.id !in serverIds } + retainedDissolving)
             .distinctBy { it.id }
             .sortedBy { it.timestamp }
     }
@@ -1104,12 +1105,12 @@ fun ChatDetailScreen(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .clickable {
-                                                val msgId = selectedMsg.id
+                                                val msg = selectedMsg
+                                                val msgId = msg.id
                                                 reactionDialogMessage = null
-                                                dissolveManager.startDissolve(setOf(msgId)) {
-                                                    onDeleteForYou(msgId)
-                                                    Toast.makeText(context, "Deleted for you", Toast.LENGTH_SHORT).show()
-                                                }
+                                                dissolveManager.startDissolve(listOf(msg))
+                                                onDeleteForYou(msgId)
+                                                Toast.makeText(context, "Deleted for you", Toast.LENGTH_SHORT).show()
                                             }
                                     ) {
                                         Row(
@@ -1141,15 +1142,15 @@ fun ChatDetailScreen(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clickable {
-                                                    val msgId = selectedMsg.id
+                                                    val msg = selectedMsg
+                                                    val msgId = msg.id
                                                     reactionDialogMessage = null
-                                                    dissolveManager.startDissolve(setOf(msgId)) {
-                                                        val success = onDeleteForEveryone(msgId)
-                                                        if (success) {
-                                                            Toast.makeText(context, "Deleted for everyone", Toast.LENGTH_SHORT).show()
-                                                        } else {
-                                                            Toast.makeText(context, "Could not delete for everyone", Toast.LENGTH_SHORT).show()
-                                                        }
+                                                    dissolveManager.startDissolve(listOf(msg))
+                                                    val success = onDeleteForEveryone(msgId)
+                                                    if (success) {
+                                                        Toast.makeText(context, "Deleted for everyone", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        Toast.makeText(context, "Could not delete for everyone", Toast.LENGTH_SHORT).show()
                                                     }
                                                 }
                                         ) {
@@ -1288,20 +1289,20 @@ fun ChatDetailScreen(
                                     .fillMaxWidth()
                                     .clickable {
                                         val idsToDelete = selectedMessageIds.toSet()
+                                        val msgsToDelete = combinedMessages.filter { it.id in idsToDelete }
                                         showBulkDeleteDialog = false
                                         selectedMessageIds = emptySet()
-                                        dissolveManager.startDissolve(idsToDelete) {
-                                            if (onDeleteMessagesForYou != null) {
-                                                onDeleteMessagesForYou(idsToDelete)
-                                            } else {
-                                                idsToDelete.forEach { onDeleteForYou(it) }
-                                            }
-                                            Toast.makeText(
-                                                context,
-                                                if (idsToDelete.size == 1) "Deleted for you" else "Deleted ${idsToDelete.size} messages for you",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
+                                        dissolveManager.startDissolve(msgsToDelete)
+                                        if (onDeleteMessagesForYou != null) {
+                                            onDeleteMessagesForYou(idsToDelete)
+                                        } else {
+                                            idsToDelete.forEach { onDeleteForYou(it) }
                                         }
+                                        Toast.makeText(
+                                            context,
+                                            if (idsToDelete.size == 1) "Deleted for you" else "Deleted ${idsToDelete.size} messages for you",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
                                     }
                             ) {
                                 Row(
@@ -1334,20 +1335,20 @@ fun ChatDetailScreen(
                                         .fillMaxWidth()
                                         .clickable {
                                             val ownIdsToDelete = currentOwnMsgs.map { it.id }.toSet()
+                                            val ownMsgsToDelete = currentOwnMsgs.filter { it.id in ownIdsToDelete }
                                             showBulkDeleteDialog = false
                                             selectedMessageIds = emptySet()
-                                            dissolveManager.startDissolve(ownIdsToDelete) {
-                                                if (onDeleteMessagesForEveryone != null) {
-                                                    onDeleteMessagesForEveryone(ownIdsToDelete)
-                                                } else {
-                                                    ownIdsToDelete.forEach { onDeleteForEveryone(it) }
-                                                }
-                                                Toast.makeText(
-                                                    context,
-                                                    if (ownIdsToDelete.size == 1) "Deleted for everyone" else "Deleted ${ownIdsToDelete.size} messages for everyone",
-                                                    Toast.LENGTH_SHORT
-                                                ).show()
+                                            dissolveManager.startDissolve(ownMsgsToDelete)
+                                            if (onDeleteMessagesForEveryone != null) {
+                                                onDeleteMessagesForEveryone(ownIdsToDelete)
+                                            } else {
+                                                ownIdsToDelete.forEach { onDeleteForEveryone(it) }
                                             }
+                                            Toast.makeText(
+                                                context,
+                                                if (ownIdsToDelete.size == 1) "Deleted for everyone" else "Deleted ${ownIdsToDelete.size} messages for everyone",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
                                         }
                                 ) {
                                     Row(
@@ -2731,6 +2732,11 @@ fun ChatDetailScreen(
                                 is ChatUiItem.MediaCluster -> item.messages.any { selectedMessageIds.contains(it.id) }
                             }
 
+                            val isItemDissolving = when (item) {
+                                is ChatUiItem.SingleMessage -> dissolveManager.isDissolving(item.message.id)
+                                is ChatUiItem.MediaCluster -> item.messages.any { dissolveManager.isDissolving(it.id) }
+                            }
+
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -2744,7 +2750,7 @@ fun ChatDetailScreen(
                                         }
                                     )
                                     .then(
-                                        if (isSelectionMode) {
+                                        if (isSelectionMode || isItemDissolving) {
                                             Modifier
                                         } else {
                                             Modifier.pointerInput(item.id) {
@@ -2799,7 +2805,7 @@ fun ChatDetailScreen(
                                     horizontalArrangement = if (isSelf) Arrangement.End else Arrangement.Start,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    if (isSelectionMode && !isSelf) {
+                                    if (isSelectionMode && !isSelf && !isItemDissolving) {
                                         Box(
                                             modifier = Modifier
                                                 .padding(start = 6.dp, end = 4.dp)

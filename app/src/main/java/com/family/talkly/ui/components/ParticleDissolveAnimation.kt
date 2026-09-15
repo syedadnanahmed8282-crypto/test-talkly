@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -25,17 +26,18 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.family.talkly.data.models.ChatMessage
 import com.family.talkly.data.models.MessageType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Random
 import kotlin.math.PI
@@ -63,85 +65,136 @@ data class DisintegrateParticle(
     val width: Float,
     val height: Float,
     val color: Color,
-    val detachProgress: Float, // Progress when this particle detaches
-    val velocityX: Float,      // Outward drift velocity
-    val liftY: Float,          // Initial upward flutter before gravity takes over
-    val gravityY: Float,       // Downward gravity drift
-    val maxRotation: Float     // Subtle rotation in degrees (within ±15°)
+    val detachProgress: Float, // Progress (0f..1f) when this particle detaches
+    val velocityX: Float,      // Outward drift velocity in pixels
+    val liftY: Float,          // Initial upward buoyant lift in pixels
+    val gravityY: Float,       // Downward gravity drift in pixels
+    val maxRotation: Float     // Subtle rotation in degrees (within ±12°)
 )
 
 /**
- * Manages active particle dissolve animations across chat message IDs.
+ * Manages active particle dissolve animations across chat message items.
+ * Decouples visual disintegration from backend deletion by retaining a visual snapshot of
+ * dissolving messages so the chat list layout does not jump or collapse prematurely.
  */
 @Stable
 class ParticleDissolveManager(private val coroutineScope: CoroutineScope) {
     private val animatables = mutableStateMapOf<String, Animatable<Float, AnimationVector1D>>()
-    private val fullyDissolvedIds = mutableStateMapOf<String, Boolean>()
+    private val _dissolvingMessages = mutableStateMapOf<String, ChatMessage>()
+
+    // State counter observed by ChatDetailScreen to retain dissolving messages in layout
+    var dissolvingCount by mutableIntStateOf(0)
+        private set
 
     fun isDissolving(messageId: String): Boolean {
-        return animatables.containsKey(messageId) || fullyDissolvedIds.containsKey(messageId)
+        return animatables.containsKey(messageId) || _dissolvingMessages.containsKey(messageId)
     }
 
     fun getProgress(messageId: String): Float? {
-        val anim = animatables[messageId]
-        if (anim != null) return anim.value
-        if (fullyDissolvedIds.containsKey(messageId)) return 1.0f
-        return null
+        return animatables[messageId]?.value
     }
 
-    fun startDissolve(messageIds: Set<String>, onComplete: () -> Unit) {
-        if (messageIds.isEmpty()) {
-            onComplete()
+    fun getDissolvingMessages(): List<ChatMessage> {
+        return _dissolvingMessages.values.toList()
+    }
+
+    /**
+     * Immediately registers [messages] as visually dissolving and executes the smooth
+     * ~1850ms cinematic disintegration animation.
+     */
+    fun startDissolve(
+        messages: Collection<ChatMessage>,
+        onComplete: (() -> Unit)? = null
+    ) {
+        if (messages.isEmpty()) {
+            onComplete?.invoke()
             return
         }
 
+        val targetList = messages.toList()
+        for (msg in targetList) {
+            _dissolvingMessages[msg.id] = msg
+            animatables[msg.id] = Animatable(0f)
+        }
+        dissolvingCount++
+
         coroutineScope.launch {
             try {
-                // Initialize animatable for each target message
-                for (id in messageIds) {
-                    animatables[id] = Animatable(0f)
+                val jobs = targetList.map { msg ->
+                    async {
+                        val anim = animatables[msg.id] ?: return@async
+                        anim.animateTo(
+                            targetValue = 1f,
+                            animationSpec = tween(
+                                durationMillis = 1850,
+                                easing = CubicBezierEasing(0.22f, 0.0f, 0.20f, 1.0f)
+                            )
+                        )
+                    }
                 }
+                jobs.awaitAll()
+            } catch (_: CancellationException) {
+                // Safeguard on coroutine cancellation
+            } finally {
+                for (msg in targetList) {
+                    animatables.remove(msg.id)
+                    _dissolvingMessages.remove(msg.id)
+                }
+                dissolvingCount++
+                onComplete?.invoke()
+            }
+        }
+    }
 
-                // Run animations in parallel over ~1350ms with smooth progressive easing
+    /**
+     * Fallback overload supporting message IDs directly.
+     */
+    fun startDissolve(
+        messageIds: Set<String>,
+        onComplete: (() -> Unit)? = null
+    ) {
+        if (messageIds.isEmpty()) {
+            onComplete?.invoke()
+            return
+        }
+        for (id in messageIds) {
+            animatables[id] = Animatable(0f)
+        }
+        dissolvingCount++
+
+        coroutineScope.launch {
+            try {
                 val jobs = messageIds.map { id ->
                     async {
                         val anim = animatables[id] ?: return@async
                         anim.animateTo(
                             targetValue = 1f,
                             animationSpec = tween(
-                                durationMillis = 1350,
-                                easing = CubicBezierEasing(0.35f, 0.0f, 0.25f, 1.0f)
+                                durationMillis = 1850,
+                                easing = CubicBezierEasing(0.22f, 0.0f, 0.20f, 1.0f)
                             )
                         )
                     }
                 }
                 jobs.awaitAll()
-
-                // Mark fully dissolved so items stay invisible while waiting for repo deletion
+            } catch (_: CancellationException) {
+            } finally {
                 for (id in messageIds) {
                     animatables.remove(id)
-                    fullyDissolvedIds[id] = true
+                    _dissolvingMessages.remove(id)
                 }
-
-                onComplete()
-
-                // Clean up fullyDissolvedIds after 600ms so repo state update has arrived
-                delay(600)
-                for (id in messageIds) {
-                    fullyDissolvedIds.remove(id)
-                }
-            } catch (e: CancellationException) {
-                // In case of cancellation (e.g., navigating away), ensure deletion executes
-                onComplete()
+                dissolvingCount++
+                onComplete?.invoke()
             }
         }
     }
 
     fun clearDissolved(ids: Set<String>) {
         for (id in ids) {
-            fullyDissolvedIds.remove(id)
+            _dissolvingMessages.remove(id)
             animatables.remove(id)
         }
+        dissolvingCount++
     }
 }
 
@@ -152,7 +205,7 @@ fun rememberParticleDissolveManager(): ParticleDissolveManager {
 }
 
 /**
- * Generates an adaptive, dense set of micro-pixel fragments (150 to 800) that visually mirror
+ * Generates an adaptive, dense set of micro-pixel fragments (160 to 720) that visually mirror
  * the message or media surface.
  */
 fun generateDisintegrateParticles(
@@ -170,40 +223,41 @@ fun generateDisintegrateParticles(
     val baseArea = widthDp * heightDp
 
     // Adaptive particle count based on visible message surface size:
-    // - Small text bubble: ~150–250 particles
-    // - Normal image/message: ~300–500 particles
-    // - Large media/message/cluster: ~500–800 particles
+    // - Small text bubble: ~160–240 particles
+    // - Normal message: ~240–380 particles
+    // - Large media/message/cluster: ~380–720 particles
     val count = when {
-        baseArea < 5000f -> (150f + (baseArea / 5000f) * 70f).toInt().coerceIn(150, 220)
-        baseArea < 25000f -> (220f + ((baseArea - 5000f) / 20000f) * 130f).toInt().coerceIn(220, 350)
-        baseArea < 55000f -> (350f + ((baseArea - 25000f) / 30000f) * 170f).toInt().coerceIn(350, 520)
-        else -> (520f + ((baseArea - 55000f) / 40000f) * 280f).toInt().coerceIn(520, 800)
+        baseArea < 6000f -> (160f + (baseArea / 6000f) * 80f).toInt().coerceIn(160, 240)
+        baseArea < 25000f -> (240f + ((baseArea - 6000f) / 19000f) * 140f).toInt().coerceIn(240, 380)
+        baseArea < 55000f -> (380f + ((baseArea - 25000f) / 30000f) * 160f).toInt().coerceIn(380, 540)
+        else -> (540f + ((baseArea - 55000f) / 40000f) * 180f).toInt().coerceIn(540, 720)
     }
 
     val palette = when {
         hasMedia -> listOf(
-            TalklySkyBlue, TalklyCyan, TalklyAqua,
-            TalklyMidBlue, TalklyDarkBlue,
-            Color(0xFF334155), Color(0xFF475569), Color(0xFF64748B),
-            Color(0xFF94A3B8), TalklyTextPrimary, Color(0xFF020617),
-            Color(0xFFE0F2FE), Color(0xFF1E293B)
+            TalklyCyan, TalklyAqua, TalklySkyBlue,
+            Color(0xFF38BDF8), Color(0xFF0284C7),
+            Color(0xFF1E293B), Color(0xFF334155), Color(0xFF475569),
+            Color(0xFF64748B), Color(0xFF94A3B8), TalklyTextPrimary,
+            Color(0xFF0F172A), Color(0xFFE2E8F0)
         )
         messageType == MessageType.VOICE_NOTE -> listOf(
             TalklyCyan, TalklyAqua, TalklyMint,
-            TalklySkyBlue, TalklyElevated, TalklyTextPrimary,
-            Color(0xFF18212B), Color(0xFF334155), TalklyTextSecondary
+            TalklySkyBlue, TalklyElevated, TalklyCard,
+            TalklyTextPrimary, TalklyTextSecondary, Color(0xFF0F766E)
         )
         isSelf -> listOf(
             TalklyCyan, TalklyAqua, TalklyMint,
-            TalklySkyBlue, Color(0xFF06B6D4),
-            TalklyTextPrimary, Color(0xFFE2E8F0), Color(0xFFCBD5E1),
-            Color(0xFF0F766E), Color(0xFF14B8A6)
+            TalklySkyBlue, Color(0xFF06B6D4), Color(0xFF0891B2),
+            TalklyTextPrimary, Color(0xFFE2E8F0), Color(0xFFCCFBF1),
+            Color(0xFF14B8A6), Color(0xFF0F766E)
         )
         else -> listOf(
-            TalklyCard, TalklyElevated, TalklyMidBlue,
-            Color(0xFF253342), TalklyTextPrimary,
-            TalklyTextSecondary, Color(0xFF334155), Color(0xFF475569),
-            TalklyCyan.copy(alpha = 0.5f), Color(0xFF1E293B)
+            TalklyCard, TalklyElevated, Color(0xFF1A2430),
+            Color(0xFF253342), Color(0xFF2D3B4B),
+            TalklyTextPrimary, TalklyTextSecondary,
+            Color(0xFF334155), Color(0xFF475569),
+            TalklyCyan.copy(alpha = 0.6f)
         )
     }
 
@@ -211,8 +265,8 @@ fun generateDisintegrateParticles(
     val particles = ArrayList<DisintegrateParticle>(count)
 
     val aspectRatio = (width / height.coerceAtLeast(1f)).coerceIn(0.25f, 4.0f)
-    val cols = sqrt(count * aspectRatio).toInt().coerceIn(12, 60)
-    val rows = ((count.toFloat() / cols) + 0.5f).toInt().coerceAtLeast(6)
+    val cols = sqrt(count * aspectRatio).toInt().coerceIn(14, 64)
+    val rows = ((count.toFloat() / cols) + 0.5f).toInt().coerceAtLeast(8)
 
     val cellW = width / cols
     val cellH = height / rows
@@ -221,51 +275,52 @@ fun generateDisintegrateParticles(
         for (c in 0 until cols) {
             if (particles.size >= count) break
 
-            // Controlled spatial jitter within each cell: prevents grid lines, avoids outside borders
-            val jitterX = ((c + 0.5f + (rnd.nextFloat() - 0.5f) * 0.85f) * cellW).coerceIn(1f, width - 1f)
-            val jitterY = ((r + 0.5f + (rnd.nextFloat() - 0.5f) * 0.85f) * cellH).coerceIn(1f, height - 1f)
+            // Controlled spatial jitter within each cell
+            val jitterX = ((c + 0.5f + (rnd.nextFloat() - 0.5f) * 0.88f) * cellW).coerceIn(1f, width - 1f)
+            val jitterY = ((r + 0.5f + (rnd.nextFloat() - 0.5f) * 0.88f) * cellH).coerceIn(1f, height - 1f)
 
-            // Particle dimensions (in physical pixels):
-            // ~70%: 1.2–2.2 px
-            // ~25%: 2.2–3.2 px
-            // ~5%: 3.2–4.2 px
-            val sizeRoll = rnd.nextFloat()
-            val pWidth = when {
-                sizeRoll < 0.70f -> 1.2f + rnd.nextFloat() * 1.0f
-                sizeRoll < 0.95f -> 2.2f + rnd.nextFloat() * 1.0f
-                else -> 3.2f + rnd.nextFloat() * 1.0f
-            }
-            val pHeight = if (rnd.nextBoolean()) {
-                pWidth
-            } else {
-                pWidth * (0.75f + rnd.nextFloat() * 0.55f)
-            }
-
-            // Sweep position determines detachment phase along erosion direction
-            val sweepPos = if (isSelf) {
+            // Normalized position along the erosion sweep:
+            // For isSelf: erosion moves right-to-left (x: width -> 0)
+            // For !isSelf: erosion moves left-to-right (x: 0 -> width)
+            val normX = if (isSelf) {
                 (1f - jitterX / width.coerceAtLeast(1f)).coerceIn(0f, 1f)
             } else {
                 (jitterX / width.coerceAtLeast(1f)).coerceIn(0f, 1f)
             }
 
-            // Progressive detachment:
-            // 0-12%: intact
-            // 12-68%: progressive erosion
-            // 68-100%: drift, shrink, fade
-            val detach = (0.12f + sweepPos * 0.54f + (rnd.nextFloat() - 0.5f) * 0.06f).coerceIn(0.08f, 0.72f)
+            // Cinematic 4-Phase Progression Mapping:
+            // Phase 1: 0% - 14% -> Hold & recognition (intact)
+            // Phase 2: 14% - 46% -> Leading edge erosion
+            // Phase 3: 46% - 76% -> Body fragmentation & flow
+            // Phase 4: 76% - 100% -> Residual dissolve & fade
+            val detachBase = 0.14f + normX * 0.60f
+            val bandIndex = ((jitterY / height.coerceAtLeast(1f)) * 50).toInt().coerceIn(0, 49)
+            val pathJitter = sin(bandIndex * 1.57f) * 0.024f + sin(bandIndex * 3.73f + 0.8f) * 0.016f
+            val localJitter = (rnd.nextFloat() - 0.5f) * 0.035f
+            val detach = (detachBase - pathJitter * 0.6f + localJitter).coerceIn(0.12f, 0.76f)
 
-            // Organic subtle motion:
-            // Outward X displacement: small-to-moderate (self -> right, other -> left)
+            // Coherent velocity field:
+            // Gentle directional drift with subtle individual variation
+            val speedFactor = 0.65f + rnd.nextFloat() * 0.70f
             val velX = if (isSelf) {
-                with(density) { (3f + rnd.nextFloat() * 10f).dp.toPx() }
+                with(density) { (4f + speedFactor * 9f).dp.toPx() }
             } else {
-                with(density) { (-3f - rnd.nextFloat() * 10f).dp.toPx() }
+                with(density) { (-4f - speedFactor * 9f).dp.toPx() }
             }
-            // Vertical movement: downward Y displacement slightly greater than X
-            val liftY = with(density) { (1f + rnd.nextFloat() * 3f).dp.toPx() }
-            val gravityY = with(density) { (6f + rnd.nextFloat() * 14f).dp.toPx() }
-            // Subtle rotation within ±15 degrees
-            val maxRot = -15f + rnd.nextFloat() * 30f
+            // Vertical movement: subtle initial buoyant flutter, followed by natural gravity settling
+            val liftY = with(density) { (1.5f + rnd.nextFloat() * 3.5f).dp.toPx() }
+            val gravityY = with(density) { (8f + rnd.nextFloat() * 16f).dp.toPx() }
+            // Subtle rotation within ±12 degrees
+            val maxRot = -12f + rnd.nextFloat() * 24f
+
+            // Particle size: 65% micro-dust (1.2px - 2.0px), 25% medium (2.0px - 3.0px), 10% flakes (3.0px - 3.8px)
+            val sizeRoll = rnd.nextFloat()
+            val pWidth = when {
+                sizeRoll < 0.65f -> 1.2f + rnd.nextFloat() * 0.8f
+                sizeRoll < 0.90f -> 2.0f + rnd.nextFloat() * 1.0f
+                else -> 3.0f + rnd.nextFloat() * 0.8f
+            }
+            val pHeight = if (rnd.nextFloat() < 0.6f) pWidth else pWidth * (0.8f + rnd.nextFloat() * 0.4f)
 
             val color = palette[rnd.nextInt(palette.size)]
 
@@ -290,7 +345,7 @@ fun generateDisintegrateParticles(
 }
 
 /**
- * Calculates a fine stepped, jagged pixel erosion path into the provided reusable Path instance.
+ * Calculates a fine organic fractal erosion path into the provided reusable Path instance.
  */
 fun calculateErosionPathInto(
     path: Path,
@@ -308,27 +363,23 @@ fun calculateErosionPathInto(
         return
     }
     if (sweep >= 1f) {
-        // Completely eroded - leave empty path so nothing is drawn
+        // Completely eroded
         return
     }
 
-    val bands = 20
+    val bands = 50
     val bandHeight = height / bands
 
     if (isSelf) {
-        // Erode from right to left with fine stepped pixel offsets
+        // Erode from right to left: un-eroded portion is on the left [0 .. rightEdge]
         path.moveTo(0f, 0f)
         for (i in 0 until bands) {
             val bandTop = i * bandHeight
             val bandBottom = (i + 1) * bandHeight
-            val stagger = when (i % 5) {
-                0 -> 0.035f
-                1 -> -0.030f
-                2 -> 0.045f
-                3 -> -0.020f
-                else -> 0.015f
-            }
-            val bandSweep = (sweep + stagger).coerceIn(0f, 1f)
+            val jitter = sin(i * 1.57f) * 0.024f +
+                    sin(i * 3.73f + 0.8f) * 0.016f +
+                    sin(i * 7.19f + 2.1f) * 0.008f
+            val bandSweep = (sweep + jitter).coerceIn(0f, 1f)
             val currentRight = width * (1f - bandSweep)
             path.lineTo(currentRight, bandTop)
             path.lineTo(currentRight, bandBottom)
@@ -336,9 +387,9 @@ fun calculateErosionPathInto(
         path.lineTo(0f, height)
         path.close()
     } else {
-        // Erode from left to right with fine stepped pixel offsets
-        val firstStagger = -0.025f
-        val firstSweep = (sweep + firstStagger).coerceIn(0f, 1f)
+        // Erode from left to right: un-eroded portion is on the right [leftEdge .. width]
+        val firstJitter = sin(0f) * 0.024f + sin(0.8f) * 0.016f
+        val firstSweep = (sweep + firstJitter).coerceIn(0f, 1f)
         val startLeft = width * firstSweep
         path.moveTo(startLeft, 0f)
         path.lineTo(width, 0f)
@@ -346,14 +397,10 @@ fun calculateErosionPathInto(
         for (i in bands - 1 downTo 0) {
             val bandTop = i * bandHeight
             val bandBottom = (i + 1) * bandHeight
-            val stagger = when (i % 5) {
-                0 -> -0.035f
-                1 -> 0.030f
-                2 -> -0.045f
-                3 -> 0.020f
-                else -> -0.015f
-            }
-            val bandSweep = (sweep + stagger).coerceIn(0f, 1f)
+            val jitter = sin(i * 1.57f) * 0.024f +
+                    sin(i * 3.73f + 0.8f) * 0.016f +
+                    sin(i * 7.19f + 2.1f) * 0.008f
+            val bandSweep = (sweep + jitter).coerceIn(0f, 1f)
             val currentLeft = width * bandSweep
             path.lineTo(currentLeft, bandBottom)
             path.lineTo(currentLeft, bandTop)
@@ -371,34 +418,40 @@ fun DrawScope.drawDissolveParticles(
 ) {
     if (particles.isEmpty() || progress <= 0f) return
 
+    val masterFade = if (progress > 0.82f) {
+        ((1.0f - progress) / 0.18f).coerceIn(0f, 1f)
+    } else {
+        1.0f
+    }
+    if (masterFade <= 0.005f) return
+
     for (i in 0 until particles.size) {
         val p = particles[i]
         if (progress < p.detachProgress) continue
 
-        val lifetime = 1f - p.detachProgress
-        if (lifetime <= 0f) continue
+        val lifetime = (1f - p.detachProgress).coerceAtLeast(0.15f)
         val tau = ((progress - p.detachProgress) / lifetime).coerceIn(0f, 1f)
         if (tau >= 1f) continue
 
-        // Non-linear horizontal displacement (subtle drag deceleration)
-        val curX = p.initialX + p.velocityX * (tau * (1.7f - 0.7f * tau))
+        // Coherent non-linear horizontal drift (smooth air drag deceleration)
+        val curX = p.initialX + p.velocityX * (tau * (1.6f - 0.6f * tau))
 
-        // Vertical movement: subtle lift then gentle gravity drop
-        val liftProgress = sin(tau * PI.toFloat()).coerceAtLeast(0f) * (1f - tau)
+        // Natural vertical trajectory: subtle buoyant flutter then gentle gravity settling
+        val liftProgress = sin(tau * PI.toFloat()).coerceAtLeast(0f) * (1f - tau * 0.5f)
         val gravityProgress = tau * tau
         val curY = p.initialY - p.liftY * liftProgress + p.gravityY * gravityProgress
 
-        // Subtle rotation within ±15 degrees
+        // Subtle rotation flutter
         val rot = p.maxRotation * tau
 
-        // Progressive shrink: full size until tau=0.35, then smoothly scales down to 0.15
+        // Progressive shrink: full size until tau=0.35, then scales smoothly to 0.3
         val scale = if (tau < 0.35f) {
             1.0f
         } else {
-            (1.0f - ((tau - 0.35f) / 0.65f) * 0.85f).coerceIn(0.15f, 1.0f)
+            (1.0f - ((tau - 0.35f) / 0.65f) * 0.70f).coerceIn(0.30f, 1.0f)
         }
 
-        // Progressive smooth alpha decay: full until tau=0.40, then smoothstep fade to 0
+        // Smooth opacity decay using cubic smoothstep
         val alpha = if (tau < 0.40f) {
             1.0f
         } else {
@@ -408,13 +461,13 @@ fun DrawScope.drawDissolveParticles(
 
         val partW = p.width * scale
         val partH = p.height * scale
+        val effectiveAlpha = p.color.alpha * alpha * masterFade
 
-        if (partW <= 0.2f || partH <= 0.2f || alpha <= 0.005f) continue
+        if (partW <= 0.2f || partH <= 0.2f || effectiveAlpha <= 0.008f) continue
 
-        val finalColor = p.color.copy(alpha = p.color.alpha * alpha)
+        val finalColor = p.color.copy(alpha = effectiveAlpha)
 
-        // Performance optimization: 1-2px micro particles bypass canvas save/restore overhead
-        if (rot != 0f && (partW > 2.2f || partH > 2.2f)) {
+        if (rot != 0f && (partW > 2.0f || partH > 2.0f)) {
             withTransform({
                 translate(curX, curY)
                 rotate(rot)
@@ -475,22 +528,26 @@ fun ParticleDissolveWrapper(
 
     val erosionPath = remember { Path() }
 
-    // Content stays fully solid in the beginning (0-30%), then smoothly fades as erosion sweeps through 72%
+    // Phase 1 (0% - 14%): Hold/Recognition - 100% solid, fully recognizable
+    // Phase 2 & 3 (14% - 76%): Progressive edge erosion & fragmentation
+    // Phase 4 (76% - 100%): Message body completely eroded, residual particles drifting to empty space
     val contentAlpha = when {
-        progress < 0.30f -> 1.0f
-        progress < 0.72f -> (1.0f - (progress - 0.30f) / 0.42f).coerceIn(0f, 1f)
+        progress < 0.55f -> 1.0f
+        progress < 0.76f -> (1.0f - ((progress - 0.55f) / 0.21f) * 0.25f).coerceIn(0f, 1f)
         else -> 0.0f
     }
 
     Box(
-        modifier = modifier.onSizeChanged { bubbleSize = it }
+        modifier = modifier
+            .onSizeChanged { if (it.width > 0 && it.height > 0) bubbleSize = it }
+            .pointerInput(Unit) {}
     ) {
-        // Base content with physical stepped erosion mask and alpha decay
+        // Base content with organic fractal erosion mask
         Box(
             modifier = Modifier
                 .drawWithContent {
-                    if (progress < 0.72f) {
-                        val sweep = if (progress <= 0.12f) 0f else ((progress - 0.12f) / 0.56f).coerceIn(0f, 1f)
+                    if (progress < 0.76f) {
+                        val sweep = if (progress <= 0.14f) 0f else ((progress - 0.14f) / 0.62f).coerceIn(0f, 1f)
                         calculateErosionPathInto(erosionPath, size, sweep, isSelf)
                         clipPath(erosionPath) {
                             this@drawWithContent.drawContent()
@@ -504,7 +561,7 @@ fun ParticleDissolveWrapper(
             content()
         }
 
-        // Particle Canvas overlay: dense micro-pixel fragments taking flight
+        // Particle Canvas overlay: micro-fragments taking flight from the message surface
         Canvas(
             modifier = Modifier.matchParentSize()
         ) {
@@ -512,4 +569,5 @@ fun ParticleDissolveWrapper(
         }
     }
 }
+
 
