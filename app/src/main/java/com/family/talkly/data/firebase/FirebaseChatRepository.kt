@@ -1,6 +1,7 @@
 package com.family.talkly.data.firebase
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.ConnectivityManager
@@ -102,18 +103,29 @@ class FirebaseChatRepository private constructor(private val context: Context) {
 
     fun getAuthenticatedUserUid(): String {
         return try {
-            SupabaseClientProvider.client.auth.currentUserOrNull()?.id
-                ?: currentSyncedUserId?.takeIf { it.isNotBlank() && it != "self" }
-                ?: context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE).getString("user_uid", null)?.takeIf { it.isNotBlank() && it != "self" }
-                ?: context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE).getString("user_uid", null)?.takeIf { it.isNotBlank() && it != "self" }
-                ?: ""
+            val auth = SupabaseClientProvider.client.auth
+            val uid = auth.currentUserOrNull()?.id ?: auth.currentSessionOrNull()?.user?.id
+            if (!uid.isNullOrBlank()) {
+                uid
+            } else {
+                ""
+            }
         } catch (_: Exception) {
-            currentSyncedUserId?.takeIf { it.isNotBlank() && it != "self" } ?: ""
+            ""
         }
     }
 
     private var messageSyncJob: Job? = null
-    private val contactPrefs = context.getSharedPreferences(CONTACTS_PREFS, Context.MODE_PRIVATE)
+    private fun getContactPrefs(targetUid: String? = null): SharedPreferences {
+        val uid = targetUid?.takeIf { it.isNotBlank() && it != "self" }
+            ?: getAuthenticatedUserUid().takeIf { it.isNotBlank() && it != "self" }
+            ?: currentSyncedUserId?.takeIf { it.isNotBlank() && it != "self" }
+        return if (!uid.isNullOrBlank()) {
+            context.getSharedPreferences("${CONTACTS_PREFS}_$uid", Context.MODE_PRIVATE)
+        } else {
+            context.getSharedPreferences(CONTACTS_PREFS, Context.MODE_PRIVATE)
+        }
+    }
     private val database: TalklyDatabase by lazy { TalklyDatabase.getInstance(context) }
     private val socialService: SupabaseSocialService by lazy { SupabaseSocialService.getInstance(context) }
     private val presenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -220,64 +232,78 @@ class FirebaseChatRepository private constructor(private val context: Context) {
 
     init {
         setupNetworkMonitoring()
-        loadDeletedContactIds()
-        loadContactsWhoSavedMeFromPrefs()
-        loadInitialFamilyMembers()
+        val initialUid = getAuthenticatedUserUid()
+        if (initialUid.isNotBlank()) {
+            loadSessionForUser(initialUid)
+        } else {
+            loadDeletedContactIds()
+            loadContactsWhoSavedMeFromPrefs()
+            loadInitialFamilyMembers()
+            loadStatuses()
+            loadBlockedUsers()
+        }
         seedInitialFamilyChats()
-        loadStatuses()
-        loadBlockedUsers()
     }
 
-    private fun loadContactsWhoSavedMeFromPrefs() {
-        val set = contactPrefs.getStringSet(KEY_CONTACTS_WHO_SAVED_ME, emptySet()) ?: emptySet()
+    fun loadSessionForUser(userId: String) {
+        if (userId.isBlank() || userId == "self") return
+        currentSyncedUserId = userId
+        loadDeletedContactIds(userId)
+        loadContactsWhoSavedMeFromPrefs(userId)
+        loadBlockedUsers(userId)
+        loadInitialFamilyMembers(userId)
+        loadStatuses(userId)
+    }
+
+    private fun loadContactsWhoSavedMeFromPrefs(uid: String? = null) {
+        val set = getContactPrefs(uid).getStringSet(KEY_CONTACTS_WHO_SAVED_ME, emptySet()) ?: emptySet()
         _contactsWhoSavedMe.value = set
     }
 
-    private fun saveContactsWhoSavedMeToPrefs(set: Set<String>) {
-        contactPrefs.edit().putStringSet(KEY_CONTACTS_WHO_SAVED_ME, set).apply()
+    private fun saveContactsWhoSavedMeToPrefs(set: Set<String>, uid: String? = null) {
+        getContactPrefs(uid).edit().putStringSet(KEY_CONTACTS_WHO_SAVED_ME, set).apply()
     }
 
-
-    private fun loadDeletedContactIds() {
-        val set = contactPrefs.getStringSet(KEY_DELETED_CONTACT_IDS, emptySet()) ?: emptySet()
+    private fun loadDeletedContactIds(uid: String? = null) {
+        val set = getContactPrefs(uid).getStringSet(KEY_DELETED_CONTACT_IDS, emptySet()) ?: emptySet()
         _deletedContactIds.value = set
     }
 
-    private fun markContactAsDeleted(ids: List<String>) {
+    private fun markContactAsDeleted(ids: List<String>, uid: String? = null) {
         val cleanIds = ids.filter { it.isNotBlank() && it != "self" }
         if (cleanIds.isEmpty()) return
         val updated = _deletedContactIds.value.toMutableSet()
         updated.addAll(cleanIds)
         _deletedContactIds.value = updated
-        contactPrefs.edit().putStringSet(KEY_DELETED_CONTACT_IDS, updated).apply()
+        getContactPrefs(uid).edit().putStringSet(KEY_DELETED_CONTACT_IDS, updated).apply()
     }
 
-    private fun unmarkContactAsDeleted(ids: List<String>) {
+    private fun unmarkContactAsDeleted(ids: List<String>, uid: String? = null) {
         val cleanIds = ids.filter { it.isNotBlank() }
         if (cleanIds.isEmpty()) return
         val updated = _deletedContactIds.value.toMutableSet()
         updated.removeAll(cleanIds.toSet())
         _deletedContactIds.value = updated
-        contactPrefs.edit().putStringSet(KEY_DELETED_CONTACT_IDS, updated).apply()
+        getContactPrefs(uid).edit().putStringSet(KEY_DELETED_CONTACT_IDS, updated).apply()
     }
 
-    fun loadBlockedUsers() {
-        val set = contactPrefs.getStringSet(KEY_BLOCKED_USERS, emptySet()) ?: emptySet()
+    fun loadBlockedUsers(uid: String? = null) {
+        val set = getContactPrefs(uid).getStringSet(KEY_BLOCKED_USERS, emptySet()) ?: emptySet()
         _blockedUserIds.value = set
     }
 
-    fun blockUser(userId: String) {
+    fun blockUser(userId: String, uid: String? = null) {
         val updated = _blockedUserIds.value.toMutableSet()
         updated.add(userId)
         _blockedUserIds.value = updated
-        contactPrefs.edit().putStringSet(KEY_BLOCKED_USERS, updated).apply()
+        getContactPrefs(uid).edit().putStringSet(KEY_BLOCKED_USERS, updated).apply()
     }
 
-    fun unblockUser(userId: String) {
+    fun unblockUser(userId: String, uid: String? = null) {
         val updated = _blockedUserIds.value.toMutableSet()
         updated.remove(userId)
         _blockedUserIds.value = updated
-        contactPrefs.edit().putStringSet(KEY_BLOCKED_USERS, updated).apply()
+        getContactPrefs(uid).edit().putStringSet(KEY_BLOCKED_USERS, updated).apply()
     }
 
     fun isUserBlocked(userId: String): Boolean {
@@ -336,8 +362,9 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         _familyMembers.value = filteredAndDeduplicated
     }
 
-    private fun loadInitialFamilyMembers() {
-        val savedJson = contactPrefs.getString(KEY_SAVED_CONTACTS_JSON, null)
+    private fun loadInitialFamilyMembers(targetUid: String? = null) {
+        val prefs = getContactPrefs(targetUid)
+        val savedJson = prefs.getString(KEY_SAVED_CONTACTS_JSON, null)
         val list = mutableListOf<FamilyMember>()
 
         if (!savedJson.isNullOrBlank()) {
@@ -374,11 +401,11 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         }
 
         setFamilyMembersWithDeduplication(list)
-        contactPrefs.edit().putBoolean(KEY_DEMO_CLEARED, true).apply()
-        saveContactsToPrefs()
+        prefs.edit().putBoolean(KEY_DEMO_CLEARED, true).apply()
+        saveContactsToPrefs(targetUid)
     }
 
-    private fun saveContactsToPrefs() {
+    private fun saveContactsToPrefs(targetUid: String? = null) {
         try {
             val jsonArray = org.json.JSONArray()
             _familyMembers.value.forEach { member ->
@@ -399,7 +426,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                 }
                 jsonArray.put(obj)
             }
-            contactPrefs.edit()
+            getContactPrefs(targetUid).edit()
                 .putString(KEY_SAVED_CONTACTS_JSON, jsonArray.toString())
                 .apply()
         } catch (e: Exception) {
@@ -466,16 +493,14 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         val cleanPhone = phone.trim()
         val phoneSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(cleanPhone)
 
+        val currentUid = getAuthenticatedUserUid()
         val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
         val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
-        val currentUid = currentSyncedUserId
-            ?: sessionPrefs.getString("user_uid", null)
-            ?: fallbackPrefs.getString("user_uid", null) ?: "self"
         val myPhone = sessionPrefs.getString("user_phone", null) ?: fallbackPrefs.getString("user_phone", "") ?: ""
         val mySuffix = PhoneUtils.extractPhoneSuffix(myPhone)
 
         // Exclude current logged-in user from self-contacts
-        if ((currentUid.isNotBlank() && currentUid != "self" && cleanPhone == currentUid) ||
+        if ((currentUid.isNotBlank() && cleanPhone == currentUid) ||
             (myPhone.isNotBlank() && cleanPhone == myPhone) ||
             (mySuffix.isNotBlank() && phoneSuffix.isNotBlank() && phoneSuffix == mySuffix)) {
             Log.w(TAG, "Prevented adding logged-in user as self-contact")
@@ -530,7 +555,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                             "userId=${savedRow?.userId}, phone=${savedRow?.contactPhone}, suffix=${savedRow?.contactPhoneSuffix}"
                 )
 
-                unmarkContactAsDeleted(listOf(contactId, cleanPhone, phoneSuffix, targetUid ?: ""))
+                unmarkContactAsDeleted(listOf(contactId, cleanPhone, phoneSuffix, targetUid ?: ""), currentUid)
 
                 val newMember = FamilyMember(
                     id = contactId,
@@ -558,7 +583,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                     }
                     currentList.add(0, newMember)
                     setFamilyMembersWithDeduplication(currentList)
-                    saveContactsToPrefs()
+                    saveContactsToPrefs(currentUid)
                     onComplete?.invoke(newMember)
                 }
             } else {
@@ -575,6 +600,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
     }
 
     fun deleteContact(memberId: String) {
+        val currentUid = getAuthenticatedUserUid()
         val canonicalId = getCanonicalMemberId(memberId)
         val targetMember = _familyMembers.value.firstOrNull {
             it.id == memberId || it.id == canonicalId || it.firebaseUid == memberId || it.firebaseUid == canonicalId
@@ -584,7 +610,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         val targetFirebaseUid = targetMember?.firebaseUid ?: ""
 
         // Mark as permanently deleted locally
-        markContactAsDeleted(listOf(memberId, canonicalId, targetFirebaseUid, targetSuffix, targetPhone))
+        markContactAsDeleted(listOf(memberId, canonicalId, targetFirebaseUid, targetSuffix, targetPhone), currentUid)
 
         // 1. Purge chat history and media for this contact permanently
         deleteChatHistory(memberId)
@@ -597,15 +623,9 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             (targetSuffix.isBlank() || PhoneUtils.extractPhoneSuffix(member.phone) != targetSuffix)
         }
         setFamilyMembersWithDeduplication(updatedList)
-        saveContactsToPrefs()
+        saveContactsToPrefs(currentUid)
 
         // 3. Delete contact record from Supabase `contacts` table
-        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
-        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
-        val currentUid = currentSyncedUserId
-            ?: sessionPrefs.getString("user_uid", null)
-            ?: fallbackPrefs.getString("user_uid", null) ?: "self"
-
         if (currentUid.isNotBlank() && currentUid != "self" && targetSuffix.isNotBlank()) {
             repositoryScope.launch(Dispatchers.IO) {
                 socialService.deleteContact(currentUid, targetSuffix)
@@ -626,10 +646,11 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         if (targetSuffix.isNotBlank()) currentSavedMe.remove(targetSuffix)
         if (targetFirebaseUid.isNotBlank()) currentSavedMe.remove(targetFirebaseUid)
         _contactsWhoSavedMe.value = currentSavedMe
-        saveContactsWhoSavedMeToPrefs(currentSavedMe)
+        saveContactsWhoSavedMeToPrefs(currentSavedMe, currentUid)
     }
 
     fun togglePinMember(memberId: String) {
+        val currentUid = getAuthenticatedUserUid()
         val currentList = _familyMembers.value.toMutableList()
         val index = currentList.indexOfFirst { it.id == memberId || it.firebaseUid == memberId }
         if (index != -1) {
@@ -637,12 +658,10 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             val newPinned = !item.isPinned
             currentList[index] = item.copy(isPinned = newPinned)
             setFamilyMembersWithDeduplication(currentList)
-            saveContactsToPrefs()
+            saveContactsToPrefs(currentUid)
 
-            val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
-            val currentUid = currentSyncedUserId ?: sessionPrefs.getString("user_uid", null)
             val suffix = PhoneUtils.extractPhoneSuffix(item.phone)
-            if (!currentUid.isNullOrBlank() && currentUid != "self" && suffix.isNotBlank()) {
+            if (currentUid.isNotBlank() && currentUid != "self" && suffix.isNotBlank()) {
                 repositoryScope.launch(Dispatchers.IO) {
                     socialService.togglePinContact(currentUid, suffix, newPinned)
                 }
@@ -650,11 +669,12 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         }
     }
 
-    fun clearDemoContacts() {
-        contactPrefs.edit().putBoolean(KEY_DEMO_CLEARED, true).apply()
+    fun clearDemoContacts(uid: String? = null) {
+        val targetUid = uid ?: getAuthenticatedUserUid()
+        getContactPrefs(targetUid).edit().putBoolean(KEY_DEMO_CLEARED, true).apply()
         val filteredList = _familyMembers.value.filter { it.id !in demoIdsSet && !it.id.startsWith("demo_") }
         setFamilyMembersWithDeduplication(filteredList)
-        saveContactsToPrefs()
+        saveContactsToPrefs(targetUid)
     }
 
     fun startRealtimePresenceSync(userId: String, userName: String = "Talkly User", avatarUrl: String? = null) {
@@ -722,6 +742,11 @@ class FirebaseChatRepository private constructor(private val context: Context) {
 
     fun syncContactsFromSupabase(currentUserId: String) {
         if (currentUserId.isBlank() || currentUserId == "self") return
+        val authAtStart = getAuthenticatedUserUid()
+        if (authAtStart.isBlank() || authAtStart != currentUserId) {
+            Log.w(TAG, "syncContactsFromSupabase: Stale call for $currentUserId, active auth UID is $authAtStart. Aborting.")
+            return
+        }
         repositoryScope.launch(Dispatchers.IO) {
             try {
                 val contactsResult = socialService.loadContacts(currentUserId)
@@ -746,8 +771,30 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                 val currentMap = _familyMembers.value.associateBy { it.phone }.toMutableMap()
                 val deletedSet = _deletedContactIds.value
 
+                // Resolve missing contact user IDs so foreign keys / UIDs are mapped correctly
+                val missingUserContacts = contacts.filter { it.contactUserId.isNullOrBlank() }
+                val resolvedProfiles = mutableMapOf<String, SupabaseProfile>()
+                for (mc in missingUserContacts) {
+                    val suffix = mc.contactPhoneSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(mc.contactPhone) }
+                    if (suffix.isNotBlank()) {
+                        try {
+                            val profRes = socialService.searchUserByPhone(suffix)
+                            val prof = profRes.getOrNull()
+                            if (prof != null) {
+                                resolvedProfiles[mc.contactPhone] = prof
+                                repositoryScope.launch(Dispatchers.IO) {
+                                    try {
+                                        val updatedContact = mc.copy(contactUserId = prof.id, contactPhoneSuffix = suffix)
+                                        socialService.saveContact(updatedContact)
+                                    } catch (_: Exception) {}
+                                }
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+
                 // Batch fetch fresh profiles for all contact user IDs
-                val contactUserIds = contacts.mapNotNull { it.contactUserId }.filter { it.isNotBlank() }
+                val contactUserIds = (contacts.mapNotNull { it.contactUserId } + resolvedProfiles.values.map { it.id }).filter { it.isNotBlank() }.distinct()
                 val profilesMap = if (contactUserIds.isNotEmpty()) {
                     try {
                         SupabaseClientProvider.client.postgrest["profiles"]
@@ -768,14 +815,16 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                     val suffix = c.contactPhoneSuffix.ifBlank { PhoneUtils.extractPhoneSuffix(c.contactPhone) }
                     if (c.contactPhone in deletedSet || suffix in deletedSet) return@mapNotNull null
 
+                    val resolvedProfile = resolvedProfiles[c.contactPhone]
+                    val effectiveContactUserId = c.contactUserId ?: resolvedProfile?.id
                     val existing = currentMap[c.contactPhone]
-                    val profile = if (!c.contactUserId.isNullOrBlank()) profilesMap[c.contactUserId] else null
+                    val profile = if (!effectiveContactUserId.isNullOrBlank()) profilesMap[effectiveContactUserId] ?: resolvedProfile else null
                     val parsedLastSeen = profile?.lastSeenAt?.let { SupabaseMessage.parseIsoTimestampToMillis(it) } ?: 0L
                     val effectiveLastActive = if (parsedLastSeen > 0L) parsedLastSeen else (existing?.lastActiveTimestamp ?: 0L)
                     val effectiveLastSeen = if (existing?.isOnline == true) "Online" else if (effectiveLastActive > 0L) PhoneUtils.formatLastSeenTime(effectiveLastActive) else (existing?.lastSeen ?: "Recently")
 
                     FamilyMember(
-                        id = if (!c.contactUserId.isNullOrBlank()) c.contactUserId else "contact_${suffix}",
+                        id = if (!effectiveContactUserId.isNullOrBlank()) effectiveContactUserId else "contact_${suffix}",
                         name = profile?.name?.ifBlank { c.contactName } ?: c.contactName,
                         relation = c.relation,
                         avatarUrl = profile?.avatarUrl?.ifBlank { existing?.avatarUrl } ?: existing?.avatarUrl,
@@ -788,14 +837,47 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                         lastActiveTimestamp = effectiveLastActive,
                         unreadCount = existing?.unreadCount ?: 0,
                         isPinned = c.isPinned,
-                        isRegisteredOnTalkly = !c.contactUserId.isNullOrBlank(),
-                        firebaseUid = c.contactUserId
+                        isRegisteredOnTalkly = !effectiveContactUserId.isNullOrBlank(),
+                        firebaseUid = effectiveContactUserId
                     )
                 }
 
+                val existingMembersWithHistory = _familyMembers.value.filter { existing ->
+                    val hasHistory = getMessagesForMember(existing.id).isNotEmpty() ||
+                        (!existing.firebaseUid.isNullOrBlank() && getMessagesForMember(existing.firebaseUid!!).isNotEmpty()) ||
+                        existing.isPinned
+                    hasHistory &&
+                        existing.id !in deletedSet &&
+                        (existing.firebaseUid == null || existing.firebaseUid !in deletedSet) &&
+                        existing.id != currentUserId &&
+                        existing.firebaseUid != currentUserId
+                }
+
+                val combinedList = (updatedList + existingMembersWithHistory).distinctBy { member ->
+                    val suffix = PhoneUtils.extractPhoneSuffix(member.phone)
+                    if (suffix.isNotBlank()) "suffix_$suffix"
+                    else if (!member.firebaseUid.isNullOrBlank()) "uid_${member.firebaseUid}"
+                    else "id_${member.id}"
+                }
+
                 withContext(Dispatchers.Main) {
-                    setFamilyMembersWithDeduplication(updatedList)
-                    saveContactsToPrefs()
+                    val authAtEnd = getAuthenticatedUserUid()
+                    if (authAtEnd.isBlank() || authAtEnd != currentUserId) {
+                        Log.w(TAG, "syncContactsFromSupabase: Auth UID changed at completion from $currentUserId to $authAtEnd. Discarding stale sync result.")
+                        return@withContext
+                    }
+                    setFamilyMembersWithDeduplication(combinedList)
+                    saveContactsToPrefs(currentUserId)
+                }
+
+                // Restore active chats that are in _messagesMap but not yet in the contact list
+                val knownUidsAndIds = combinedList.flatMap { listOfNotNull(it.id, it.firebaseUid) }.toSet()
+                val orphanedKeys = _messagesMap.value.filter { (key, msgs) ->
+                    key.isNotBlank() && key != "self" && key != currentUserId && msgs.isNotEmpty() && key !in knownUidsAndIds
+                }.keys
+
+                for (orphanKey in orphanedKeys) {
+                    ensureContactInChatList(orphanKey)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Error syncing contacts from Supabase: ${e.localizedMessage}")
@@ -1316,7 +1398,26 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         val canonicalId = getCanonicalMemberId(memberId)
         val currentUid = getAuthenticatedUserUid()
 
-        val rawList = _messagesMap.value[canonicalId] ?: _messagesMap.value[memberId] ?: emptyList()
+        var rawList = _messagesMap.value[canonicalId] ?: _messagesMap.value[memberId] ?: emptyList()
+        if (rawList.isEmpty()) {
+            val member = _familyMembers.value.firstOrNull { it.id == memberId || it.id == canonicalId || it.firebaseUid == memberId || it.firebaseUid == canonicalId }
+            val targetUid = member?.firebaseUid
+            val phone = member?.phone ?: if (memberId.startsWith("+") || memberId.all { it.isDigit() }) memberId else ""
+            val suffix = PhoneUtils.extractPhoneSuffix(phone)
+
+            val matching = _messagesMap.value.entries.firstOrNull { (key, list) ->
+                list.isNotEmpty() && (
+                    key == canonicalId ||
+                    key == memberId ||
+                    (!targetUid.isNullOrBlank() && key == targetUid) ||
+                    (phone.isNotBlank() && key == phone) ||
+                    (suffix.isNotBlank() && (key == suffix || PhoneUtils.extractPhoneSuffix(key) == suffix))
+                )
+            }
+            if (matching != null) {
+                rawList = matching.value
+            }
+        }
         return rawList.filter { msg ->
             val isDeletedForMe = _deletedForMeMessageIds.contains(msg.id) ||
                 (currentUid.isNotBlank() && msg.deletedForUsers.contains(currentUid))
@@ -2429,7 +2530,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             }
         }
         _statuses.value = updatedStatuses
-        saveStatusesToPrefs()
+        saveStatusesToPrefs(primaryUid)
 
         // Restart realtime message listener, status sync, and contact sync
         startRealtimeMessageSync(primaryUid, force = true)
@@ -2460,8 +2561,6 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             _contactsWhoSavedMe.value = emptySet()
             _blockedUserIds.value = emptySet()
             _deletedContactIds.value = emptySet()
-
-            contactPrefs.edit().clear().apply()
 
             repositoryScope.launch(Dispatchers.IO) {
                 try {
@@ -2522,7 +2621,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                 val updatedList = _familyMembers.value.toMutableList()
                 updatedList[existingIndex] = existing.copy(name = validFallback)
                 setFamilyMembersWithDeduplication(updatedList)
-                saveContactsToPrefs()
+                saveContactsToPrefs(currentUid)
             }
             return
         }
@@ -2570,22 +2669,22 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                         if (currentList.none { it.id == uid || it.firebaseUid == uid }) {
                             currentList.add(0, newMember)
                             setFamilyMembersWithDeduplication(currentList)
-                            saveContactsToPrefs()
+                            saveContactsToPrefs(currentUid)
                         }
                     } else {
-                        createFallbackContact(memberOrUidOrPhone, validFallback)
+                        createFallbackContact(memberOrUidOrPhone, validFallback, currentUid)
                     }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "ensureContactInChatList error: ${e.localizedMessage}")
                 withContext(Dispatchers.Main) {
-                    createFallbackContact(memberOrUidOrPhone, validFallback)
+                    createFallbackContact(memberOrUidOrPhone, validFallback, currentUid)
                 }
             }
         }
     }
 
-    private fun createFallbackContact(memberOrUidOrPhone: String, validFallbackName: String?) {
+    private fun createFallbackContact(memberOrUidOrPhone: String, validFallbackName: String?, targetUid: String? = null) {
         val displayName = validFallbackName
             ?: if (memberOrUidOrPhone.startsWith("+") || memberOrUidOrPhone.all { it.isDigit() }) memberOrUidOrPhone
             else if (memberOrUidOrPhone.length > 6) "User " + memberOrUidOrPhone.takeLast(4)
@@ -2604,7 +2703,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         if (currentList.none { it.id == memberOrUidOrPhone }) {
             currentList.add(0, fallbackMember)
             setFamilyMembersWithDeduplication(currentList)
-            saveContactsToPrefs()
+            saveContactsToPrefs(targetUid)
         }
     }
 
@@ -2821,9 +2920,10 @@ class FirebaseChatRepository private constructor(private val context: Context) {
 
     // --- 24-HOUR DISAPPEARING STATUS METHODS ---
 
-    private fun loadStatuses() {
-        val savedStatusesJson = contactPrefs.getString(KEY_STATUSES_JSON, null)
-        val seenSet = contactPrefs.getStringSet(KEY_SEEN_STATUS_IDS, emptySet())?.toSet() ?: emptySet()
+    private fun loadStatuses(targetUid: String? = null) {
+        val prefs = getContactPrefs(targetUid)
+        val savedStatusesJson = prefs.getString(KEY_STATUSES_JSON, null)
+        val seenSet = prefs.getStringSet(KEY_SEEN_STATUS_IDS, emptySet())?.toSet() ?: emptySet()
         val loadedList = mutableListOf<StatusItem>()
 
         if (!savedStatusesJson.isNullOrBlank()) {
@@ -2889,10 +2989,10 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         }
 
         _statuses.value = loadedList
-        saveStatusesToPrefs()
+        saveStatusesToPrefs(targetUid)
     }
 
-    private fun saveStatusesToPrefs() {
+    private fun saveStatusesToPrefs(targetUid: String? = null) {
         try {
             val jsonArray = org.json.JSONArray()
             _statuses.value.forEach { status ->
@@ -2932,7 +3032,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                 }
                 jsonArray.put(obj)
             }
-            contactPrefs.edit().putString(KEY_STATUSES_JSON, jsonArray.toString()).apply()
+            getContactPrefs(targetUid).edit().putString(KEY_STATUSES_JSON, jsonArray.toString()).apply()
         } catch (e: Exception) {
             Log.e(TAG, "Error saving statuses to prefs: ${e.message}")
         }
@@ -3126,7 +3226,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                 val userSuffix = PhoneUtils.extractPhoneSuffix(userPhone)
                 val realCurrentUid = if (currentUserId != "self") currentUserId else (currentSyncedUserId ?: "self")
 
-                val seenSet = contactPrefs.getStringSet(KEY_SEEN_STATUS_IDS, emptySet())?.toSet() ?: emptySet()
+                val seenSet = getContactPrefs(realCurrentUid).getStringSet(KEY_SEEN_STATUS_IDS, emptySet())?.toSet() ?: emptySet()
 
                 // Preserve active unexpired local self-statuses so they aren't lost before Supabase index syncs
                 val localSelfUnexpired = _statuses.value.filter {
@@ -3162,7 +3262,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
 
                 withContext(Dispatchers.Main) {
                     _statuses.value = myViewedSet
-                    saveStatusesToPrefs()
+                    saveStatusesToPrefs(realCurrentUid)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Error syncing statuses from Supabase: ${e.localizedMessage}")
@@ -3206,7 +3306,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             }
         }
         _statuses.value = updated
-        saveStatusesToPrefs()
+        saveStatusesToPrefs(realCurrentUid)
     }
 
     fun markStatusAsSeen(
@@ -3223,9 +3323,9 @@ class FirebaseChatRepository private constructor(private val context: Context) {
 
         // Persist seen status ID in local SharedPreferences immediately
         try {
-            val seenSet = contactPrefs.getStringSet(KEY_SEEN_STATUS_IDS, emptySet())?.toMutableSet() ?: mutableSetOf()
+            val seenSet = getContactPrefs(realCurrentUid).getStringSet(KEY_SEEN_STATUS_IDS, emptySet())?.toMutableSet() ?: mutableSetOf()
             seenSet.add(statusId)
-            contactPrefs.edit().putStringSet(KEY_SEEN_STATUS_IDS, seenSet).apply()
+            getContactPrefs(realCurrentUid).edit().putStringSet(KEY_SEEN_STATUS_IDS, seenSet).apply()
         } catch (_: Exception) {}
 
         val updated = _statuses.value.map { status ->
@@ -3256,14 +3356,14 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             }
         }
         _statuses.value = updated
-        saveStatusesToPrefs()
+        saveStatusesToPrefs(realCurrentUid)
     }
 
     fun deleteStatus(statusId: String, currentUserId: String = "self") {
         val realCurrentUid = if (currentUserId != "self") currentUserId else (currentSyncedUserId ?: "self")
         val updated = _statuses.value.filterNot { it.id == statusId }
         _statuses.value = updated
-        saveStatusesToPrefs()
+        saveStatusesToPrefs(realCurrentUid)
 
         if (realCurrentUid.isNotBlank() && realCurrentUid != "self") {
             repositoryScope.launch(Dispatchers.IO) {

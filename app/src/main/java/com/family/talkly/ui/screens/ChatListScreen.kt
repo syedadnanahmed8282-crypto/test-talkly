@@ -3209,7 +3209,15 @@ private fun getMemberMessages(
             } else if (member.phone.isNotBlank() && !messagesMap[member.phone].isNullOrEmpty()) {
                 messagesMap[member.phone]!!
             } else {
-                emptyList()
+                val matching = messagesMap.entries.firstOrNull { (key, list) ->
+                    list.isNotEmpty() && (
+                        key == member.id ||
+                        (!member.firebaseUid.isNullOrBlank() && key == member.firebaseUid) ||
+                        (member.phone.isNotBlank() && key == member.phone) ||
+                        (suffix.isNotBlank() && (key == suffix || com.family.talkly.util.PhoneUtils.extractPhoneSuffix(key) == suffix))
+                    )
+                }
+                matching?.value ?: emptyList()
             }
         }
     }

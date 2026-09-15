@@ -122,6 +122,7 @@ fun MainScreen(
         android.util.Log.d("MainScreen", "DIAGNOSTIC MainScreen LaunchedEffect(currentUserProfile.uid) triggered: profile=$uid, name=${currentUserProfile?.name}")
         if (!uid.isNullOrBlank() && uid != "self") {
             android.util.Log.d("MainScreen", "DIAGNOSTIC MainScreen: invoking chatRepository.startRealtimeMessageSync and zegoManager.startRealtimeCallSync for uid=$uid")
+            chatRepository.loadSessionForUser(uid)
             chatRepository.startRealtimeMessageSync(uid)
             chatRepository.syncContactsFromSupabase(uid)
             chatRepository.syncStatusesFromSupabase(uid)

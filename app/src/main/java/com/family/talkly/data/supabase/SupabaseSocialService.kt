@@ -7,6 +7,7 @@ import com.family.talkly.data.models.StatusItem
 import com.family.talkly.data.models.StatusLiker
 import com.family.talkly.data.models.StatusViewer
 import com.family.talkly.util.PhoneUtils
+import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.realtime.RealtimeChannel
@@ -112,7 +113,15 @@ class SupabaseSocialService(private val context: Context) {
     suspend fun loadContacts(userId: String): Result<List<SupabaseContact>> = withContext(Dispatchers.IO) {
         try {
             if (userId.isBlank() || userId == "self") {
-                return@withContext Result.success(emptyList())
+                return@withContext Result.failure(IllegalArgumentException("Invalid userId: '$userId'"))
+            }
+
+            val currentAuthUid = SupabaseClientProvider.client.auth.currentUserOrNull()?.id
+                ?: SupabaseClientProvider.client.auth.currentSessionOrNull()?.user?.id
+            if (currentAuthUid.isNullOrBlank() || currentAuthUid != userId) {
+                val err = IllegalStateException("loadContacts aborted: active Supabase auth UID ($currentAuthUid) does not match requested userId ($userId)")
+                Log.w(TAG, err.message ?: "Auth mismatch")
+                return@withContext Result.failure(err)
             }
 
             val contacts = postgrest.from(TABLE_CONTACTS)
@@ -139,6 +148,13 @@ class SupabaseSocialService(private val context: Context) {
         try {
             if (contact.userId.isBlank() || contact.userId == "self") {
                 val err = IllegalArgumentException("Invalid owner userId: '${contact.userId}'")
+                Log.e(TAG, "saveContact failed: ${err.message}")
+                return@withContext Result.failure(err)
+            }
+            val currentAuthUid = SupabaseClientProvider.client.auth.currentUserOrNull()?.id
+                ?: SupabaseClientProvider.client.auth.currentSessionOrNull()?.user?.id
+            if (currentAuthUid.isNullOrBlank() || currentAuthUid != contact.userId) {
+                val err = IllegalStateException("Cannot save contact: authenticated UID ($currentAuthUid) does not match contact owner UID (${contact.userId})")
                 Log.e(TAG, "saveContact failed: ${err.message}")
                 return@withContext Result.failure(err)
             }
