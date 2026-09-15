@@ -112,6 +112,10 @@ data class WallpaperItem(
      */
     val drawableRes: Int? = null,
     /**
+     * Exact bundled JPG drawable name in res/drawable-nodpi or res/drawable (e.g. "wallpaper_vibrant_oil").
+     */
+    val drawableResName: String? = null,
+    /**
      * Remote or local file image URI.
      */
     val imageUrl: String? = null,
@@ -121,6 +125,14 @@ data class WallpaperItem(
     fun resolveValue(context: Context): String {
         return when {
             drawableRes != null -> "android.resource://${context.packageName}/$drawableRes"
+            !drawableResName.isNullOrBlank() -> {
+                val resId = context.resources.getIdentifier(drawableResName, "drawable", context.packageName)
+                if (resId != 0) {
+                    "android.resource://${context.packageName}/$resId"
+                } else {
+                    "android.resource://${context.packageName}/drawable/$drawableResName"
+                }
+            }
             !imageUrl.isNullOrBlank() -> imageUrl
             !gradientColors.isNullOrEmpty() -> "gradient:" + gradientColors.joinToString(",")
             !colorHex.isNullOrBlank() -> colorHex
@@ -135,7 +147,31 @@ data class WallpaperItem(
  * Ready for future exact JPG production assets to be added to res/drawable-nodpi.
  */
 val WALLPAPER_CATALOG: List<WallpaperItem> = listOf(
-    // 1. Colors (Sophisticated dark tones aligned with Talkly theme)
+    // 1. Colors (Bundled production wallpapers + Dark tones)
+    WallpaperItem(
+        id = "wp_vibrant_oil",
+        name = "Vibrant Oil",
+        category = WallpaperCategory.COLORS,
+        drawableResName = "wallpaper_vibrant_oil"
+    ),
+    WallpaperItem(
+        id = "wp_pastel_blooms",
+        name = "Pastel Blooms",
+        category = WallpaperCategory.COLORS,
+        drawableResName = "wallpaper_pastel_blooms"
+    ),
+    WallpaperItem(
+        id = "wp_pastel_clouds",
+        name = "Pastel Clouds",
+        category = WallpaperCategory.COLORS,
+        drawableResName = "wallpaper_pastel_clouds"
+    ),
+    WallpaperItem(
+        id = "wp_pink_plumes",
+        name = "Pink Plumes",
+        category = WallpaperCategory.COLORS,
+        drawableResName = "wallpaper_pink_plumes"
+    ),
     WallpaperItem(id = "col_default", name = "Talkly Dark", category = WallpaperCategory.COLORS, colorHex = "#080B10", isDefault = true),
     WallpaperItem(id = "col_obsidian", name = "Obsidian", category = WallpaperCategory.COLORS, colorHex = "#0D1117"),
     WallpaperItem(id = "col_slate", name = "Midnight Slate", category = WallpaperCategory.COLORS, colorHex = "#0F172A"),
@@ -785,6 +821,11 @@ private fun WallpaperGrid(
         items(items, key = { it.id }) { item ->
             val isSelected = when {
                 item.drawableRes != null -> selectedValue == "android.resource://${context.packageName}/${item.drawableRes}"
+                !item.drawableResName.isNullOrBlank() -> {
+                    val resId = context.resources.getIdentifier(item.drawableResName, "drawable", context.packageName)
+                    selectedValue == "android.resource://${context.packageName}/drawable/${item.drawableResName}" ||
+                    (resId != 0 && selectedValue == "android.resource://${context.packageName}/$resId")
+                }
                 !item.imageUrl.isNullOrBlank() -> selectedValue == item.imageUrl
                 !item.gradientColors.isNullOrEmpty() -> selectedValue == ("gradient:" + item.gradientColors.joinToString(","))
                 !item.colorHex.isNullOrBlank() -> selectedValue.equals(item.colorHex, ignoreCase = true)
@@ -817,6 +858,16 @@ private fun WallpaperGrid(
                     item.drawableRes != null -> {
                         AsyncImage(
                             model = item.drawableRes,
+                            contentDescription = item.name,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    !item.drawableResName.isNullOrBlank() -> {
+                        val resId = context.resources.getIdentifier(item.drawableResName, "drawable", context.packageName)
+                        val model = if (resId != 0) resId else "android.resource://${context.packageName}/drawable/${item.drawableResName}"
+                        AsyncImage(
+                            model = model,
                             contentDescription = item.name,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
