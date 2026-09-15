@@ -2,44 +2,51 @@ package com.family.talkly.ui.components
 
 import android.content.Context
 import android.net.Uri
-import com.family.talkly.ui.theme.WhatsappGreen
-import com.family.talkly.ui.theme.WhatsappTeal
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Landscape
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Wallpaper
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,35 +58,118 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 
+// TALKLY 2026 VISUAL PALETTE
+private val TalklyChatBg = Color(0xFF080B10)
+private val TalklySurface = Color(0xFF11161D)
+private val TalklyCard = Color(0xFF18212B)
+private val TalklyElevated = Color(0xFF202B36)
+private val TalklyCyan = Color(0xFF22D3EE)
+private val TalklyAqua = Color(0xFF0EA5A4)
+private val TalklyMint = Color(0xFF5EEAD4)
+private val TalklyTextPrimary = Color(0xFFF8FAFC)
+private val TalklyTextSecondary = Color(0xFFA7B0BA)
+private val TalklyError = Color(0xFFF43F5E)
+
+/**
+ * Wallpaper categories as requested by Talkly specification.
+ */
+enum class WallpaperCategory(val displayName: String) {
+    COLORS("Colors"),
+    GRADIENTS("Gradients"),
+    NATURE("Nature"),
+    ABSTRACT("Abstract"),
+    DARK("Dark"),
+    CUSTOM("Custom"),
+    GALLERY("Gallery")
+}
+
+/**
+ * Scalable wallpaper catalog item supporting colors, gradients,
+ * future bundled JPG assets in res/drawable-nodpi, remote URLs, and device gallery.
+ */
 data class WallpaperItem(
     val id: String,
     val name: String,
+    val category: WallpaperCategory,
     val colorHex: String? = null,
+    val gradientColors: List<String>? = null,
+    /**
+     * Future bundled JPG drawable asset reference (e.g., R.drawable.wallpaper_nature_01).
+     * Exact JPG production assets can be added directly to res/drawable-nodpi.
+     */
+    val drawableRes: Int? = null,
+    /**
+     * Remote or local file image URI.
+     */
     val imageUrl: String? = null,
-    val isGalleryOption: Boolean = false
-)
+    val isGalleryOption: Boolean = false,
+    val isDefault: Boolean = false
+) {
+    fun resolveValue(context: Context): String {
+        return when {
+            drawableRes != null -> "android.resource://${context.packageName}/$drawableRes"
+            !imageUrl.isNullOrBlank() -> imageUrl
+            !gradientColors.isNullOrEmpty() -> "gradient:" + gradientColors.joinToString(",")
+            !colorHex.isNullOrBlank() -> colorHex
+            isDefault -> "#080B10"
+            else -> "#080B10"
+        }
+    }
+}
 
-val PRESET_WALLPAPERS = listOf(
-    WallpaperItem("default", "Classic Gray", colorHex = "#E5DDD5"),
-    WallpaperItem("mint", "Soft Mint", colorHex = "#E2F0D9"),
-    WallpaperItem("sky", "Sky Blue", colorHex = "#D9E2EC"),
-    WallpaperItem("sand", "Warm Sand", colorHex = "#F7EBE1"),
-    WallpaperItem("rose", "Soft Rose", colorHex = "#FCE4EC"),
-    WallpaperItem("dark", "Midnight Slate", colorHex = "#0B141A"),
-    WallpaperItem("mountain", "Mountain Mist", imageUrl = "https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=600&q=80"),
-    WallpaperItem("sunset", "Ocean Sunset", imageUrl = "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=600&q=80"),
-    WallpaperItem("galaxy", "Starry Galaxy", imageUrl = "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=600&q=80"),
-    WallpaperItem("emerald", "Emerald Forest", imageUrl = "https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=600&q=80"),
-    WallpaperItem("gallery", "Choose Gallery Photo", isGalleryOption = true)
+/**
+ * Clean wallpaper catalog structured by category.
+ * Ready for future exact JPG production assets to be added to res/drawable-nodpi.
+ */
+val WALLPAPER_CATALOG: List<WallpaperItem> = listOf(
+    // 1. Colors (Sophisticated dark tones aligned with Talkly theme)
+    WallpaperItem(id = "col_default", name = "Talkly Dark", category = WallpaperCategory.COLORS, colorHex = "#080B10", isDefault = true),
+    WallpaperItem(id = "col_obsidian", name = "Obsidian", category = WallpaperCategory.COLORS, colorHex = "#0D1117"),
+    WallpaperItem(id = "col_slate", name = "Midnight Slate", category = WallpaperCategory.COLORS, colorHex = "#0F172A"),
+    WallpaperItem(id = "col_navy", name = "Deep Navy", category = WallpaperCategory.COLORS, colorHex = "#0B132B"),
+    WallpaperItem(id = "col_charcoal", name = "Charcoal", category = WallpaperCategory.COLORS, colorHex = "#18212B"),
+    WallpaperItem(id = "col_emerald", name = "Deep Emerald", category = WallpaperCategory.COLORS, colorHex = "#062C24"),
+    WallpaperItem(id = "col_sapphire", name = "Dark Sapphire", category = WallpaperCategory.COLORS, colorHex = "#0C1B33"),
+    WallpaperItem(id = "col_plum", name = "Dark Plum", category = WallpaperCategory.COLORS, colorHex = "#1F0D2B"),
+
+    // 2. Gradients (Deep ambient gradients)
+    WallpaperItem(id = "grad_cyan_night", name = "Cyan Night", category = WallpaperCategory.GRADIENTS, gradientColors = listOf("#080B10", "#0B2A38")),
+    WallpaperItem(id = "grad_aqua_depth", name = "Aqua Depths", category = WallpaperCategory.GRADIENTS, gradientColors = listOf("#080B10", "#092E2E")),
+    WallpaperItem(id = "grad_midnight_indigo", name = "Midnight Indigo", category = WallpaperCategory.GRADIENTS, gradientColors = listOf("#0A0E1A", "#151F38")),
+    WallpaperItem(id = "grad_emerald_twilight", name = "Emerald Twilight", category = WallpaperCategory.GRADIENTS, gradientColors = listOf("#080B10", "#0A261D")),
+    WallpaperItem(id = "grad_cyber_violet", name = "Cyber Violet", category = WallpaperCategory.GRADIENTS, gradientColors = listOf("#080B10", "#241033")),
+    WallpaperItem(id = "grad_nordic_fog", name = "Nordic Slate", category = WallpaperCategory.GRADIENTS, gradientColors = listOf("#0F172A", "#1E293B")),
+
+    // 3. Nature (Category ready for future exact JPG assets in res/drawable-nodpi)
+    // Bundled production JPG files will be registered here directly when provided.
+
+    // 4. Abstract (Category ready for future exact JPG assets in res/drawable-nodpi)
+    // Bundled production JPG files will be registered here directly when provided.
+
+    // 5. Dark
+    WallpaperItem(id = "dark_amoled", name = "Pure AMOLED", category = WallpaperCategory.DARK, colorHex = "#000000"),
+    WallpaperItem(id = "dark_pitch", name = "Pitch Dark", category = WallpaperCategory.DARK, colorHex = "#05070A"),
+    WallpaperItem(id = "dark_carbon", name = "Carbon Black", category = WallpaperCategory.DARK, colorHex = "#121214"),
+    WallpaperItem(id = "dark_eclipse", name = "Eclipse Night", category = WallpaperCategory.DARK, colorHex = "#090D16"),
+
+    // 6. Custom
+    WallpaperItem(id = "cust_default", name = "Default Talkly", category = WallpaperCategory.CUSTOM, colorHex = "#080B10", isDefault = true),
+
+    // 7. Gallery
+    WallpaperItem(id = "gallery_picker", name = "Choose from Gallery", category = WallpaperCategory.GALLERY, isGalleryOption = true)
 )
 
 @Composable
@@ -89,7 +179,9 @@ fun WallpaperSelectionDialog(
     onDismiss: () -> Unit,
     onWallpaperSelected: (value: String, applyToAll: Boolean) -> Unit
 ) {
+    val context = LocalContext.current
     var selectedValue by remember { mutableStateOf(currentValue) }
+    var selectedCategory by remember { mutableStateOf(WallpaperCategory.COLORS) }
     var applyToAllChats by remember { mutableStateOf(false) }
 
     val galleryLauncher = rememberLauncherForActivityResult(
@@ -100,14 +192,19 @@ fun WallpaperSelectionDialog(
         }
     }
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp,
+            color = TalklySurface,
+            border = BorderStroke(1.dp, TalklyElevated),
+            tonalElevation = 8.dp,
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 12.dp)
+                .fillMaxWidth(0.94f)
+                .wrapContentHeight()
+                .padding(vertical = 16.dp)
         ) {
             Column(
                 modifier = Modifier.padding(20.dp)
@@ -119,116 +216,179 @@ fun WallpaperSelectionDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Wallpaper,
-                            contentDescription = null,
-                            tint = WhatsappTeal,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Chat Wallpaper",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF111B21)
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(TalklyCyan.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Wallpaper,
+                                contentDescription = null,
+                                tint = TalklyCyan,
+                                modifier = Modifier.size(20.dp)
                             )
-                        )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "Chat Wallpaper",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = TalklyTextPrimary
+                            )
+                            Text(
+                                text = "Customize chat background",
+                                fontSize = 11.sp,
+                                color = TalklyTextSecondary
+                            )
+                        }
                     }
                     IconButton(
                         onClick = onDismiss,
-                        modifier = Modifier.size(28.dp)
+                        modifier = Modifier.size(32.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Close",
-                            tint = Color.Gray
+                            tint = TalklyTextSecondary
                         )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Live Preview Card
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                // Live Preview Card (Talkly 2026 chat simulation)
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(120.dp)
+                        .height(125.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .border(1.dp, TalklyElevated, RoundedCornerShape(16.dp))
                 ) {
-                    Box(modifier = Modifier.fillMaxWidth().height(120.dp)) {
-                        // Background Render
-                        when {
-                            selectedValue.startsWith("http://") ||
-                            selectedValue.startsWith("https://") ||
-                            selectedValue.startsWith("content://") ||
-                            selectedValue.startsWith("file://") -> {
-                                AsyncImage(
-                                    model = selectedValue,
-                                    contentDescription = "Wallpaper Preview",
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxWidth().height(120.dp)
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(120.dp)
-                                        .background(Color.Black.copy(alpha = 0.15f))
-                                )
-                            }
-                            selectedValue.startsWith("#") -> {
-                                val c = try {
-                                    Color(android.graphics.Color.parseColor(selectedValue))
-                                } catch (e: Exception) {
-                                    Color(0xFFE5DDD5)
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(120.dp)
-                                        .background(c)
-                                )
-                            }
-                            else -> {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(120.dp)
-                                        .background(Color(0xFFE5DDD5))
-                                )
-                            }
+                    // Render current wallpaper selection in preview
+                    when {
+                        selectedValue.startsWith("http://") ||
+                        selectedValue.startsWith("https://") ||
+                        selectedValue.startsWith("content://") ||
+                        selectedValue.startsWith("file://") ||
+                        selectedValue.startsWith("android.resource://") -> {
+                            AsyncImage(
+                                model = selectedValue,
+                                contentDescription = "Wallpaper Preview",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.40f))
+                            )
                         }
+                        selectedValue.startsWith("gradient:") -> {
+                            val hexList = selectedValue.removePrefix("gradient:").split(",")
+                            val colors = hexList.mapNotNull {
+                                try {
+                                    Color(android.graphics.Color.parseColor(it.trim()))
+                                } catch (e: Exception) {
+                                    null
+                                }
+                            }.ifEmpty { listOf(TalklyChatBg, TalklyCard) }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Brush.verticalGradient(colors))
+                            )
+                        }
+                        selectedValue.startsWith("#") -> {
+                            val col = try {
+                                Color(android.graphics.Color.parseColor(selectedValue))
+                            } catch (e: Exception) {
+                                TalklyChatBg
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(col)
+                            )
+                        }
+                        else -> {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(TalklyChatBg)
+                            )
+                        }
+                    }
 
-                        // Preview Message Bubbles
-                        Column(
-                            modifier = Modifier
-                                .padding(10.dp)
-                                .align(Alignment.Center)
+                    // Realistic Talkly Preview Message Bubbles
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        // Incoming message
+                        Surface(
+                            color = TalklyCard,
+                            shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomEnd = 12.dp, bottomStart = 4.dp),
+                            border = BorderStroke(0.5.dp, TalklyElevated),
+                            modifier = Modifier.fillMaxWidth(0.82f)
                         ) {
-                            Surface(
-                                color = Color.White,
-                                shape = RoundedCornerShape(12.dp),
-                                shadowElevation = 1.dp
+                            Row(
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
                                     text = "Hey! How does this wallpaper look?",
                                     fontSize = 11.sp,
-                                    color = Color(0xFF111B21),
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    color = TalklyTextPrimary,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "10:42",
+                                    fontSize = 9.sp,
+                                    color = TalklyTextSecondary
                                 )
                             }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Surface(
-                                color = Color(0xFFE7FFDB),
-                                shape = RoundedCornerShape(12.dp),
-                                shadowElevation = 1.dp,
-                                modifier = Modifier.align(Alignment.End)
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // Outgoing message
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.End)
+                                .fillMaxWidth(0.82f)
+                                .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 12.dp, bottomEnd = 4.dp))
+                                .background(
+                                    Brush.linearGradient(
+                                        listOf(Color(0xFF0C3848), Color(0xFF114E5E))
+                                    )
+                                )
+                                .border(
+                                    0.5.dp,
+                                    TalklyCyan.copy(alpha = 0.25f),
+                                    RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 12.dp, bottomEnd = 4.dp)
+                                )
+                                .padding(horizontal = 9.dp, vertical = 5.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "Looks great! Perfect readability 👍",
+                                    text = "Looks crisp with Talkly dark theme 👍",
                                     fontSize = 11.sp,
-                                    color = Color(0xFF111B21),
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    color = TalklyTextPrimary,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "10:43 ✓✓",
+                                    fontSize = 9.sp,
+                                    color = TalklyMint
                                 )
                             }
                         }
@@ -237,179 +397,513 @@ fun WallpaperSelectionDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                Text(
-                    text = "Select Background Theme or Photo",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Gray
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Wallpaper Grid Options
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(4),
-                    contentPadding = PaddingValues(2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                // Category Selector (Pill Tabs)
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(160.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(PRESET_WALLPAPERS) { item ->
-                        val isSelected = when {
-                            item.isGalleryOption -> selectedValue.startsWith("content://") || selectedValue.startsWith("file://")
-                            item.imageUrl != null -> selectedValue == item.imageUrl
-                            item.colorHex != null -> selectedValue == item.colorHex
-                            else -> selectedValue == "default" || selectedValue == "#E5DDD5"
-                        }
+                    WallpaperCategory.values().forEach { category ->
+                        val isCatSelected = category == selectedCategory
+                        val targetBg = if (isCatSelected) TalklyCyan.copy(alpha = 0.16f) else TalklyCard
+                        val targetBorder = if (isCatSelected) TalklyCyan else TalklyElevated
+                        val targetText = if (isCatSelected) TalklyCyan else TalklyTextSecondary
 
-                        Box(
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = targetBg,
+                            border = BorderStroke(1.dp, targetBorder),
                             modifier = Modifier
-                                .size(64.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .border(
-                                    width = if (isSelected) 3.dp else 1.dp,
-                                    color = if (isSelected) WhatsappGreen else Color.LightGray.copy(alpha = 0.6f),
-                                    shape = RoundedCornerShape(14.dp)
-                                )
-                                .clickable {
-                                    if (item.isGalleryOption) {
-                                        galleryLauncher.launch("image/*")
-                                    } else if (item.imageUrl != null) {
-                                        selectedValue = item.imageUrl
-                                    } else if (item.colorHex != null) {
-                                        selectedValue = item.colorHex
-                                    } else {
-                                        selectedValue = "#E5DDD5"
-                                    }
-                                },
-                            contentAlignment = Alignment.Center
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { selectedCategory = category }
                         ) {
-                            if (item.isGalleryOption) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(Color(0xFFF0F2F5))
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.PhotoLibrary,
-                                        contentDescription = "Gallery",
-                                        tint = WhatsappTeal,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text("Gallery", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = WhatsappTeal)
-                                }
-                            } else if (item.imageUrl != null) {
-                                AsyncImage(
-                                    model = item.imageUrl,
-                                    contentDescription = item.name,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxWidth().height(64.dp)
-                                )
-                            } else if (item.colorHex != null) {
-                                val col = try {
-                                    Color(android.graphics.Color.parseColor(item.colorHex))
-                                } catch (e: Exception) {
-                                    Color(0xFFE5DDD5)
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(64.dp)
-                                        .background(col)
-                                )
-                            }
-
-                            if (isSelected) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(22.dp)
-                                        .background(WhatsappGreen, CircleShape),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = "Selected",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
-                            }
+                            Text(
+                                text = category.displayName,
+                                color = targetText,
+                                fontSize = 12.sp,
+                                fontWeight = if (isCatSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
                         }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Apply Scope Choice (This chat vs All chats)
-                Column {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
+                // Wallpaper Content Area based on Category
+                val categoryItems = remember(selectedCategory) {
+                    WALLPAPER_CATALOG.filter { it.category == selectedCategory }
+                }
+
+                AnimatedContent(
+                    targetState = selectedCategory,
+                    transitionSpec = {
+                        fadeIn(animationSpec = tween(150)) togetherWith fadeOut(animationSpec = tween(150))
+                    },
+                    label = "WallpaperCategoryContent"
+                ) { category ->
+                    when (category) {
+                        WallpaperCategory.GALLERY -> {
+                            // Dedicated Gallery Option
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(160.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(TalklyCard)
+                                    .border(1.dp, TalklyElevated, RoundedCornerShape(16.dp))
+                                    .clickable { galleryLauncher.launch("image/*") }
+                                    .padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .clip(CircleShape)
+                                        .background(TalklyCyan.copy(alpha = 0.15f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PhotoLibrary,
+                                        contentDescription = "Gallery",
+                                        tint = TalklyCyan,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "Choose Photo from Gallery",
+                                    color = TalklyTextPrimary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp
+                                )
+                                Spacer(modifier = Modifier.height(3.dp))
+                                Text(
+                                    text = if (selectedValue.startsWith("content://") || selectedValue.startsWith("file://")) {
+                                        "✓ Custom device photo selected"
+                                    } else {
+                                        "Select any image from your device storage"
+                                    },
+                                    color = if (selectedValue.startsWith("content://") || selectedValue.startsWith("file://")) TalklyMint else TalklyTextSecondary,
+                                    fontSize = 11.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                        WallpaperCategory.CUSTOM -> {
+                            // Custom Options
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(160.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(TalklyCard)
+                                    .border(1.dp, TalklyElevated, RoundedCornerShape(16.dp))
+                                    .padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Palette,
+                                    contentDescription = null,
+                                    tint = TalklyCyan,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "Talkly Default Theme",
+                                    color = TalklyTextPrimary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp
+                                )
+                                Spacer(modifier = Modifier.height(3.dp))
+                                Text(
+                                    text = "Reset back to the official Talkly dark ambiance",
+                                    color = TalklyTextSecondary,
+                                    fontSize = 11.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Button(
+                                    onClick = { selectedValue = "#080B10" },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = TalklyElevated,
+                                        contentColor = TalklyCyan
+                                    ),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.RestartAlt,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Apply Default Dark", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+                        WallpaperCategory.NATURE, WallpaperCategory.ABSTRACT -> {
+                            if (categoryItems.isEmpty()) {
+                                // Clean ready placeholder state for future exact bundled JPG production assets
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(160.dp)
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(TalklyCard)
+                                        .border(1.dp, TalklyElevated, RoundedCornerShape(16.dp))
+                                        .padding(16.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = if (category == WallpaperCategory.NATURE) Icons.Default.Landscape else Icons.Default.AutoAwesome,
+                                        contentDescription = null,
+                                        tint = TalklyCyan.copy(alpha = 0.5f),
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "${category.displayName} Collection",
+                                        color = TalklyTextPrimary,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 13.sp
+                                    )
+                                    Spacer(modifier = Modifier.height(3.dp))
+                                    Text(
+                                        text = "Curated JPG wallpapers will be available here",
+                                        color = TalklyTextSecondary,
+                                        fontSize = 11.sp,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            } else {
+                                WallpaperGrid(
+                                    items = categoryItems,
+                                    selectedValue = selectedValue,
+                                    context = context,
+                                    onSelect = { selectedValue = it }
+                                )
+                            }
+                        }
+                        else -> {
+                            // Colors, Gradients, Dark
+                            WallpaperGrid(
+                                items = categoryItems,
+                                selectedValue = selectedValue,
+                                context = context,
+                                onSelect = { selectedValue = it }
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Apply Scope Choice (Segmented selector)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val isThisChatSelected = !applyToAllChats
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isThisChatSelected) TalklyCyan.copy(alpha = 0.12f) else TalklyCard,
+                        border = BorderStroke(
+                            width = 1.dp,
+                            color = if (isThisChatSelected) TalklyCyan else TalklyElevated
+                        ),
                         modifier = Modifier
-                            .fillMaxWidth()
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
                             .clickable { applyToAllChats = false }
                     ) {
-                        RadioButton(
-                            selected = !applyToAllChats,
-                            onClick = { applyToAllChats = false },
-                            colors = RadioButtonDefaults.colors(selectedColor = WhatsappGreen)
-                        )
-                        Text(
-                            text = "Apply to this chat ($contactName)",
-                            fontSize = 12.sp,
-                            color = Color(0xFF111B21)
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .border(
+                                        1.5.dp,
+                                        if (isThisChatSelected) TalklyCyan else TalklyTextSecondary,
+                                        CircleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isThisChatSelected) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .background(TalklyCyan, CircleShape)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "This Chat",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (isThisChatSelected) TalklyCyan else TalklyTextPrimary
+                                )
+                                Text(
+                                    text = contactName,
+                                    fontSize = 10.sp,
+                                    color = TalklyTextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     }
 
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
+                    val isAllChatsSelected = applyToAllChats
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isAllChatsSelected) TalklyCyan.copy(alpha = 0.12f) else TalklyCard,
+                        border = BorderStroke(
+                            width = 1.dp,
+                            color = if (isAllChatsSelected) TalklyCyan else TalklyElevated
+                        ),
                         modifier = Modifier
-                            .fillMaxWidth()
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
                             .clickable { applyToAllChats = true }
                     ) {
-                        RadioButton(
-                            selected = applyToAllChats,
-                            onClick = { applyToAllChats = true },
-                            colors = RadioButtonDefaults.colors(selectedColor = WhatsappGreen)
-                        )
-                        Text(
-                            text = "Set as default for all chats",
-                            fontSize = 12.sp,
-                            color = Color(0xFF111B21)
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .border(
+                                        1.5.dp,
+                                        if (isAllChatsSelected) TalklyCyan else TalklyTextSecondary,
+                                        CircleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isAllChatsSelected) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .background(TalklyCyan, CircleShape)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "All Chats",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (isAllChatsSelected) TalklyCyan else TalklyTextPrimary
+                                )
+                                Text(
+                                    text = "Set as default",
+                                    fontSize = 10.sp,
+                                    color = TalklyTextSecondary,
+                                    maxLines = 1
+                                )
+                            }
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Action Buttons
+                // Bottom Action Buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     TextButton(
-                        onClick = {
-                            selectedValue = "#E5DDD5"
-                        }
+                        onClick = { selectedValue = "#080B10" }
                     ) {
-                        Text("Reset Default", color = Color.Gray, fontSize = 13.sp)
+                        Icon(
+                            imageVector = Icons.Default.RestartAlt,
+                            contentDescription = null,
+                            tint = TalklyTextSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Reset Default",
+                            color = TalklyTextSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
 
                     Button(
                         onClick = {
                             onWallpaperSelected(selectedValue, applyToAllChats)
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = WhatsappGreen),
-                        shape = RoundedCornerShape(12.dp)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = TalklyCyan,
+                            contentColor = Color(0xFF080B10)
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
                     ) {
-                        Text("Set Wallpaper", fontWeight = FontWeight.Bold, color = Color.White)
+                        Text(
+                            text = "Set Wallpaper",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = Color(0xFF080B10)
+                        )
                     }
                 }
             }
         }
     }
 }
+
+@Composable
+private fun WallpaperGrid(
+    items: List<WallpaperItem>,
+    selectedValue: String,
+    context: Context,
+    onSelect: (String) -> Unit
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(4),
+        contentPadding = PaddingValues(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(160.dp)
+    ) {
+        items(items, key = { it.id }) { item ->
+            val isSelected = when {
+                item.drawableRes != null -> selectedValue == "android.resource://${context.packageName}/${item.drawableRes}"
+                !item.imageUrl.isNullOrBlank() -> selectedValue == item.imageUrl
+                !item.gradientColors.isNullOrEmpty() -> selectedValue == ("gradient:" + item.gradientColors.joinToString(","))
+                !item.colorHex.isNullOrBlank() -> selectedValue.equals(item.colorHex, ignoreCase = true)
+                item.isDefault -> selectedValue == "default" || selectedValue.equals("#080B10", ignoreCase = true)
+                else -> false
+            }
+
+            val borderColor by animateColorAsState(
+                targetValue = if (isSelected) TalklyCyan else TalklyElevated,
+                animationSpec = tween(200),
+                label = "WallpaperItemBorder"
+            )
+
+            Box(
+                modifier = Modifier
+                    .size(68.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .border(
+                        width = if (isSelected) 2.dp else 1.dp,
+                        color = borderColor,
+                        shape = RoundedCornerShape(14.dp)
+                    )
+                    .clickable {
+                        onSelect(item.resolveValue(context))
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                // Background visual
+                when {
+                    item.drawableRes != null -> {
+                        AsyncImage(
+                            model = item.drawableRes,
+                            contentDescription = item.name,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    !item.imageUrl.isNullOrBlank() -> {
+                        AsyncImage(
+                            model = item.imageUrl,
+                            contentDescription = item.name,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    !item.gradientColors.isNullOrEmpty() -> {
+                        val colors = item.gradientColors.mapNotNull {
+                            try {
+                                Color(android.graphics.Color.parseColor(it.trim()))
+                            } catch (e: Exception) {
+                                null
+                            }
+                        }.ifEmpty { listOf(TalklyChatBg, TalklyCard) }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Brush.verticalGradient(colors))
+                        )
+                    }
+                    !item.colorHex.isNullOrBlank() -> {
+                        val col = try {
+                            Color(android.graphics.Color.parseColor(item.colorHex))
+                        } catch (e: Exception) {
+                            TalklyChatBg
+                        }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(col)
+                        )
+                    }
+                    else -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(TalklyChatBg)
+                        )
+                    }
+                }
+
+                // Name label pill at bottom
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(vertical = 2.dp, horizontal = 2.dp)
+                ) {
+                    Text(
+                        text = item.name,
+                        fontSize = 8.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = TalklyTextPrimary,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                // Cyan selection indicator badge
+                if (isSelected) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(4.dp)
+                            .size(18.dp)
+                            .background(TalklyCyan, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Selected",
+                            tint = Color(0xFF080B10),
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
