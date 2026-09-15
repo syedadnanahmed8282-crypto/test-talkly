@@ -181,7 +181,31 @@ val WALLPAPER_CATALOG: List<WallpaperItem> = listOf(
     WallpaperItem(id = "col_sapphire", name = "Dark Sapphire", category = WallpaperCategory.COLORS, colorHex = "#0C1B33"),
     WallpaperItem(id = "col_plum", name = "Dark Plum", category = WallpaperCategory.COLORS, colorHex = "#1F0D2B"),
 
-    // 2. Gradients (Deep ambient gradients)
+    // 2. Gradients (Bundled production gradient wallpapers + ambient gradients)
+    WallpaperItem(
+        id = "wp_aqua_sheen",
+        name = "Aqua Sheen",
+        category = WallpaperCategory.GRADIENTS,
+        drawableResName = "wallpaper_aqua_sheen"
+    ),
+    WallpaperItem(
+        id = "wp_ocean_gradient",
+        name = "Ocean Gradient",
+        category = WallpaperCategory.GRADIENTS,
+        drawableResName = "wallpaper_ocean_gradient"
+    ),
+    WallpaperItem(
+        id = "wp_prism_silk",
+        name = "Prism Silk",
+        category = WallpaperCategory.GRADIENTS,
+        drawableResName = "wallpaper_prism_silk"
+    ),
+    WallpaperItem(
+        id = "wp_royal_plum",
+        name = "Royal Plum",
+        category = WallpaperCategory.GRADIENTS,
+        drawableResName = "wallpaper_royal_plum"
+    ),
     WallpaperItem(id = "grad_cyan_night", name = "Cyan Night", category = WallpaperCategory.GRADIENTS, gradientColors = listOf("#080B10", "#0B2A38")),
     WallpaperItem(id = "grad_aqua_depth", name = "Aqua Depths", category = WallpaperCategory.GRADIENTS, gradientColors = listOf("#080B10", "#092E2E")),
     WallpaperItem(id = "grad_midnight_indigo", name = "Midnight Indigo", category = WallpaperCategory.GRADIENTS, gradientColors = listOf("#0A0E1A", "#151F38")),
