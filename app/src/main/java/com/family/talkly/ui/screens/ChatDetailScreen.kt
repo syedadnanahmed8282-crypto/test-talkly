@@ -458,12 +458,10 @@ fun ChatDetailScreen(
     }
 
     val onMessageLongPress: (ChatMessage) -> Unit = { targetMsg ->
-        if (!targetMsg.isDeletedForEveryone) {
-            if (selectedMessageIds.isEmpty()) {
-                selectedMessageIds = setOf(targetMsg.id)
-            } else {
-                toggleMessageSelection(targetMsg)
-            }
+        if (isSelectionMode) {
+            toggleMessageSelection(targetMsg)
+        } else {
+            reactionDialogMessage = targetMsg
         }
     }
 
@@ -1089,6 +1087,40 @@ fun ChatDetailScreen(
                                                 Spacer(modifier = Modifier.width(8.dp))
                                                 Text(
                                                     text = "Edit message",
+                                                    color = TalklyCyan,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    fontSize = 13.sp
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    // Select message
+                                    if (!selectedMsg.isDeletedForEveryone) {
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = TalklyCyan.copy(alpha = 0.12f),
+                                            border = BorderStroke(0.5.dp, TalklyCyan.copy(alpha = 0.25f)),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    selectedMessageIds = setOf(selectedMsg.id)
+                                                    reactionDialogMessage = null
+                                                }
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Done,
+                                                    contentDescription = null,
+                                                    tint = TalklyCyan,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = "Select message",
                                                     color = TalklyCyan,
                                                     fontWeight = FontWeight.SemiBold,
                                                     fontSize = 13.sp
