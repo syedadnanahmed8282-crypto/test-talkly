@@ -1,9 +1,15 @@
 package com.family.talkly.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Chat
@@ -18,6 +24,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -30,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import android.os.Build
 import android.util.Log
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -116,6 +124,17 @@ fun MainScreen(
 
     val callInfo by zegoManager.callState.collectAsState()
     val callLogs by zegoManager.callLogs.collectAsState()
+
+    var isCallMinimized by remember { mutableStateOf(false) }
+    val isCallActive = callInfo.state == CallState.ACTIVE ||
+        callInfo.state == CallState.OUTGOING_RINGING ||
+        callInfo.state == CallState.OUTGOING_CALLING
+
+    LaunchedEffect(isCallActive) {
+        if (!isCallActive) {
+            isCallMinimized = false
+        }
+    }
 
     androidx.compose.runtime.LaunchedEffect(currentUserProfile?.uid) {
         val uid = currentUserProfile?.uid
@@ -293,7 +312,7 @@ fun MainScreen(
     }
 
     // Full Screen Active Call Screen
-    if (callInfo.state == CallState.ACTIVE || callInfo.state == CallState.OUTGOING_RINGING || callInfo.state == CallState.OUTGOING_CALLING) {
+    if (isCallActive && (!isCallMinimized || isInPipMode)) {
         CallScreen(
             callInfo = callInfo,
             isInPipMode = isInPipMode,
@@ -303,234 +322,252 @@ fun MainScreen(
             onFlipCamera = { zegoManager.flipCamera() },
             onToggleSpeaker = { zegoManager.toggleSpeaker() },
             onBindLocalView = { zegoManager.setLocalVideoView(it) },
-            onBindRemoteView = { zegoManager.setRemoteVideoView(it) }
+            onBindRemoteView = { zegoManager.setRemoteVideoView(it) },
+            onMinimizeCall = { isCallMinimized = true }
         )
         return
     }
 
-    // Detail Chat Screen for selected family member
-    if (activeChatMember != null) {
-        val memberId = activeChatMember!!.id
-        val currentMember = familyMembers.firstOrNull { it.id == memberId } ?: activeChatMember!!
-        val currentMessages = remember(messagesMap, currentMember.id, currentMember.firebaseUid, currentMember.phone) {
-            val step1 = chatRepository.getMessagesForMember(currentMember.id)
-            if (step1.isNotEmpty()) {
-                step1
-            } else if (!currentMember.firebaseUid.isNullOrBlank()) {
-                chatRepository.getMessagesForMember(currentMember.firebaseUid!!)
-            } else {
-                emptyList()
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Detail Chat Screen for selected family member
+        if (activeChatMember != null) {
+            val memberId = activeChatMember!!.id
+            val currentMember = familyMembers.firstOrNull { it.id == memberId } ?: activeChatMember!!
+            val currentMessages = remember(messagesMap, currentMember.id, currentMember.firebaseUid, currentMember.phone) {
+                val step1 = chatRepository.getMessagesForMember(currentMember.id)
+                if (step1.isNotEmpty()) {
+                    step1
+                } else if (!currentMember.firebaseUid.isNullOrBlank()) {
+                    chatRepository.getMessagesForMember(currentMember.firebaseUid!!)
+                } else {
+                    emptyList()
+                }
             }
-        }
 
-        val isMutual = chatRepository.isMutualContact(currentUid, currentMember)
-        val targetSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(currentMember.phone)
-        val pendingReq = messageRequests.firstOrNull { req ->
-            req.status == "PENDING" && (
-                req.senderId == currentMember.id ||
-                req.senderId == currentMember.firebaseUid ||
-                (targetSuffix.isNotBlank() && req.senderPhoneSuffix == targetSuffix)
-            )
-        }
-        val sentByMeReq = messageRequests.firstOrNull { req ->
-            req.status == "PENDING" && (
-                req.receiverId == currentMember.id ||
-                req.receiverId == currentMember.firebaseUid ||
-                (targetSuffix.isNotBlank() && req.receiverPhoneSuffix == targetSuffix)
-            )
-        }
+            val isMutual = chatRepository.isMutualContact(currentUid, currentMember)
+            val targetSuffix = com.family.talkly.util.PhoneUtils.extractPhoneSuffix(currentMember.phone)
+            val pendingReq = messageRequests.firstOrNull { req ->
+                req.status == "PENDING" && (
+                    req.senderId == currentMember.id ||
+                    req.senderId == currentMember.firebaseUid ||
+                    (targetSuffix.isNotBlank() && req.senderPhoneSuffix == targetSuffix)
+                )
+            }
+            val sentByMeReq = messageRequests.firstOrNull { req ->
+                req.status == "PENDING" && (
+                    req.receiverId == currentMember.id ||
+                    req.receiverId == currentMember.firebaseUid ||
+                    (targetSuffix.isNotBlank() && req.receiverPhoneSuffix == targetSuffix)
+                )
+            }
 
-        ChatDetailScreen(
-            member = currentMember,
-            messages = currentMessages,
-            simulatedTimeOffsetMs = simulatedTimeOffsetMs,
-            onBack = { activeChatMember = null },
-            onSendMessage = { text, type, mediaUrl, replyToId, replyToName, replyToText ->
-                chatRepository.sendMessage(
-                    memberId = currentMember.id,
-                    textContent = text,
-                    type = type,
-                    mediaUrl = mediaUrl,
-                    replyToMessageId = replyToId,
-                    replyToSenderName = replyToName,
-                    replyToText = replyToText
-                )
-                chatRepository.triggerSimulatedTypingReply(currentMember.id)
-            },
-            onToggleReaction = { messageId, reactionEmoji ->
-                chatRepository.toggleMessageReaction(
-                    memberId = currentMember.id,
-                    messageId = messageId,
-                    reactionEmoji = reactionEmoji,
-                    currentUserId = currentUserProfile?.uid ?: "self",
-                    currentUserName = currentUserProfile?.name ?: "You",
-                    currentUserAvatar = currentUserProfile?.profilePicUrl
-                )
-            },
-            onDeleteForYou = { messageId ->
-                chatRepository.deleteMessageForYou(currentMember.id, messageId)
-            },
-            onDeleteForEveryone = { messageId ->
-                chatRepository.deleteMessageForEveryone(currentMember.id, messageId)
-            },
-            onDeleteMessagesForYou = { messageIds ->
-                chatRepository.deleteMessagesForYou(currentMember.id, messageIds)
-            },
-            onDeleteMessagesForEveryone = { messageIds ->
-                chatRepository.deleteMessagesForEveryone(currentMember.id, messageIds)
-            },
-            onEditMessage = { messageId, newText ->
-                chatRepository.editMessage(currentMember.id, messageId, newText)
-            },
-            onToggleStarMessage = { messageId ->
-                chatRepository.toggleStarMessage(currentMember.id, messageId)
-            },
-            onTogglePinMessage = { messageId ->
-                chatRepository.togglePinMessage(currentMember.id, messageId)
-            },
-            onTogglePinMember = {
-                chatRepository.togglePinMember(currentMember.id)
-            },
-            onTypingStateChanged = { isTyping ->
-                chatRepository.sendTypingStatus(currentMember.id, isTyping)
-            },
-            onToggleFastForward = { chatRepository.toggle48HourFastForward() },
-            onAddExpiredDemo = { chatRepository.addExpiredMediaDemo(currentMember.id) },
-            onStartCall = { callType ->
-                startCallWithPermissions(currentMember, callType)
-            },
-            onReadMessages = {
-                chatRepository.markMessagesAsRead(currentMember.id)
-            },
-            isInitiallyBlocked = blockedUserIds.contains(currentMember.id),
-            onBlockUser = {
-                chatRepository.blockUser(currentMember.id)
-            },
-            onUnblockUser = {
-                chatRepository.unblockUser(currentMember.id)
-            },
-            isMutualContact = isMutual,
-            pendingMessageRequest = pendingReq,
-            isRequestSentByMe = sentByMeReq != null,
-            onSendMessageRequest = { initialText ->
-                chatRepository.sendNextMessageRequest(currentMember, initialText) { success ->
-                    if (success) {
-                        Toast.makeText(context, "Message request sent successfully!", Toast.LENGTH_SHORT).show()
+            ChatDetailScreen(
+                member = currentMember,
+                messages = currentMessages,
+                simulatedTimeOffsetMs = simulatedTimeOffsetMs,
+                onBack = { activeChatMember = null },
+                onSendMessage = { text, type, mediaUrl, replyToId, replyToName, replyToText ->
+                    chatRepository.sendMessage(
+                        memberId = currentMember.id,
+                        textContent = text,
+                        type = type,
+                        mediaUrl = mediaUrl,
+                        replyToMessageId = replyToId,
+                        replyToSenderName = replyToName,
+                        replyToText = replyToText
+                    )
+                    chatRepository.triggerSimulatedTypingReply(currentMember.id)
+                },
+                onToggleReaction = { messageId, reactionEmoji ->
+                    chatRepository.toggleMessageReaction(
+                        memberId = currentMember.id,
+                        messageId = messageId,
+                        reactionEmoji = reactionEmoji,
+                        currentUserId = currentUserProfile?.uid ?: "self",
+                        currentUserName = currentUserProfile?.name ?: "You",
+                        currentUserAvatar = currentUserProfile?.profilePicUrl
+                    )
+                },
+                onDeleteForYou = { messageId ->
+                    chatRepository.deleteMessageForYou(currentMember.id, messageId)
+                },
+                onDeleteForEveryone = { messageId ->
+                    chatRepository.deleteMessageForEveryone(currentMember.id, messageId)
+                },
+                onDeleteMessagesForYou = { messageIds ->
+                    chatRepository.deleteMessagesForYou(currentMember.id, messageIds)
+                },
+                onDeleteMessagesForEveryone = { messageIds ->
+                    chatRepository.deleteMessagesForEveryone(currentMember.id, messageIds)
+                },
+                onEditMessage = { messageId, newText ->
+                    chatRepository.editMessage(currentMember.id, messageId, newText)
+                },
+                onToggleStarMessage = { messageId ->
+                    chatRepository.toggleStarMessage(currentMember.id, messageId)
+                },
+                onTogglePinMessage = { messageId ->
+                    chatRepository.togglePinMessage(currentMember.id, messageId)
+                },
+                onTogglePinMember = {
+                    chatRepository.togglePinMember(currentMember.id)
+                },
+                onTypingStateChanged = { isTyping ->
+                    chatRepository.sendTypingStatus(currentMember.id, isTyping)
+                },
+                onToggleFastForward = { chatRepository.toggle48HourFastForward() },
+                onAddExpiredDemo = { chatRepository.addExpiredMediaDemo(currentMember.id) },
+                onStartCall = { callType ->
+                    startCallWithPermissions(currentMember, callType)
+                },
+                onReadMessages = {
+                    chatRepository.markMessagesAsRead(currentMember.id)
+                },
+                isInitiallyBlocked = blockedUserIds.contains(currentMember.id),
+                onBlockUser = {
+                    chatRepository.blockUser(currentMember.id)
+                },
+                onUnblockUser = {
+                    chatRepository.unblockUser(currentMember.id)
+                },
+                isMutualContact = isMutual,
+                pendingMessageRequest = pendingReq,
+                isRequestSentByMe = sentByMeReq != null,
+                onSendMessageRequest = { initialText ->
+                    chatRepository.sendNextMessageRequest(currentMember, initialText) { success ->
+                        if (success) {
+                            Toast.makeText(context, "Message request sent successfully!", Toast.LENGTH_SHORT).show()
+                        }
                     }
+                },
+                onAcceptMessageRequest = { req ->
+                    chatRepository.acceptMessageRequest(req) {
+                        Toast.makeText(context, "Request accepted! Contact saved.", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onDeclineMessageRequest = { reqId ->
+                    chatRepository.declineMessageRequest(reqId) {
+                        Toast.makeText(context, "Message request declined", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onClearChatHistory = {
+                    chatRepository.deleteChatHistory(currentMember.id)
+                },
+                currentUserProfile = currentUserProfile,
+                isNetworkConnected = isNetworkConnected,
+                onRefreshMemberProfile = {
+                    chatRepository.refreshContactProfile(currentMember.id)
                 }
-            },
-            onAcceptMessageRequest = { req ->
-                chatRepository.acceptMessageRequest(req) {
-                    Toast.makeText(context, "Request accepted! Contact saved.", Toast.LENGTH_SHORT).show()
-                }
-            },
-            onDeclineMessageRequest = { reqId ->
-                chatRepository.declineMessageRequest(reqId) {
-                    Toast.makeText(context, "Message request declined", Toast.LENGTH_SHORT).show()
-                }
-            },
-            onClearChatHistory = {
-                chatRepository.deleteChatHistory(currentMember.id)
-            },
-            currentUserProfile = currentUserProfile,
-            isNetworkConnected = isNetworkConnected,
-            onRefreshMemberProfile = {
-                chatRepository.refreshContactProfile(currentMember.id)
-            }
-        )
-        return
-    }
+            )
+        } else {
+            // Main Screen Content
+            ChatListScreen(
+                selectedTab = selectedTab,
+                onTabSelected = { selectedTab = it },
+                familyMembers = familyMembers,
+                messagesMap = messagesMap,
+                simulatedTimeOffsetMs = simulatedTimeOffsetMs,
+                currentUserProfile = currentUserProfile,
+                currentThemeMode = currentThemeMode,
+                onThemeModeChange = onThemeModeChange,
+                onLogout = onLogout,
+                onSaveProfile = onSaveProfile,
+                onSelectMember = { activeChatMember = it },
+                onStartCall = { member, type ->
+                    startCallWithPermissions(member, type)
+                },
+                onTriggerIncomingDemo = { member ->
+                    zegoManager.triggerIncomingCall(member, CallType.VIDEO)
+                },
+                onTogglePinMember = { memberId ->
+                    chatRepository.togglePinMember(memberId)
+                },
+                onSearchUserByPhone = { phone, callback ->
+                    chatRepository.searchTalklyUserByPhone(phone, callback)
+                },
+                onAddContact = { name, phone, relation, bio, avatarUrl ->
+                    chatRepository.addNewContact(name, phone, relation, bio, avatarUrl)
+                },
+                onDeleteContact = { memberId ->
+                    chatRepository.deleteContact(memberId)
+                },
+                onDeleteChatHistory = { memberId ->
+                    chatRepository.deleteChatHistory(memberId)
+                },
+                onClearDemoContacts = {
+                    chatRepository.clearDemoContacts()
+                },
+                isNetworkConnected = isNetworkConnected,
+                statusGroups = statusGroups,
+                onPostStatus = { textContent, photoUrl, bgHex ->
+                    val currentUid = currentUserProfile?.uid?.ifBlank { "self" } ?: "self"
+                    val userName = currentUserProfile?.name?.ifBlank { "You" } ?: "You"
+                    val userAvatar = currentUserProfile?.profilePicUrl?.ifBlank { null }
+                    chatRepository.postStatus(
+                        userId = currentUid,
+                        userName = userName,
+                        userAvatarUrl = userAvatar,
+                        textContent = textContent,
+                        photoUrl = photoUrl,
+                        backgroundColorHex = bgHex
+                    )
+                },
+                onDeleteStatus = { statusId ->
+                    val currentUid = currentUserProfile?.uid?.ifBlank { "self" } ?: "self"
+                    chatRepository.deleteStatus(statusId, currentUid)
+                },
+                onMarkStatusSeen = { statusId ->
+                    val currentUid = currentUserProfile?.uid?.ifBlank { "self" } ?: "self"
+                    val userName = currentUserProfile?.name?.ifBlank { "You" } ?: "You"
+                    val userAvatar = currentUserProfile?.profilePicUrl?.ifBlank { null }
+                    chatRepository.markStatusAsSeen(statusId, currentUid, userName, userAvatar)
+                },
+                onToggleLikeStatus = { statusId ->
+                    val currentUid = currentUserProfile?.uid?.ifBlank { "self" } ?: "self"
+                    val userName = currentUserProfile?.name?.ifBlank { "You" } ?: "You"
+                    val userAvatar = currentUserProfile?.profilePicUrl?.ifBlank { null }
+                    chatRepository.toggleStatusLike(statusId, currentUid, userName, userAvatar)
+                },
+                onSendStatusReply = { targetUserId, replyText ->
+                    chatRepository.sendMessage(
+                        memberId = targetUserId,
+                        textContent = "💬 [Status Reply]: $replyText",
+                        type = com.family.talkly.data.models.MessageType.TEXT
+                    )
+                },
+                blockedUserIds = blockedUserIds,
+                onBlockUser = { memberId ->
+                    chatRepository.blockUser(memberId)
+                },
+                onUnblockUser = { memberId ->
+                    chatRepository.unblockUser(memberId)
+                },
+                onRefresh = {
+                    val uid = currentUserProfile?.uid ?: ""
+                    if (uid.isNotBlank()) {
+                        chatRepository.invalidateLocalCacheAndSyncPrimaryProfile(uid)
+                    } else {
+                        chatRepository.startRealtimeMessageSync(null)
+                    }
+                },
+                callLogs = callLogs
+            )
+        }
 
-    // Main Screen Content
-    ChatListScreen(
-        selectedTab = selectedTab,
-        onTabSelected = { selectedTab = it },
-        familyMembers = familyMembers,
-        messagesMap = messagesMap,
-        simulatedTimeOffsetMs = simulatedTimeOffsetMs,
-        currentUserProfile = currentUserProfile,
-        currentThemeMode = currentThemeMode,
-        onThemeModeChange = onThemeModeChange,
-        onLogout = onLogout,
-        onSaveProfile = onSaveProfile,
-        onSelectMember = { activeChatMember = it },
-        onStartCall = { member, type ->
-            startCallWithPermissions(member, type)
-        },
-        onTriggerIncomingDemo = { member ->
-            zegoManager.triggerIncomingCall(member, CallType.VIDEO)
-        },
-        onTogglePinMember = { memberId ->
-            chatRepository.togglePinMember(memberId)
-        },
-        onSearchUserByPhone = { phone, callback ->
-            chatRepository.searchTalklyUserByPhone(phone, callback)
-        },
-        onAddContact = { name, phone, relation, bio, avatarUrl ->
-            chatRepository.addNewContact(name, phone, relation, bio, avatarUrl)
-        },
-        onDeleteContact = { memberId ->
-            chatRepository.deleteContact(memberId)
-        },
-        onDeleteChatHistory = { memberId ->
-            chatRepository.deleteChatHistory(memberId)
-        },
-        onClearDemoContacts = {
-            chatRepository.clearDemoContacts()
-        },
-        isNetworkConnected = isNetworkConnected,
-        statusGroups = statusGroups,
-        onPostStatus = { textContent, photoUrl, bgHex ->
-            val currentUid = currentUserProfile?.uid?.ifBlank { "self" } ?: "self"
-            val userName = currentUserProfile?.name?.ifBlank { "You" } ?: "You"
-            val userAvatar = currentUserProfile?.profilePicUrl?.ifBlank { null }
-            chatRepository.postStatus(
-                userId = currentUid,
-                userName = userName,
-                userAvatarUrl = userAvatar,
-                textContent = textContent,
-                photoUrl = photoUrl,
-                backgroundColorHex = bgHex
+        // Floating Minimized Call Overlay
+        AnimatedVisibility(
+            visible = isCallActive && isCallMinimized && !isInPipMode,
+            enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+        ) {
+            TalklyMinimizedCallPill(
+                callInfo = callInfo,
+                onRestoreCall = { isCallMinimized = false },
+                onEndCall = { zegoManager.endCall() }
             )
-        },
-        onDeleteStatus = { statusId ->
-            val currentUid = currentUserProfile?.uid?.ifBlank { "self" } ?: "self"
-            chatRepository.deleteStatus(statusId, currentUid)
-        },
-        onMarkStatusSeen = { statusId ->
-            val currentUid = currentUserProfile?.uid?.ifBlank { "self" } ?: "self"
-            val userName = currentUserProfile?.name?.ifBlank { "You" } ?: "You"
-            val userAvatar = currentUserProfile?.profilePicUrl?.ifBlank { null }
-            chatRepository.markStatusAsSeen(statusId, currentUid, userName, userAvatar)
-        },
-        onToggleLikeStatus = { statusId ->
-            val currentUid = currentUserProfile?.uid?.ifBlank { "self" } ?: "self"
-            val userName = currentUserProfile?.name?.ifBlank { "You" } ?: "You"
-            val userAvatar = currentUserProfile?.profilePicUrl?.ifBlank { null }
-            chatRepository.toggleStatusLike(statusId, currentUid, userName, userAvatar)
-        },
-        onSendStatusReply = { targetUserId, replyText ->
-            chatRepository.sendMessage(
-                memberId = targetUserId,
-                textContent = "💬 [Status Reply]: $replyText",
-                type = com.family.talkly.data.models.MessageType.TEXT
-            )
-        },
-        blockedUserIds = blockedUserIds,
-        onBlockUser = { memberId ->
-            chatRepository.blockUser(memberId)
-        },
-        onUnblockUser = { memberId ->
-            chatRepository.unblockUser(memberId)
-        },
-        onRefresh = {
-            val uid = currentUserProfile?.uid ?: ""
-            if (uid.isNotBlank()) {
-                chatRepository.invalidateLocalCacheAndSyncPrimaryProfile(uid)
-            } else {
-                chatRepository.startRealtimeMessageSync(null)
-            }
-        },
-        callLogs = callLogs
-    )
+        }
+    }
 }

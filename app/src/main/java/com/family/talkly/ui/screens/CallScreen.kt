@@ -4,12 +4,17 @@ import android.app.Activity
 import android.graphics.SurfaceTexture
 import android.view.TextureView
 import android.view.WindowManager
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -19,10 +24,12 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -39,9 +46,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
@@ -53,12 +62,15 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,10 +86,13 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -89,6 +104,7 @@ import com.family.talkly.data.zego.CallState
 import com.family.talkly.data.zego.CurrentCallInfo
 import java.util.Locale
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 // ==========================================
 // TALKLY CALL SIGNATURE COLORS
@@ -300,11 +316,17 @@ fun CallScreen(
     onFlipCamera: () -> Unit,
     onToggleSpeaker: () -> Unit,
     onBindLocalView: (android.view.View?) -> Unit = {},
-    onBindRemoteView: (android.view.View?) -> Unit = {}
+    onBindRemoteView: (android.view.View?) -> Unit = {},
+    onMinimizeCall: () -> Unit = {}
 ) {
     val TAG = "CallScreen"
     val isVideo = callInfo.callType == CallType.VIDEO
     android.util.Log.e(TAG, "CallScreen recomposing: isVideo=$isVideo, state=${callInfo.state}, isCameraOff=${callInfo.isCameraOff}")
+
+    // Telegram-level Back gesture: minimizes the active call back into Talkly instead of dropping or exiting
+    BackHandler(enabled = !isInPipMode && callInfo.state == CallState.ACTIVE) {
+        onMinimizeCall()
+    }
 
     val context = LocalContext.current
     DisposableEffect(Unit) {
@@ -344,8 +366,23 @@ fun CallScreen(
     var isSwapped by remember { mutableStateOf(false) }
     var isSplitScreen by remember { mutableStateOf(false) }
     var beautyFilterMode by remember { mutableStateOf(BeautyFilterMode.FAIR_AND_BRIGHT) }
-    var pipOffsetX by remember { mutableFloatStateOf(0f) }
-    var pipOffsetY by remember { mutableFloatStateOf(0f) }
+    
+    // Telegram-grade floating preview position & interaction physics
+    val animX = remember { Animatable(0f) }
+    val animY = remember { Animatable(0f) }
+    var isDraggingPreview by remember { mutableStateOf(false) }
+    var isPositionInitialized by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+
+    val previewDragScale by animateFloatAsState(
+        targetValue = if (isDraggingPreview) 1.04f else 1.0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "selfPreviewDragScale"
+    )
+
     var areControlsVisible by remember { mutableStateOf(true) }
 
     val infiniteTransition = rememberInfiniteTransition(label = "callTransition")
@@ -490,7 +527,33 @@ fun CallScreen(
                     }
                 } else {
                     // Full Screen Feed with Picture-in-Picture Floating Window
-                    Box(modifier = Modifier.fillMaxSize()) {
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                        val density = LocalDensity.current
+                        val containerWidthPx = with(density) { maxWidth.toPx() }
+                        val containerHeightPx = with(density) { maxHeight.toPx() }
+
+                        // Telegram-grade floating preview sizing: ~26% screen width, 16:9 vertical aspect ratio
+                        val previewWidthDp = (maxWidth * 0.26f).coerceIn(92.dp, 116.dp)
+                        val previewHeightDp = previewWidthDp * (16f / 9f)
+                        val previewWidthPx = with(density) { previewWidthDp.toPx() }
+                        val previewHeightPx = with(density) { previewHeightDp.toPx() }
+
+                        val marginPx = with(density) { 16.dp.toPx() }
+                        val minX = marginPx
+                        val maxX = (containerWidthPx - previewWidthPx - marginPx).coerceAtLeast(minX)
+                        val topMarginPx = with(density) { 76.dp.toPx() }
+                        val minY = topMarginPx
+                        val bottomMarginPx = with(density) { 130.dp.toPx() }
+                        val maxY = (containerHeightPx - previewHeightPx - bottomMarginPx).coerceAtLeast(minY)
+
+                        LaunchedEffect(containerWidthPx, containerHeightPx) {
+                            if (!isPositionInitialized && containerWidthPx > 0f) {
+                                animX.snapTo(maxX)
+                                animY.snapTo(minY)
+                                isPositionInitialized = true
+                            }
+                        }
+
                         if (!effectiveSwapped) {
                             RemoteVideoView(
                                 member = member,
@@ -551,7 +614,7 @@ fun CallScreen(
                             )
                         }
 
-                        // Floating Preview Overlay (Draggable in full screen, corner overlay in native PiP)
+                        // Floating Preview Overlay (Telegram-style dragging with edge-snapping in full screen, corner overlay in native PiP)
                         val overlayModifier = if (isInPipMode) {
                             Modifier
                                 .align(Alignment.BottomEnd)
@@ -561,22 +624,92 @@ fun CallScreen(
                                 .border(1.dp, ElectricCyan.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
                         } else {
                             Modifier
-                                .align(Alignment.TopEnd)
-                                .statusBarsPadding()
-                                .padding(top = 70.dp, end = 16.dp)
-                                .offset { IntOffset(pipOffsetX.roundToInt(), pipOffsetY.roundToInt()) }
-                                .size(width = 125.dp, height = 180.dp)
-                                .clip(RoundedCornerShape(18.dp))
-                                .border(1.5.dp, ElectricCyan, RoundedCornerShape(18.dp))
-                                .shadow(14.dp, RoundedCornerShape(18.dp))
-                                .pointerInput(Unit) {
-                                    detectDragGestures { change, dragAmount ->
-                                        change.consume()
-                                        pipOffsetX += dragAmount.x
-                                        pipOffsetY += dragAmount.y
+                                .offset { IntOffset(animX.value.roundToInt(), animY.value.roundToInt()) }
+                                .size(width = previewWidthDp, height = previewHeightDp)
+                                .scale(previewDragScale)
+                                .shadow(elevation = 10.dp, shape = RoundedCornerShape(16.dp), clip = false)
+                                .clip(RoundedCornerShape(16.dp))
+                                .pointerInput(minX, maxX, minY, maxY, containerWidthPx) {
+                                    val touchSlop = viewConfiguration.touchSlop
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(requireUnconsumed = false)
+                                        down.consume()
+                                        var isDrag = false
+                                        val pointerId = down.id
+
+                                        try {
+                                            while (true) {
+                                                val event = awaitPointerEvent()
+                                                val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+
+                                                if (!isDrag) {
+                                                    val dragDistance = (change.position - down.position).getDistance()
+                                                    if (dragDistance > touchSlop) {
+                                                        isDrag = true
+                                                        isDraggingPreview = true
+                                                        change.consume()
+                                                    }
+                                                } else {
+                                                    val dragDelta = change.position - change.previousPosition
+                                                    change.consume()
+                                                    coroutineScope.launch {
+                                                        val newX = (animX.value + dragDelta.x).coerceIn(minX, maxX)
+                                                        val newY = (animY.value + dragDelta.y).coerceIn(minY, maxY)
+                                                        animX.snapTo(newX)
+                                                        animY.snapTo(newY)
+                                                    }
+                                                }
+
+                                                if (change.changedToUp()) {
+                                                    change.consume()
+                                                    if (!isDrag) {
+                                                        val splitTouchBound = with(density) { 36.dp.toPx() }
+                                                        if (down.position.x > previewWidthPx - splitTouchBound && down.position.y < splitTouchBound) {
+                                                            isSplitScreen = true
+                                                        } else {
+                                                            isSwapped = !isSwapped
+                                                        }
+                                                    } else {
+                                                        isDraggingPreview = false
+                                                        val targetX = if (animX.value + previewWidthPx / 2f < containerWidthPx / 2f) minX else maxX
+                                                        val targetY = animY.value.coerceIn(minY, maxY)
+                                                        coroutineScope.launch {
+                                                            launch {
+                                                                animX.animateTo(
+                                                                    targetValue = targetX,
+                                                                    animationSpec = spring(
+                                                                        dampingRatio = Spring.DampingRatioLowBouncy,
+                                                                        stiffness = Spring.StiffnessMediumLow
+                                                                    )
+                                                                )
+                                                            }
+                                                            launch {
+                                                                animY.animateTo(
+                                                                    targetValue = targetY,
+                                                                    animationSpec = spring(
+                                                                        dampingRatio = Spring.DampingRatioLowBouncy,
+                                                                        stiffness = Spring.StiffnessMediumLow
+                                                                    )
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                    break
+                                                }
+                                            }
+                                        } finally {
+                                            if (isDraggingPreview) {
+                                                isDraggingPreview = false
+                                                val targetX = if (animX.value + previewWidthPx / 2f < containerWidthPx / 2f) minX else maxX
+                                                val targetY = animY.value.coerceIn(minY, maxY)
+                                                coroutineScope.launch {
+                                                    launch { animX.animateTo(targetX, spring(Spring.DampingRatioLowBouncy, Spring.StiffnessMediumLow)) }
+                                                    launch { animY.animateTo(targetY, spring(Spring.DampingRatioLowBouncy, Spring.StiffnessMediumLow)) }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
-                                .clickable { isSwapped = !isSwapped }
                         }
 
                         Surface(
@@ -602,7 +735,7 @@ fun CallScreen(
                                                 imageVector = Icons.Default.VideocamOff,
                                                 contentDescription = "Camera Off",
                                                 tint = TextSecondary,
-                                                modifier = Modifier.size(if (isInPipMode) 18.dp else 32.dp)
+                                                modifier = Modifier.size(if (isInPipMode) 18.dp else 28.dp)
                                             )
                                         }
                                     }
@@ -622,8 +755,8 @@ fun CallScreen(
                                         modifier = Modifier
                                             .align(Alignment.BottomCenter)
                                             .fillMaxWidth()
-                                            .background(Color.Black.copy(alpha = 0.7f))
-                                            .padding(4.dp),
+                                            .background(Color.Black.copy(alpha = 0.65f))
+                                            .padding(vertical = 3.dp, horizontal = 4.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Text(
@@ -633,7 +766,7 @@ fun CallScreen(
                                                 member?.name?.take(8) ?: "Partner"
                                             },
                                             color = TextPrimary,
-                                            fontSize = 10.sp,
+                                            fontSize = 9.sp,
                                             fontWeight = FontWeight.Bold
                                         )
                                     }
@@ -651,7 +784,7 @@ fun CallScreen(
                                             imageVector = Icons.Default.Splitscreen,
                                             contentDescription = "Split Screen Mode",
                                             tint = ElectricCyan,
-                                            modifier = Modifier.size(16.dp)
+                                            modifier = Modifier.size(14.dp)
                                         )
                                     }
                                 }
@@ -691,29 +824,51 @@ fun CallScreen(
                     ) {
                         // Top Security Status
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Surface(
-                                color = SurfaceCard,
-                                shape = RoundedCornerShape(20.dp),
-                                border = BorderStroke(1.dp, BorderElevated)
+                            Box(
+                                modifier = Modifier.fillMaxWidth(),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                IconButton(
+                                    onClick = onMinimizeCall,
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .align(Alignment.CenterStart)
+                                        .clip(CircleShape)
+                                        .background(SurfaceCard)
+                                        .border(1.dp, BorderElevated, CircleShape)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Lock,
-                                        contentDescription = null,
-                                        tint = ElectricCyan,
-                                        modifier = Modifier.size(13.dp)
+                                        imageVector = Icons.Default.KeyboardArrowDown,
+                                        contentDescription = "Minimize Call",
+                                        tint = TextPrimary,
+                                        modifier = Modifier.size(22.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "End-to-End Encrypted",
-                                        color = ElectricCyan,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        letterSpacing = 0.3.sp
-                                    )
+                                }
+
+                                Surface(
+                                    color = SurfaceCard,
+                                    shape = RoundedCornerShape(20.dp),
+                                    border = BorderStroke(1.dp, BorderElevated)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Lock,
+                                            contentDescription = null,
+                                            tint = ElectricCyan,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "End-to-End Encrypted",
+                                            color = ElectricCyan,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            letterSpacing = 0.3.sp
+                                        )
+                                    }
                                 }
                             }
 
@@ -832,28 +987,50 @@ fun CallScreen(
                             .padding(top = 16.dp, start = 20.dp, end = 20.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Surface(
-                            color = SurfaceCard.copy(alpha = 0.85f),
-                            shape = RoundedCornerShape(20.dp),
-                            border = BorderStroke(1.dp, BorderElevated)
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                            IconButton(
+                                onClick = onMinimizeCall,
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .align(Alignment.CenterStart)
+                                    .clip(CircleShape)
+                                    .background(SurfaceCard.copy(alpha = 0.85f))
+                                    .border(1.dp, BorderElevated, CircleShape)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Lock,
-                                    contentDescription = null,
-                                    tint = ElectricCyan,
-                                    modifier = Modifier.size(12.dp)
+                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Minimize Call",
+                                    tint = TextPrimary,
+                                    modifier = Modifier.size(22.dp)
                                 )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = formattedTimer,
-                                    color = TextPrimary,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
+                            }
+
+                            Surface(
+                                color = SurfaceCard.copy(alpha = 0.85f),
+                                shape = RoundedCornerShape(20.dp),
+                                border = BorderStroke(1.dp, BorderElevated)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Lock,
+                                        contentDescription = null,
+                                        tint = ElectricCyan,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = formattedTimer,
+                                        color = TextPrimary,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
 
@@ -1038,3 +1215,116 @@ fun CallScreen(
         }
     }
 }
+
+/**
+ * Telegram-grade in-app minimized call overlay pill.
+ * Floats elegantly below the status bar while a call is active in the background,
+ * displaying real-time call indicator, participant name, and duration,
+ * with single-tap restoration back to the full CallScreen and an inline end-call button.
+ */
+@Composable
+fun TalklyMinimizedCallPill(
+    callInfo: CurrentCallInfo,
+    onRestoreCall: () -> Unit,
+    onEndCall: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isVideo = callInfo.callType == CallType.VIDEO
+    val minutes = callInfo.durationSeconds / 60
+    val seconds = callInfo.durationSeconds % 60
+    val formattedTimer = String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
+    val member = callInfo.targetMember
+    val memberName = member?.name?.ifBlank { null } ?: "Talkly Call"
+
+    val infiniteTransition = rememberInfiniteTransition(label = "minimizedPulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "minimizedPulseAlpha"
+    )
+
+    Surface(
+        onClick = onRestoreCall,
+        modifier = modifier
+            .padding(top = 10.dp, start = 16.dp, end = 16.dp)
+            .shadow(elevation = 12.dp, shape = RoundedCornerShape(26.dp), clip = false),
+        shape = RoundedCornerShape(26.dp),
+        color = SurfaceCard.copy(alpha = 0.96f),
+        border = BorderStroke(1.dp, BorderElevated)
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // Animated Status Dot / Call Type Icon
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(if (isVideo) ElectricCyan.copy(alpha = 0.18f) else MintAccent.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (isVideo) Icons.Default.Videocam else Icons.Default.Call,
+                    contentDescription = if (isVideo) "Active Video Call" else "Active Audio Call",
+                    tint = if (isVideo) ElectricCyan else MintAccent,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+
+            // Member Info and Duration
+            Column(
+                modifier = Modifier.weight(1f, fill = false)
+            ) {
+                Text(
+                    text = memberName,
+                    color = TextPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(MintAccent.copy(alpha = pulseAlpha))
+                    )
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text(
+                        text = if (callInfo.state == CallState.ACTIVE) formattedTimer else "Connecting...",
+                        color = TextSecondary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(4.dp))
+
+            // Quick End Call Button
+            IconButton(
+                onClick = onEndCall,
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(DestructiveRed)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CallEnd,
+                    contentDescription = "End Call",
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
