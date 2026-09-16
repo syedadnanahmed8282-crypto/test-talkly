@@ -10,10 +10,17 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
@@ -44,6 +51,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -93,6 +102,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -109,7 +119,9 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import kotlin.math.absoluteValue
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -186,10 +198,43 @@ fun ChatListScreen(
     onUnblockUser: ((String) -> Unit)? = null,
     onRefresh: (() -> Unit)? = null,
     isNetworkConnected: Boolean = true,
-    callLogs: List<CallLog> = emptyList()
+    callLogs: List<CallLog> = emptyList(),
+    selectedTab: Int = 0,
+    onTabSelected: ((Int) -> Unit)? = null
 ) {
     val context = LocalContext.current
-    var selectedBottomNavTab by remember { mutableIntStateOf(0) } // 0: Chats, 1: Stories, 2: Calls, 3: Contacts
+    val coroutineScope = rememberCoroutineScope()
+    var internalSelectedTab by remember(selectedTab) { mutableIntStateOf(selectedTab) }
+    val currentTab = if (onTabSelected != null) selectedTab else internalSelectedTab
+    val changeTab: (Int) -> Unit = { newTab ->
+        val target = newTab.coerceIn(0, 3)
+        if (onTabSelected != null) {
+            onTabSelected(target)
+        } else {
+            internalSelectedTab = target
+        }
+    }
+
+    val pagerState = rememberPagerState(initialPage = currentTab.coerceIn(0, 3), pageCount = { 4 })
+
+    // Synchronize pager with external or button-driven tab changes
+    LaunchedEffect(currentTab) {
+        val target = currentTab.coerceIn(0, 3)
+        if (pagerState.currentPage != target && !pagerState.isScrollInProgress) {
+            pagerState.animateScrollToPage(
+                page = target,
+                animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing)
+            )
+        }
+    }
+
+    // Synchronize currentTab state when user swipes pager
+    LaunchedEffect(pagerState.currentPage, pagerState.isScrollInProgress) {
+        if (!pagerState.isScrollInProgress && pagerState.currentPage != currentTab) {
+            changeTab(pagerState.currentPage)
+        }
+    }
+
     var searchQuery by remember { mutableStateOf("") }
     var isSearchExpanded by remember { mutableStateOf(false) }
 
@@ -211,7 +256,7 @@ fun ChatListScreen(
             showBlockedContactsDialog ||
             showPostStatusDialog ||
             memberToDeleteHistory != null ||
-            selectedBottomNavTab != 0 ||
+            currentTab != 0 ||
             isSearchExpanded
 
     BackHandler(enabled = isAnyOverlayOpen) {
@@ -228,7 +273,7 @@ fun ChatListScreen(
                 isSearchExpanded = false
                 searchQuery = ""
             }
-            selectedBottomNavTab != 0 -> selectedBottomNavTab = 0
+            currentTab != 0 -> changeTab(0)
         }
     }
 
@@ -591,7 +636,7 @@ fun ChatListScreen(
                     // EXPANDABLE SEARCH CONTROL
                     // ==========================================
                     AnimatedVisibility(
-                        visible = isSearchExpanded || (selectedBottomNavTab == 3 && searchQuery.isNotEmpty()),
+                        visible = isSearchExpanded || (currentTab == 3 && searchQuery.isNotEmpty()),
                         enter = fadeIn() + slideInVertically(),
                         exit = fadeOut() + slideOutVertically()
                     ) {
@@ -602,211 +647,237 @@ fun ChatListScreen(
                                 searchQuery = ""
                                 isSearchExpanded = false
                             },
-                            placeholder = if (selectedBottomNavTab == 3) "Search contacts..." else "Search conversations, people & messages..."
+                            placeholder = if (currentTab == 3) "Search contacts..." else "Search conversations, people & messages..."
                         )
                     }
 
                     // ==========================================
-                    // MAIN CONTENT CONTAINER
+                    // MAIN CONTENT CONTAINER WITH MOTION & SWIPE
                     // ==========================================
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
                     ) {
-                        when (selectedBottomNavTab) {
-                            0 -> {
-                                // ==========================================
-                                // TAB 0: REBUILT CHAT DASHBOARD
-                                // ==========================================
-                                LazyColumn(
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentPadding = PaddingValues(top = 4.dp, bottom = 120.dp)
-                                ) {
-                                    // STATUS / MOMENTS MEDIA-CARD CAROUSEL
-                                    item {
-                                        TalklyMomentsCarousel(
+                        HorizontalPager(
+                            state = pagerState,
+                            modifier = Modifier.fillMaxSize(),
+                            userScrollEnabled = !isSearchExpanded
+                        ) { page ->
+                            val pageOffset = ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction).absoluteValue.coerceIn(0f, 1f)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer {
+                                        val scale = 1f - (pageOffset * 0.05f)
+                                        scaleX = scale
+                                        scaleY = scale
+                                        alpha = 1f - (pageOffset * 0.45f)
+                                    }
+                            ) {
+                                when (page) {
+                                    0 -> {
+                                        // ==========================================
+                                        // TAB 0: REBUILT CHAT DASHBOARD
+                                        // ==========================================
+                                        LazyColumn(
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentPadding = PaddingValues(top = 4.dp, bottom = 120.dp)
+                                        ) {
+                                            // STATUS / MOMENTS MEDIA-CARD CAROUSEL
+                                            item {
+                                                TalklyMomentsCarousel(
+                                                    currentUserProfile = currentUserProfile,
+                                                    statusGroups = statusGroups,
+                                                    familyMembers = familyMembers,
+                                                    currentUid = currentUid,
+                                                    onMyStatusClick = { hasStatus, selfIndex ->
+                                                        if (hasStatus && selfIndex >= 0) {
+                                                            activeViewerGroupIndex = selfIndex
+                                                        } else {
+                                                            showPostStatusDialog = true
+                                                        }
+                                                    },
+                                                    onContactStatusClick = { groupIndex ->
+                                                        activeViewerGroupIndex = groupIndex
+                                                    },
+                                                    onAddStory = { showPostStatusDialog = true },
+                                                    onViewAll = { changeTab(1) }
+                                                )
+                                            }
+
+                                            // D. PINNED CONVERSATIONS (If Any)
+                                            if (pinnedMembers.isNotEmpty()) {
+                                                item {
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.PushPin,
+                                                            contentDescription = "Pinned",
+                                                            tint = ElectricCyan,
+                                                            modifier = Modifier.size(16.dp)
+                                                        )
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Text(
+                                                            text = "Pinned",
+                                                            fontSize = 14.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = ElectricCyan,
+                                                            letterSpacing = 0.2.sp
+                                                        )
+                                                    }
+                                                }
+
+                                                items(pinnedMembers, key = { "pinned_${it.id}" }) { member ->
+                                                    val memberMessages = getMemberMessages(member, messagesMap, currentUid)
+                                                    val lastMessage = memberMessages.lastOrNull()
+
+                                                    TalklyConversationCard(
+                                                        member = member,
+                                                        lastMessage = lastMessage,
+                                                        simulatedTimeOffsetMs = simulatedTimeOffsetMs,
+                                                        isPinned = true,
+                                                        onClick = { onSelectMember(member) },
+                                                        onLongClick = { memberToDeleteHistory = member },
+                                                        onAvatarClick = { selectedContactForProfile = member },
+                                                        onAudioCall = { onStartCall(member, CallType.AUDIO) }
+                                                    )
+                                                }
+                                            }
+
+                                            // CONVERSATIONS HEADER
+                                            item {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(start = 20.dp, end = 20.dp, top = if (pinnedMembers.isNotEmpty()) 16.dp else 12.dp, bottom = 8.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Text(
+                                                            text = "Conversations",
+                                                            fontSize = 18.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = TextPrimary,
+                                                            letterSpacing = (-0.3).sp
+                                                        )
+                                                        if (activeChatMembers.isNotEmpty()) {
+                                                            val unreadTotal = activeChatMembers.sumOf { it.unreadCount }
+                                                            if (unreadTotal > 0) {
+                                                                Spacer(modifier = Modifier.width(8.dp))
+                                                                Box(
+                                                                    modifier = Modifier
+                                                                        .clip(RoundedCornerShape(10.dp))
+                                                                        .background(ElectricCyan)
+                                                                        .padding(horizontal = 7.dp, vertical = 2.dp),
+                                                                    contentAlignment = Alignment.Center
+                                                                ) {
+                                                                    Text(
+                                                                        text = unreadTotal.toString(),
+                                                                        fontSize = 11.sp,
+                                                                        fontWeight = FontWeight.Bold,
+                                                                        color = Color(0xFF040E14)
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                    Text(
+                                                        text = "${activeChatMembers.size} total",
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = TextMuted
+                                                    )
+                                                }
+                                            }
+
+                                            // EMPTY OR LIST OF CONVERSATIONS
+                                            if (activeChatMembers.isEmpty()) {
+                                                item {
+                                                    TalklyEmptyState(
+                                                        title = if (searchQuery.isNotBlank()) "No matching conversations" else "No conversations yet",
+                                                        subtitle = if (searchQuery.isNotBlank()) "Try searching a different name or message." else "Start a conversation and stay connected with your contacts.",
+                                                        buttonText = "Start chatting",
+                                                        onAction = {
+                                                            changeTab(3) // Go to contacts
+                                                        }
+                                                    )
+                                                }
+                                            } else {
+                                                items(regularMembers, key = { it.id }) { member ->
+                                                    val memberMessages = getMemberMessages(member, messagesMap, currentUid)
+                                                    val lastMessage = memberMessages.lastOrNull()
+
+                                                    TalklyConversationCard(
+                                                        member = member,
+                                                        lastMessage = lastMessage,
+                                                        simulatedTimeOffsetMs = simulatedTimeOffsetMs,
+                                                        isPinned = false,
+                                                        onClick = { onSelectMember(member) },
+                                                        onLongClick = { memberToDeleteHistory = member },
+                                                        onAvatarClick = { selectedContactForProfile = member },
+                                                        onAudioCall = { onStartCall(member, CallType.AUDIO) }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    1 -> {
+                                        // TAB 1: STORIES TAB
+                                        FullStoriesTab(
                                             currentUserProfile = currentUserProfile,
                                             statusGroups = statusGroups,
                                             familyMembers = familyMembers,
                                             currentUid = currentUid,
-                                            onMyStatusClick = { hasStatus, selfIndex ->
-                                                if (hasStatus && selfIndex >= 0) {
-                                                    activeViewerGroupIndex = selfIndex
-                                                } else {
-                                                    showPostStatusDialog = true
-                                                }
-                                            },
-                                            onContactStatusClick = { groupIndex ->
-                                                activeViewerGroupIndex = groupIndex
-                                            },
-                                            onAddStory = { showPostStatusDialog = true },
-                                            onViewAll = { selectedBottomNavTab = 1 }
+                                            onPostStory = { showPostStatusDialog = true },
+                                            onViewStatusGroup = { idx -> activeViewerGroupIndex = idx }
                                         )
                                     }
 
-                                    // D. PINNED CONVERSATIONS (If Any)
-                                    if (pinnedMembers.isNotEmpty()) {
-                                        item {
-                                            Row(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 8.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.PushPin,
-                                                    contentDescription = "Pinned",
-                                                    tint = ElectricCyan,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Text(
-                                                    text = "Pinned",
-                                                    fontSize = 14.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = ElectricCyan,
-                                                    letterSpacing = 0.2.sp
-                                                )
-                                            }
-                                        }
-
-                                        items(pinnedMembers, key = { "pinned_${it.id}" }) { member ->
-                                            val memberMessages = getMemberMessages(member, messagesMap, currentUid)
-                                            val lastMessage = memberMessages.lastOrNull()
-
-                                            TalklyConversationCard(
-                                                member = member,
-                                                lastMessage = lastMessage,
-                                                simulatedTimeOffsetMs = simulatedTimeOffsetMs,
-                                                isPinned = true,
-                                                onClick = { onSelectMember(member) },
-                                                onLongClick = { memberToDeleteHistory = member },
-                                                onAvatarClick = { selectedContactForProfile = member },
-                                                onAudioCall = { onStartCall(member, CallType.AUDIO) }
-                                            )
-                                        }
+                                    2 -> {
+                                        // TAB 2: CALLS TAB
+                                        CallsTab(
+                                            callLogs = callLogs,
+                                            familyMembers = deduplicatedMembers,
+                                            onStartCall = onStartCall
+                                        )
                                     }
 
-                                    // CONVERSATIONS HEADER
-                                    item {
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(start = 20.dp, end = 20.dp, top = if (pinnedMembers.isNotEmpty()) 16.dp else 12.dp, bottom = 8.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Text(
-                                                    text = "Conversations",
-                                                    fontSize = 18.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = TextPrimary,
-                                                    letterSpacing = (-0.3).sp
-                                                )
-                                                if (activeChatMembers.isNotEmpty()) {
-                                                    val unreadTotal = activeChatMembers.sumOf { it.unreadCount }
-                                                    if (unreadTotal > 0) {
-                                                        Spacer(modifier = Modifier.width(8.dp))
-                                                        Box(
-                                                            modifier = Modifier
-                                                                .clip(RoundedCornerShape(10.dp))
-                                                                .background(ElectricCyan)
-                                                                .padding(horizontal = 7.dp, vertical = 2.dp),
-                                                            contentAlignment = Alignment.Center
-                                                        ) {
-                                                            Text(
-                                                                text = unreadTotal.toString(),
-                                                                fontSize = 11.sp,
-                                                                fontWeight = FontWeight.Bold,
-                                                                color = Color(0xFF040E14)
-                                                            )
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            Text(
-                                                text = "${activeChatMembers.size} total",
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.Medium,
-                                                color = TextMuted
-                                            )
-                                        }
-                                    }
-
-                                    // EMPTY OR LIST OF CONVERSATIONS
-                                    if (activeChatMembers.isEmpty()) {
-                                        item {
-                                            TalklyEmptyState(
-                                                title = if (searchQuery.isNotBlank()) "No matching conversations" else "No conversations yet",
-                                                subtitle = if (searchQuery.isNotBlank()) "Try searching a different name or message." else "Start a conversation and stay connected with your contacts.",
-                                                buttonText = "Start chatting",
-                                                onAction = {
-                                                    selectedBottomNavTab = 3 // Go to contacts
-                                                }
-                                            )
-                                        }
-                                    } else {
-                                        items(regularMembers, key = { it.id }) { member ->
-                                            val memberMessages = getMemberMessages(member, messagesMap, currentUid)
-                                            val lastMessage = memberMessages.lastOrNull()
-
-                                            TalklyConversationCard(
-                                                member = member,
-                                                lastMessage = lastMessage,
-                                                simulatedTimeOffsetMs = simulatedTimeOffsetMs,
-                                                isPinned = false,
-                                                onClick = { onSelectMember(member) },
-                                                onLongClick = { memberToDeleteHistory = member },
-                                                onAvatarClick = { selectedContactForProfile = member },
-                                                onAudioCall = { onStartCall(member, CallType.AUDIO) }
-                                            )
-                                        }
+                                    3 -> {
+                                        // TAB 3: CONTACTS TAB
+                                        ContactsTab(
+                                            contacts = filteredContacts,
+                                            blockedUserIds = blockedUserIds,
+                                            onSelectContact = { selectedContactForProfile = it },
+                                            onStartChat = { onSelectMember(it) },
+                                            onStartCall = onStartCall,
+                                            onUnblockUser = { onUnblockUser?.invoke(it) },
+                                            onAddNewContact = { showAddContactDialog = true }
+                                        )
                                     }
                                 }
-                            }
-
-                            1 -> {
-                                // TAB 1: STORIES TAB
-                                FullStoriesTab(
-                                    currentUserProfile = currentUserProfile,
-                                    statusGroups = statusGroups,
-                                    familyMembers = familyMembers,
-                                    currentUid = currentUid,
-                                    onPostStory = { showPostStatusDialog = true },
-                                    onViewStatusGroup = { idx -> activeViewerGroupIndex = idx }
-                                )
-                            }
-
-                            2 -> {
-                                // TAB 2: CALLS TAB
-                                CallsTab(
-                                    callLogs = callLogs,
-                                    familyMembers = deduplicatedMembers,
-                                    onStartCall = onStartCall
-                                )
-                            }
-
-                            3 -> {
-                                // TAB 3: CONTACTS TAB
-                                ContactsTab(
-                                    contacts = filteredContacts,
-                                    blockedUserIds = blockedUserIds,
-                                    onSelectContact = { selectedContactForProfile = it },
-                                    onStartChat = { onSelectMember(it) },
-                                    onStartCall = onStartCall,
-                                    onUnblockUser = { onUnblockUser?.invoke(it) },
-                                    onAddNewContact = { showAddContactDialog = true }
-                                )
                             }
                         }
 
                         // ==========================================
                         // G. FLOATING NEW MESSAGE ACTION (Pill Capsule)
                         // ==========================================
-                        if (selectedBottomNavTab == 0 || selectedBottomNavTab == 3) {
+                        val isFabVisible = currentTab == 0 || currentTab == 3
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = isFabVisible,
+                            enter = scaleIn(animationSpec = tween(200)) + fadeIn(animationSpec = tween(200)),
+                            exit = scaleOut(animationSpec = tween(150)) + fadeOut(animationSpec = tween(150)),
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(end = 20.dp, bottom = 92.dp)
+                        ) {
                             val fabInteractionSource = remember { MutableInteractionSource() }
                             val isFabPressed by fabInteractionSource.collectIsPressedAsState()
                             val fabScale by animateFloatAsState(
@@ -815,57 +886,51 @@ fun ChatListScreen(
                                 label = "fabScale"
                             )
 
-                            Box(
+                            Surface(
                                 modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .padding(end = 20.dp, bottom = 92.dp)
-                            ) {
-                                Surface(
-                                    modifier = Modifier
-                                        .scale(fabScale)
-                                        .shadow(
-                                            elevation = 16.dp,
-                                            shape = RoundedCornerShape(24.dp),
-                                            spotColor = ElectricCyan.copy(alpha = 0.5f)
-                                        )
-                                        .clip(RoundedCornerShape(24.dp))
-                                        .clickable(
-                                            interactionSource = fabInteractionSource,
-                                            indication = null
-                                        ) {
-                                            showAddContactDialog = true
-                                        },
-                                    color = Color.Transparent,
-                                    shape = RoundedCornerShape(24.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .background(
-                                                Brush.horizontalGradient(
-                                                    listOf(ElectricCyan, DeepAqua)
-                                                )
-                                            )
-                                            .padding(horizontal = 18.dp, vertical = 12.dp),
-                                        contentAlignment = Alignment.Center
+                                    .scale(fabScale)
+                                    .shadow(
+                                        elevation = 16.dp,
+                                        shape = RoundedCornerShape(24.dp),
+                                        spotColor = ElectricCyan.copy(alpha = 0.5f)
+                                    )
+                                    .clip(RoundedCornerShape(24.dp))
+                                    .clickable(
+                                        interactionSource = fabInteractionSource,
+                                        indication = null
                                     ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = if (selectedBottomNavTab == 3) Icons.Default.PersonAdd else Icons.Default.ChatBubble,
-                                                contentDescription = null,
-                                                tint = Color(0xFF040E14),
-                                                modifier = Modifier.size(18.dp)
+                                        showAddContactDialog = true
+                                    },
+                                color = Color.Transparent,
+                                shape = RoundedCornerShape(24.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .background(
+                                            Brush.horizontalGradient(
+                                                listOf(ElectricCyan, DeepAqua)
                                             )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                text = if (selectedBottomNavTab == 3) "Add contact" else "New message",
-                                                color = Color(0xFF040E14),
-                                                fontSize = 14.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
+                                        )
+                                        .padding(horizontal = 18.dp, vertical = 12.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = if (currentTab == 3) Icons.Default.PersonAdd else Icons.Default.ChatBubble,
+                                            contentDescription = null,
+                                            tint = Color(0xFF040E14),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = if (currentTab == 3) "Add contact" else "New message",
+                                            color = Color(0xFF040E14),
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
                                 }
                             }
@@ -877,8 +942,8 @@ fun ChatListScreen(
                 // H. FLOATING TRANSLUCENT BOTTOM NAVIGATION
                 // ==========================================
                 TalklyFloatingBottomBar(
-                    selectedTab = selectedBottomNavTab,
-                    onTabSelected = { selectedBottomNavTab = it },
+                    selectedTab = currentTab,
+                    onTabSelected = { changeTab(it) },
                     unreadChatsCount = activeChatMembers.sumOf { it.unreadCount },
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
@@ -2037,8 +2102,25 @@ private fun TalklyFloatingBottomBar(
                     label = "contentColor"
                 )
 
+                val tabScale by animateFloatAsState(
+                    targetValue = if (isSelected) 1.06f else 1.0f,
+                    animationSpec = spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMediumLow),
+                    label = "tabScale"
+                )
+
+                val verticalOffset by animateDpAsState(
+                    targetValue = if (isSelected) (-2).dp else 0.dp,
+                    animationSpec = spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMediumLow),
+                    label = "tabOffset"
+                )
+
                 Box(
                     modifier = Modifier
+                        .graphicsLayer {
+                            scaleX = tabScale
+                            scaleY = tabScale
+                            translationY = verticalOffset.toPx()
+                        }
                         .clip(RoundedCornerShape(20.dp))
                         .background(tabBgColor)
                         .clickable { onTabSelected(index) }
@@ -2067,14 +2149,25 @@ private fun TalklyFloatingBottomBar(
                             }
                         }
 
-                        if (isSelected) {
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = label,
-                                color = ElectricCyan,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                        AnimatedVisibility(
+                            visible = isSelected,
+                            enter = expandHorizontally(
+                                animationSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMedium)
+                            ) + fadeIn(animationSpec = tween(150)),
+                            exit = shrinkHorizontally(
+                                animationSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMedium)
+                            ) + fadeOut(animationSpec = tween(150))
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = label,
+                                    color = ElectricCyan,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
+                                )
+                            }
                         }
                     }
                 }

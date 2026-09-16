@@ -443,6 +443,8 @@ fun MainScreen(
 
     // Main Screen Content
     ChatListScreen(
+        selectedTab = selectedTab,
+        onTabSelected = { selectedTab = it },
         familyMembers = familyMembers,
         messagesMap = messagesMap,
         simulatedTimeOffsetMs = simulatedTimeOffsetMs,
