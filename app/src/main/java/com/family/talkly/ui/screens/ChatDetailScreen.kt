@@ -141,12 +141,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -2060,11 +2064,8 @@ fun ChatDetailScreen(
                             .statusBarsPadding()
                             .padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 2.dp)
                     ) {
-                        Surface(
-                            shape = RoundedCornerShape(22.dp),
-                            color = Color(0xCC11161D),
-                            border = BorderStroke(0.75.dp, Color(0x3322D3EE)),
-                            shadowElevation = 2.dp,
+                        LiquidGlassHeaderCapsule(
+                            wallpaperValue = wallpaperValue,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -2124,18 +2125,15 @@ fun ChatDetailScreen(
                         }
                     }
                 } else {
-                    // TALKLY FLOATING GLASS CAPSULE CONVERSATION HEADER
+                    // TALKLY FLOATING LIQUID GLASS CAPSULE CONVERSATION HEADER
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .statusBarsPadding()
                             .padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 2.dp)
                     ) {
-                        Surface(
-                            shape = RoundedCornerShape(22.dp),
-                            color = Color(0xCC11161D), // Dark translucent glass surface
-                            border = BorderStroke(0.75.dp, Color(0x3322D3EE)), // Subtle cyan border
-                            shadowElevation = 2.dp,
+                        LiquidGlassHeaderCapsule(
+                            wallpaperValue = wallpaperValue,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                         Row(
@@ -4535,3 +4533,403 @@ private fun isFinalMediaAvailable(message: ChatMessage): Boolean {
             message.isUploading
     return !isLocalOrTemp
 }
+
+// =========================================================================
+// REALISTIC iPhone-STYLE LIQUID GLASS PROFILE HEADER ENGINE
+// =========================================================================
+
+/**
+ * Optical profile representing the physical and reflective properties of the
+ * liquid glass header, dynamically derived from the underlying wallpaper.
+ */
+private data class GlassOpticalProfile(
+    val bodyTop: Color,
+    val bodyBottom: Color,
+    val causticPrimary: Color,
+    val causticSecondary: Color,
+    val specularTop: Color,
+    val specularLeft: Color,
+    val specularRight: Color,
+    val rimBottomShadow: Color,
+    val innerFresnel: Color
+)
+
+/**
+ * Derives an optical profile that dynamically reacts to the chat wallpaper.
+ * Analyzes whether the wallpaper is a preset bundled asset, a gradient, a hex tone,
+ * or a media image to produce accurate refractive coloring and light dispersion.
+ */
+private fun resolveGlassOpticalProfile(wallpaperValue: String): GlassOpticalProfile {
+    val cleanVal = wallpaperValue.trim()
+
+    // 1. Preset Bundled Wallpapers
+    if (cleanVal.contains("vibrant_oil")) {
+        return GlassOpticalProfile(
+            bodyTop = Color(0xC6221524),
+            bodyBottom = Color(0xD8170D1A),
+            causticPrimary = Color(0xFFF59E0B),
+            causticSecondary = Color(0xFFEC4899),
+            specularTop = Color(0xF5FFFBEB),
+            specularLeft = Color(0x55F59E0B),
+            specularRight = Color(0x35EC4899),
+            rimBottomShadow = Color(0x50000000),
+            innerFresnel = Color(0x28F59E0B)
+        )
+    }
+    if (cleanVal.contains("pastel_blooms") || cleanVal.contains("pink_plumes")) {
+        return GlassOpticalProfile(
+            bodyTop = Color(0xC6261524),
+            bodyBottom = Color(0xD81A0B1A),
+            causticPrimary = Color(0xFFF472B6),
+            causticSecondary = Color(0xFFA78BFA),
+            specularTop = Color(0xF5FDF2F8),
+            specularLeft = Color(0x55F472B6),
+            specularRight = Color(0x35A78BFA),
+            rimBottomShadow = Color(0x50000000),
+            innerFresnel = Color(0x28F472B6)
+        )
+    }
+    if (cleanVal.contains("pastel_clouds")) {
+        return GlassOpticalProfile(
+            bodyTop = Color(0xC6142032),
+            bodyBottom = Color(0xD80D1524),
+            causticPrimary = Color(0xFF38BDF8),
+            causticSecondary = Color(0xFF818CF8),
+            specularTop = Color(0xF5F0F9FF),
+            specularLeft = Color(0x5538BDF8),
+            specularRight = Color(0x35818CF8),
+            rimBottomShadow = Color(0x50000000),
+            innerFresnel = Color(0x2838BDF8)
+        )
+    }
+
+    // 2. Gradients (e.g., "gradient:#111827,#1F2937,#0F172A")
+    if (cleanVal.startsWith("gradient:")) {
+        val parts = cleanVal.removePrefix("gradient:").split(",")
+        val firstColor = parts.firstOrNull()?.trim() ?: "#080B10"
+        return deriveProfileFromHex(firstColor)
+    }
+
+    // 3. Hex Color
+    if (cleanVal.startsWith("#")) {
+        return deriveProfileFromHex(cleanVal)
+    }
+
+    // 4. Image URL / URI / Resource wallpaper
+    val isImage = cleanVal.startsWith("http://") ||
+            cleanVal.startsWith("https://") ||
+            cleanVal.startsWith("content://") ||
+            cleanVal.startsWith("file://") ||
+            cleanVal.startsWith("android.resource://")
+
+    if (isImage) {
+        // Deep crystal optical glass with neutral translucent core and multi-spectral sheen
+        return GlassOpticalProfile(
+            bodyTop = Color(0xC4131A26),
+            bodyBottom = Color(0xD80B111C),
+            causticPrimary = Color(0xFF38BDF8),
+            causticSecondary = Color(0xFF5EEAD4),
+            specularTop = Color(0xF5FFFFFF),
+            specularLeft = Color(0x50FFFFFF),
+            specularRight = Color(0x3038BDF8),
+            rimBottomShadow = Color(0x55000000),
+            innerFresnel = Color(0x28FFFFFF)
+        )
+    }
+
+    // Fallback: Signature Talkly Dark with Cyan/Aqua caustics
+    return deriveProfileFromHex("#080B10")
+}
+
+private fun deriveProfileFromHex(hexColor: String): GlassOpticalProfile {
+    val parsed = try {
+        val clean = if (hexColor.startsWith("#")) hexColor else "#$hexColor"
+        android.graphics.Color.parseColor(clean)
+    } catch (_: Exception) {
+        0xFF080B10.toInt()
+    }
+
+    val r = android.graphics.Color.red(parsed) / 255f
+    val g = android.graphics.Color.green(parsed) / 255f
+    val b = android.graphics.Color.blue(parsed) / 255f
+    val brightness = (r * 0.299f + g * 0.587f + b * 0.114f)
+
+    // Talkly Signature Dark (#080B10, #0D1117, etc.)
+    if (brightness < 0.08f) {
+        return GlassOpticalProfile(
+            bodyTop = Color(0xC4111925),
+            bodyBottom = Color(0xD60A1018),
+            causticPrimary = Color(0xFF22D3EE),
+            causticSecondary = Color(0xFF0EA5A4),
+            specularTop = Color(0xF5E2F8FF),
+            specularLeft = Color(0x5022D3EE),
+            specularRight = Color(0x300EA5A4),
+            rimBottomShadow = Color(0x50000000),
+            innerFresnel = Color(0x2822D3EE)
+        )
+    }
+
+    // Emerald / Green tones (e.g. #062C24)
+    if (g > r && g > b) {
+        return GlassOpticalProfile(
+            bodyTop = Color(0xC40D201A),
+            bodyBottom = Color(0xD6071510),
+            causticPrimary = Color(0xFF34D399),
+            causticSecondary = Color(0xFF059669),
+            specularTop = Color(0xF5ECFDF5),
+            specularLeft = Color(0x5034D399),
+            specularRight = Color(0x3010B981),
+            rimBottomShadow = Color(0x50000000),
+            innerFresnel = Color(0x2834D399)
+        )
+    }
+
+    // Purple / Magenta tones
+    if (r > g && b > g) {
+        return GlassOpticalProfile(
+            bodyTop = Color(0xC41E1229),
+            bodyBottom = Color(0xD6120A1A),
+            causticPrimary = Color(0xFFA855F7),
+            causticSecondary = Color(0xFFEC4899),
+            specularTop = Color(0xF5FAF5FF),
+            specularLeft = Color(0x50A855F7),
+            specularRight = Color(0x30EC4899),
+            rimBottomShadow = Color(0x50000000),
+            innerFresnel = Color(0x28A855F7)
+        )
+    }
+
+    // Blue / Indigo / Midnight Slate tones (e.g. #0B132B, #0F172A)
+    if (b > r && b > g) {
+        return GlassOpticalProfile(
+            bodyTop = Color(0xC40F182C),
+            bodyBottom = Color(0xD6090F1E),
+            causticPrimary = Color(0xFF38BDF8),
+            causticSecondary = Color(0xFF6366F1),
+            specularTop = Color(0xF5F0F9FF),
+            specularLeft = Color(0x5038BDF8),
+            specularRight = Color(0x306366F1),
+            rimBottomShadow = Color(0x50000000),
+            innerFresnel = Color(0x2838BDF8)
+        )
+    }
+
+    // Warm Amber / Red tones
+    if (r > g && r > b) {
+        return GlassOpticalProfile(
+            bodyTop = Color(0xC4241612),
+            bodyBottom = Color(0xD6170D0B),
+            causticPrimary = Color(0xFFFB923C),
+            causticSecondary = Color(0xFFF43F5E),
+            specularTop = Color(0xF5FFF7ED),
+            specularLeft = Color(0x50FB923C),
+            specularRight = Color(0x30F43F5E),
+            rimBottomShadow = Color(0x50000000),
+            innerFresnel = Color(0x28FB923C)
+        )
+    }
+
+    // Neutral dark glass
+    return GlassOpticalProfile(
+        bodyTop = Color(0xC4161B23),
+        bodyBottom = Color(0xD60D1219),
+        causticPrimary = Color(0xFF22D3EE),
+        causticSecondary = Color(0xFF0EA5A4),
+        specularTop = Color(0xF5FFFFFF),
+        specularLeft = Color(0x45FFFFFF),
+        specularRight = Color(0x2522D3EE),
+        rimBottomShadow = Color(0x50000000),
+        innerFresnel = Color(0x25FFFFFF)
+    )
+}
+
+/**
+ * Realistic iPhone-style Liquid Glass capsule surface for the conversation header.
+ * Replaces simple flat alpha rectangles with a physically layered optical glass slab
+ * featuring background-reactive caustics, internal light dispersion, convex specular
+ * sheens, and a multi-zone beveled glass rim.
+ */
+@Composable
+private fun LiquidGlassHeaderCapsule(
+    wallpaperValue: String,
+    modifier: Modifier = Modifier,
+    shape: RoundedCornerShape = RoundedCornerShape(22.dp),
+    content: @Composable () -> Unit
+) {
+    val opticalProfile = remember(wallpaperValue) {
+        resolveGlassOpticalProfile(wallpaperValue)
+    }
+
+    Box(
+        modifier = modifier
+            // Physical soft depth / drop shadow separating the glass from underlying wallpaper
+            .shadow(
+                elevation = 8.dp,
+                shape = shape,
+                ambientColor = Color(0x80000000),
+                spotColor = Color(0x99000000)
+            )
+            .drawBehind {
+                val cornerRadiusPx = 22.dp.toPx()
+                val cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx)
+                val w = size.width
+                val h = size.height
+
+                // ==========================================
+                // LAYER 1: BASE TRANSLUCENT GLASS SUBSTRATE
+                // ==========================================
+                // Translucent optical material allowing background to transmit cleanly
+                drawRoundRect(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            opticalProfile.bodyTop,
+                            opticalProfile.bodyBottom
+                        ),
+                        startY = 0f,
+                        endY = h
+                    ),
+                    cornerRadius = cornerRadius
+                )
+
+                // ==========================================
+                // LAYER 2: BACKGROUND-REACTIVE REFRACTION & CAUSTICS
+                // ==========================================
+                // Liquid optical light scattering derived from background colors
+                // Primary caustic dispersion (upper-right/center)
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            opticalProfile.causticPrimary.copy(alpha = 0.22f),
+                            opticalProfile.causticPrimary.copy(alpha = 0.08f),
+                            Color.Transparent
+                        ),
+                        center = Offset(w * 0.72f, h * 0.20f),
+                        radius = w * 0.45f
+                    )
+                )
+
+                // Secondary subtle refractive bounce (lower-left)
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            opticalProfile.causticSecondary.copy(alpha = 0.16f),
+                            opticalProfile.causticSecondary.copy(alpha = 0.04f),
+                            Color.Transparent
+                        ),
+                        center = Offset(w * 0.18f, h * 0.82f),
+                        radius = w * 0.35f
+                    )
+                )
+
+                // ==========================================
+                // LAYER 3: CONVEX OPTICAL SHEEN (SURFACE REFRACTION)
+                // ==========================================
+                // A) Diagonal liquid light sweep
+                drawRoundRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.13f),
+                            Color.White.copy(alpha = 0.04f),
+                            Color.Transparent,
+                            Color.White.copy(alpha = 0.03f)
+                        ),
+                        start = Offset(0f, 0f),
+                        end = Offset(w * 0.9f, h)
+                    ),
+                    cornerRadius = cornerRadius
+                )
+
+                // B) Upper curvature horizon reflection (top 45%)
+                drawRoundRect(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.15f),
+                            Color.White.copy(alpha = 0.03f),
+                            Color.Transparent
+                        ),
+                        startY = 0f,
+                        endY = h * 0.48f
+                    ),
+                    cornerRadius = cornerRadius
+                )
+
+                // ==========================================
+                // LAYER 4: INNER FRESNEL SCATTERING LIP (GLASS WALL THICKNESS)
+                // ==========================================
+                val insetPx = 1.5.dp.toPx()
+                val innerCornerRadius = CornerRadius(
+                    (cornerRadiusPx - insetPx).coerceAtLeast(0f),
+                    (cornerRadiusPx - insetPx).coerceAtLeast(0f)
+                )
+                drawRoundRect(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.18f),
+                            opticalProfile.innerFresnel,
+                            Color.Transparent,
+                            Color.Black.copy(alpha = 0.20f)
+                        ),
+                        startY = insetPx,
+                        endY = h - insetPx
+                    ),
+                    topLeft = Offset(insetPx, insetPx),
+                    size = Size(w - insetPx * 2, h - insetPx * 2),
+                    cornerRadius = innerCornerRadius,
+                    style = Stroke(width = 0.85.dp.toPx())
+                )
+
+                // ==========================================
+                // LAYER 5: PHYSICAL SPECULAR RIM (BEVELED GLASS EDGE)
+                // ==========================================
+                // 1) Multi-stop perimeter directional reflection
+                drawRoundRect(
+                    brush = Brush.linearGradient(
+                        0.00f to opticalProfile.specularTop.copy(alpha = 0.70f), // Top-left key light glint
+                        0.25f to Color.White.copy(alpha = 0.45f),                // Top edge bright highlight
+                        0.50f to opticalProfile.specularRight,                  // Right curve grazing catch
+                        0.75f to opticalProfile.rimBottomShadow,                // Bottom edge ambient shadow/refraction
+                        1.00f to opticalProfile.specularLeft,                   // Left curve soft reflection
+                        start = Offset(0f, 0f),
+                        end = Offset(w * 0.95f, h)
+                    ),
+                    cornerRadius = cornerRadius,
+                    style = Stroke(width = 1.2.dp.toPx())
+                )
+
+                // 2) Concentrated top-edge specular horizon glint
+                drawRoundRect(
+                    brush = Brush.horizontalGradient(
+                        0.00f to Color.Transparent,
+                        0.08f to opticalProfile.specularTop.copy(alpha = 0.40f),
+                        0.22f to Color.White.copy(alpha = 0.85f),
+                        0.55f to Color.White.copy(alpha = 0.55f),
+                        0.85f to opticalProfile.specularTop.copy(alpha = 0.30f),
+                        1.00f to Color.Transparent,
+                        startX = 0f,
+                        endX = w
+                    ),
+                    cornerRadius = cornerRadius,
+                    style = Stroke(width = 1.0.dp.toPx())
+                )
+
+                // 3) Bottom edge subtle dark refraction hairline
+                drawRoundRect(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            Color.Transparent,
+                            Color.Black.copy(alpha = 0.35f)
+                        ),
+                        startY = 0f,
+                        endY = h
+                    ),
+                    cornerRadius = cornerRadius,
+                    style = Stroke(width = 1.0.dp.toPx())
+                )
+            }
+            .clip(shape)
+    ) {
+        content()
+    }
+}
+
