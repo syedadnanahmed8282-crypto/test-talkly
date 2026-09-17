@@ -164,6 +164,11 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                     } catch (e: Exception) {
                         Log.w(TAG, "Error triggering call sync on network available: ${e.localizedMessage}")
                     }
+                    try {
+                        com.family.talkly.data.auth.AuthManager.getInstance(context).checkCurrentSession()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error refreshing session on network available: ${e.localizedMessage}")
+                    }
                 }
 
                 override fun onLost(network: Network) {
@@ -1086,6 +1091,55 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         // Disabled per requirements: No automated mock replies, bot responses, or local fallback test logic
     }
 
+    suspend fun getOrCreateConversationIdForMember(
+        memberId: String,
+        memberFirebaseUid: String? = null,
+        memberPhone: String? = null
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            val sessionPrefs = context.getSharedPreferences("talkly_auth_session", android.content.Context.MODE_PRIVATE)
+            val fallbackPrefs = context.getSharedPreferences("talkly_prefs", android.content.Context.MODE_PRIVATE)
+            val currentUid = currentSyncedUserId?.takeIf { it.isNotBlank() && it != "self" }
+                ?: com.family.talkly.data.supabase.SupabaseClientProvider.client.auth.currentUserOrNull()?.id
+                ?: sessionPrefs.getString("user_uid", null)?.takeIf { it.isNotBlank() && it != "self" }
+                ?: fallbackPrefs.getString("user_uid", null)?.takeIf { it.isNotBlank() && it != "self" }
+                ?: ""
+            val resolvedSenderUuid = SupabaseMessagingService.resolveUserUuid(currentUid)
+                ?: com.family.talkly.data.supabase.SupabaseClientProvider.client.auth.currentUserOrNull()?.id
+                ?: currentUid
+
+            val canonicalId = getCanonicalMemberId(memberId)
+            val targetLookupKey = when {
+                !memberFirebaseUid.isNullOrBlank() -> memberFirebaseUid
+                !memberPhone.isNullOrBlank() -> memberPhone
+                else -> canonicalId
+            }
+            val resolvedReceiverUuid = SupabaseMessagingService.resolveUserUuid(targetLookupKey)
+                ?: SupabaseMessagingService.resolveUserUuid(memberId)
+                ?: SupabaseMessagingService.resolveUserUuid(canonicalId)
+                ?: ""
+
+            if (resolvedSenderUuid.isBlank() || resolvedReceiverUuid.isBlank()) {
+                Log.w(TAG, "Cannot resolve conversation ID: invalid UUIDs (sender='$resolvedSenderUuid', receiver='$resolvedReceiverUuid')")
+                return@withContext null
+            }
+
+            SupabaseMessagingService.getOrCreateConversationId(resolvedSenderUuid, resolvedReceiverUuid)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.w(TAG, "Error getting or creating conversation ID for $memberId: ${e.localizedMessage}")
+            null
+        }
+    }
+
+    suspend fun fetchConversationWallpaper(conversationId: String): String? {
+        return SupabaseMessagingService.fetchConversationWallpaper(conversationId)
+    }
+
+    suspend fun updateConversationWallpaper(conversationId: String, wallpaperValue: String): Boolean {
+        return SupabaseMessagingService.updateConversationWallpaper(conversationId, wallpaperValue)
+    }
+
     private val diskExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     private fun startRoomDatabaseObserver() {
@@ -1832,15 +1886,14 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         }
         lastForceReconnectTimestamp = now
 
-        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
-        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val authManager = com.family.talkly.data.auth.AuthManager.getInstance(context)
+        val authenticatedUid = (authManager.authState.value as? com.family.talkly.data.auth.AuthState.Authenticated)?.profile?.uid
         val uid = currentSyncedUserId
+            ?: authenticatedUid
             ?: com.family.talkly.data.supabase.SupabaseClientProvider.auth.currentUserOrNull()?.id
-            ?: sessionPrefs.getString("user_uid", null)
-            ?: fallbackPrefs.getString("user_uid", null)
 
         Log.d(TAG, "forceReconnectListeners called (reason: $reason, targetUid: $uid)")
-        if (uid.isNullOrBlank()) {
+        if (uid.isNullOrBlank() || uid == "self") {
             Log.d(TAG, "forceReconnectListeners: No active user session, skipping reconnect.")
             return
         }
@@ -1857,10 +1910,10 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             }
 
             isReconnectingMessages = true
-            startRealtimeMessageSync(uid, force = (reason == "manual"))
+            startRealtimeMessageSync(uid, force = (!isChannelActive || reason == "manual"))
             syncContactsFromSupabase(uid)
             syncStatusesFromSupabase(uid)
-            Log.d(TAG, "forceReconnectListeners: Successfully initiated message sync for uid=$uid (trigger: $reason)")
+            Log.d(TAG, "forceReconnectListeners: Successfully initiated message sync for uid=$uid (trigger: $reason, forceRecreation=${!isChannelActive})")
         } catch (e: Exception) {
             Log.e(TAG, "forceReconnectListeners encountered error: ${e.localizedMessage}")
         } finally {
@@ -1909,8 +1962,8 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             return
         }
 
-        if (currentSyncedUserId == currentUserId && messageSyncJob?.isActive == true && !force) {
-            Log.d(TAG, "DIAGNOSTIC startRealtimeMessageSync: Message sync job already in progress for uid='$currentUserId' (force=$force)")
+        if (currentSyncedUserId == currentUserId && messageSyncJob?.isActive == true && isChannelActive && !force) {
+            Log.d(TAG, "DIAGNOSTIC startRealtimeMessageSync: Message sync job already in progress and channel healthy for uid='$currentUserId' (force=$force)")
             return
         }
 

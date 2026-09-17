@@ -27,6 +27,8 @@ import io.github.jan.supabase.auth.status.SessionStatus
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 sealed class AuthState {
@@ -50,6 +52,15 @@ class AuthManager(private val context: Context) {
         private const val KEY_PROFILE_PIC = "user_profile_pic"
         private const val KEY_COVER_PHOTO = "user_cover_photo"
         private const val KEY_BIO = "user_bio"
+
+        @Volatile
+        private var instance: AuthManager? = null
+
+        fun getInstance(context: Context): AuthManager {
+            return instance ?: synchronized(this) {
+                instance ?: AuthManager(context.applicationContext).also { instance = it }
+            }
+        }
 
         /**
          * Converts phone number into a deterministic internal email address for Supabase Auth
@@ -83,6 +94,7 @@ class AuthManager(private val context: Context) {
     /**
      * Checks Supabase Auth session to resume user session.
      * Supabase Auth session is the SINGLE source of truth.
+     * Restores session instantly from local storage for offline launch (WhatsApp-style).
      */
     fun checkCurrentSession() {
         if (isLoggingOut) {
@@ -99,13 +111,34 @@ class AuthManager(private val context: Context) {
                     return@launch
                 }
 
-                // Wait for Supabase Auth session restoration from storage if initializing
-                try {
-                    withTimeoutOrNull(2500L) {
-                        auth.sessionStatus.first { it !is SessionStatus.Initializing }
-                    }
+                // 1. Immediately check Supabase's local persistent storage for a stored session.
+                // This is synchronous/instantaneous and works 100% offline.
+                val storedSession = try {
+                    auth.sessionManager.loadSession()
                 } catch (e: Exception) {
-                    Log.w(TAG, "Auth session restoration wait note: ${e.message}")
+                    Log.w(TAG, "Error loading session from sessionManager: ${e.message}")
+                    null
+                }
+
+                val inMemorySession = auth.currentSessionOrNull()
+                val inMemoryUser = auth.currentUserOrNull() ?: inMemorySession?.user
+
+                // Determine authoritative Supabase UID if available from storage or memory
+                val initialUid = inMemoryUser?.id ?: inMemorySession?.user?.id ?: storedSession?.user?.id
+
+                // Wait briefly for Supabase Auth to transition from Initializing if in progress
+                val currentStatus = auth.sessionStatus.value
+                val finalStatus = if (currentStatus is SessionStatus.Initializing) {
+                    try {
+                        withTimeoutOrNull(3000L) {
+                            auth.sessionStatus.first { it !is SessionStatus.Initializing }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Wait for session status transition note: ${e.message}")
+                        null
+                    }
+                } else {
+                    currentStatus
                 }
 
                 if (isLoggingOut) {
@@ -115,12 +148,13 @@ class AuthManager(private val context: Context) {
                     return@launch
                 }
 
-                val currentSession = auth.currentSessionOrNull()
-                val currentUser = auth.currentUserOrNull() ?: currentSession?.user
+                val resolvedSession = auth.currentSessionOrNull() ?: storedSession
+                val resolvedUser = auth.currentUserOrNull() ?: resolvedSession?.user
+                val effectiveUid = resolvedUser?.id ?: initialUid
 
-                // If no valid Supabase session/user exists, user is strictly unauthenticated.
-                // Never inspect saved UID or local preferences to authenticate!
-                if (currentUser == null || currentSession == null) {
+                // Explicit unauthenticated check:
+                // Only declare Unauthenticated if Supabase explicitly reports NotAuthenticated AND no stored session exists.
+                if ((finalStatus is SessionStatus.NotAuthenticated || effectiveUid.isNullOrBlank()) && storedSession == null) {
                     Log.d(TAG, "No active Supabase Auth session or user found -> AuthState.Unauthenticated")
                     withContext(Dispatchers.Main) {
                         _authState.value = AuthState.Unauthenticated
@@ -128,31 +162,40 @@ class AuthManager(private val context: Context) {
                     return@launch
                 }
 
-                // If a valid Supabase user exists, use ONLY user.id as the effective UID
-                val effectiveUid = currentUser.id
-                if (effectiveUid.isBlank()) {
-                    Log.w(TAG, "Supabase user exists but user.id is blank -> AuthState.Unauthenticated")
+                if (effectiveUid.isNullOrBlank()) {
+                    Log.d(TAG, "Could not determine authoritative Supabase UID -> AuthState.Unauthenticated")
                     withContext(Dispatchers.Main) {
                         _authState.value = AuthState.Unauthenticated
                     }
                     return@launch
                 }
 
-                // Ensure token is refreshed if session exists
-                try {
-                    auth.refreshCurrentSession()
-                    Log.d(TAG, "Supabase Auth session refreshed successfully for UID: $effectiveUid")
-                } catch (refreshEx: Exception) {
-                    Log.w(TAG, "Supabase Auth session refresh note: ${refreshEx.localizedMessage}")
-                }
+                Log.d(TAG, "Authoritative Supabase UID verified: $effectiveUid")
 
-                // Only inspect local cached profile IF it belongs to this exact authenticated Supabase UID
+                // 2. User has a valid Supabase session!
+                // Load local cached profile for THIS exact verified UID immediately for instant offline/cold-start UI:
                 val savedUid = prefs.getString(KEY_UID, null)
-                val cachedName = if (savedUid == effectiveUid) prefs.getString(KEY_NAME, "") ?: "" else ""
-                val cachedPhone = if (savedUid == effectiveUid) prefs.getString(KEY_PHONE, "") ?: (currentUser.phone ?: "") else (currentUser.phone ?: "")
-                var cachedPic = if (savedUid == effectiveUid) prefs.getString(KEY_PROFILE_PIC, "") ?: "" else ""
+                val cachedName = if (savedUid == effectiveUid) {
+                    prefs.getString(KEY_NAME, "") ?: ""
+                } else {
+                    resolvedUser?.userMetadata?.get("name")?.jsonPrimitive?.contentOrNull ?: ""
+                }
+                val cachedPhone = if (savedUid == effectiveUid) {
+                    prefs.getString(KEY_PHONE, "") ?: (resolvedUser?.phone ?: "")
+                } else {
+                    resolvedUser?.phone ?: ""
+                }
+                var cachedPic = if (savedUid == effectiveUid) {
+                    prefs.getString(KEY_PROFILE_PIC, "") ?: ""
+                } else {
+                    resolvedUser?.userMetadata?.get("avatar_url")?.jsonPrimitive?.contentOrNull ?: ""
+                }
                 val cachedCover = if (savedUid == effectiveUid) prefs.getString(KEY_COVER_PHOTO, "") ?: "" else ""
-                val cachedBio = if (savedUid == effectiveUid) prefs.getString(KEY_BIO, "Available on Payra 💬") ?: "Available on Payra 💬" else "Available on Payra 💬"
+                val cachedBio = if (savedUid == effectiveUid) {
+                    prefs.getString(KEY_BIO, "Available on Payra 💬") ?: "Available on Payra 💬"
+                } else {
+                    resolvedUser?.userMetadata?.get("bio")?.jsonPrimitive?.contentOrNull ?: "Available on Payra 💬"
+                }
 
                 // Check if pic is a content:// URI and convert to persistent internal avatar file if available
                 if (cachedPic.startsWith("content://") || cachedPic.isBlank()) {
@@ -163,29 +206,45 @@ class AuthManager(private val context: Context) {
                     }
                 }
 
-                if (cachedName.isNotBlank()) {
-                    val cachedProfile = UserProfile(
-                        uid = effectiveUid,
-                        name = cachedName,
-                        phoneNumber = cachedPhone,
-                        phoneSuffix = PhoneUtils.extractPhoneSuffix(cachedPhone),
-                        profilePicUrl = cachedPic,
-                        coverPhotoUrl = cachedCover,
-                        bio = cachedBio
-                    )
-                    withContext(Dispatchers.Main) {
-                        if (!isLoggingOut && (auth.currentUserOrNull()?.id ?: auth.currentSessionOrNull()?.user?.id) == effectiveUid) {
-                            _authState.value = AuthState.Authenticated(cachedProfile)
-                        }
+                val effectiveName = if (cachedName.isNotBlank()) cachedName else (cachedPhone.ifBlank { "User" })
+
+                val cachedProfile = UserProfile(
+                    uid = effectiveUid,
+                    name = effectiveName,
+                    phoneNumber = cachedPhone,
+                    phoneSuffix = PhoneUtils.extractPhoneSuffix(cachedPhone),
+                    profilePicUrl = cachedPic,
+                    coverPhotoUrl = cachedCover,
+                    bio = cachedBio
+                )
+
+                // TRANSITION TO AUTHENTICATED IMMEDIATELY (Offline-ready, WhatsApp-style):
+                withContext(Dispatchers.Main) {
+                    if (!isLoggingOut) {
+                        _authState.value = AuthState.Authenticated(cachedProfile)
                     }
+                }
+
+                // 3. Asynchronously in background:
+                // Attempt token refresh (fail-safe: offline network error is NEVER treated as logout)
+                try {
+                    auth.refreshCurrentSession()
+                    Log.d(TAG, "Supabase Auth session refreshed successfully for UID: $effectiveUid")
+                } catch (refreshEx: Exception) {
+                    Log.d(TAG, "Supabase Auth session refresh note (offline/pending): ${refreshEx.localizedMessage}")
                 }
 
                 // Sync latest profile from Supabase in background
                 syncProfileFromSupabase(effectiveUid, cachedPhone)
+
             } catch (e: Exception) {
-                Log.e(TAG, "Error checking Supabase session: ${e.message}")
-                withContext(Dispatchers.Main) {
-                    _authState.value = AuthState.Unauthenticated
+                Log.e(TAG, "Error in checkCurrentSession: ${e.message}")
+                // Do NOT drop to Unauthenticated on arbitrary network/IO exceptions!
+                val stored = try { auth.sessionManager.loadSession() } catch (_: Exception) { null }
+                if (stored == null && auth.currentUserOrNull() == null) {
+                    withContext(Dispatchers.Main) {
+                        _authState.value = AuthState.Unauthenticated
+                    }
                 }
             }
         }
@@ -505,7 +564,13 @@ class AuthManager(private val context: Context) {
             } catch (e: Exception) {
                 Log.w(TAG, "Error fetching profile from Supabase for $uid: ${e.localizedMessage}")
                 if (!isLoggingOut) {
-                    handleMissingProfile(uid, fallbackPhone, onComplete)
+                    val currentState = _authState.value
+                    if (currentState !is AuthState.Authenticated) {
+                        handleMissingProfile(uid, fallbackPhone, onComplete)
+                    } else {
+                        Log.d(TAG, "Already authenticated with cached profile, keeping authenticated state despite network error.")
+                        onComplete?.invoke(currentState.profile)
+                    }
                 }
             }
         }

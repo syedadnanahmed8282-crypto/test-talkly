@@ -14,6 +14,12 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.family.talkly.MainActivity
 import com.family.talkly.R
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 class MessageSyncForegroundService : Service() {
 
@@ -44,38 +50,58 @@ class MessageSyncForegroundService : Service() {
         }
     }
 
+    private var syncJob: Job? = null
+    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         startForegroundWithNotification()
-        ensureBackgroundSyncActive()
+        observeAuthState()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundWithNotification()
-        ensureBackgroundSyncActive()
+        observeAuthState()
         return START_STICKY
     }
 
-    private fun ensureBackgroundSyncActive() {
-        try {
-            val sessionPrefs = getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
-            val fallbackPrefs = getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
-            val uid = com.family.talkly.data.supabase.SupabaseClientProvider.auth.currentUserOrNull()?.id
-                ?: sessionPrefs.getString("user_uid", null)
-                ?: fallbackPrefs.getString("user_uid", null)
+    override fun onDestroy() {
+        super.onDestroy()
+        syncJob?.cancel()
+        serviceScope.cancel()
+    }
 
-            if (!uid.isNullOrBlank()) {
-                val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository.getInstance(applicationContext)
-                chatRepo.startRealtimeMessageSync(uid)
+    private fun observeAuthState() {
+        if (syncJob?.isActive == true) return
+        syncJob = serviceScope.launch {
+            try {
+                val authManager = com.family.talkly.data.auth.AuthManager.getInstance(applicationContext)
+                authManager.authState.collect { state ->
+                    when (state) {
+                        is com.family.talkly.data.auth.AuthState.Authenticated -> {
+                            val uid = state.profile.uid
+                            if (uid.isNotBlank() && uid != "self") {
+                                Log.d(TAG, "Auth verified -> activating background sync for UID: $uid")
+                                val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository.getInstance(applicationContext)
+                                chatRepo.startRealtimeMessageSync(uid)
 
-                val zegoManager = com.family.talkly.data.zego.ZegoCallEngineManager.getInstance(applicationContext)
-                val userProfile = zegoManager.getLocalUserProfile()
-                zegoManager.startRealtimeCallSync(userProfile, chatRepo)
+                                val zegoManager = com.family.talkly.data.zego.ZegoCallEngineManager.getInstance(applicationContext)
+                                zegoManager.startRealtimeCallSync(state.profile, chatRepo)
+                            }
+                        }
+                        is com.family.talkly.data.auth.AuthState.Unauthenticated -> {
+                            Log.d(TAG, "Unauthenticated state observed -> skipping realtime background channels")
+                        }
+                        else -> {
+                            Log.d(TAG, "Auth state is $state, waiting for authoritative session...")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error in observeAuthState: ${e.localizedMessage}")
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error ensuring background sync active: ${e.localizedMessage}")
         }
     }
 

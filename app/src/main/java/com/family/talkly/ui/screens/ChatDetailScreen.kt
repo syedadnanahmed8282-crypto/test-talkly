@@ -8,6 +8,7 @@ package com.family.talkly.ui.screens
 import android.content.Context
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -150,7 +151,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -193,8 +196,10 @@ import com.family.talkly.ui.components.rememberParticleDissolveManager
 import com.family.talkly.ui.components.WallpaperSelectionDialog
 import com.family.talkly.util.AudioRecorder
 import com.family.talkly.util.MediaCompressorAndUploader
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -416,6 +421,65 @@ fun ChatDetailScreen(
                 ?: prefs.getString("wallpaper_global", "#080B10")
                 ?: "#080B10"
         )
+    }
+    val chatRepo = remember(context) { com.family.talkly.data.firebase.FirebaseChatRepository.getInstance(context) }
+    var conversationId by remember(member.id) { mutableStateOf<String?>(null) }
+
+    // Fetch shared conversation wallpaper on enter
+    LaunchedEffect(member.id, member.firebaseUid, member.phone) {
+        withContext(Dispatchers.IO) {
+            val resolvedConvId = chatRepo.getOrCreateConversationIdForMember(
+                memberId = member.id,
+                memberFirebaseUid = member.firebaseUid,
+                memberPhone = member.phone
+            )
+            if (!resolvedConvId.isNullOrBlank()) {
+                withContext(Dispatchers.Main) {
+                    conversationId = resolvedConvId
+                }
+                val remoteWp = chatRepo.fetchConversationWallpaper(resolvedConvId)
+                if (!remoteWp.isNullOrBlank()) {
+                    withContext(Dispatchers.Main) {
+                        if (wallpaperValue != remoteWp) {
+                            wallpaperValue = remoteWp
+                            prefs.edit().putString("wallpaper_${member.id}", remoteWp).apply()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Subscribe to Realtime wallpaper updates for this conversation
+    androidx.compose.runtime.DisposableEffect(conversationId) {
+        val targetConvId = conversationId
+        var realtimeChannel: io.github.jan.supabase.realtime.RealtimeChannel? = null
+        val subJob = if (!targetConvId.isNullOrBlank()) {
+            scope.launch(Dispatchers.IO) {
+                realtimeChannel = com.family.talkly.data.supabase.SupabaseMessagingService.subscribeToConversationWallpaper(
+                    conversationId = targetConvId,
+                    coroutineScope = this,
+                    onWallpaperUpdate = { newWp ->
+                        scope.launch(Dispatchers.Main) {
+                            if (newWp.isNotBlank() && wallpaperValue != newWp) {
+                                wallpaperValue = newWp
+                                prefs.edit().putString("wallpaper_${member.id}", newWp).apply()
+                            }
+                        }
+                    }
+                )
+            }
+        } else null
+
+        onDispose {
+            subJob?.cancel()
+            val ch = realtimeChannel
+            if (ch != null) {
+                scope.launch(Dispatchers.IO) {
+                    com.family.talkly.data.supabase.SupabaseMessagingService.unsubscribeChannel(ch)
+                }
+            }
+        }
     }
 
     val activeMessages = if (localClearedMessages) emptyList() else messages
@@ -1810,18 +1874,90 @@ fun ChatDetailScreen(
             onDismiss = { showWallpaperDialog = false },
             onWallpaperSelected = { newValue, applyToAll ->
                 showWallpaperDialog = false
-                wallpaperValue = newValue
-                if (applyToAll) {
-                    prefs.edit()
-                        .putString("wallpaper_global", newValue)
-                        .putString("wallpaper_${member.id}", newValue)
-                        .apply()
+                val isGallery = newValue.startsWith("content://") || newValue.startsWith("file://")
+                val previousWallpaper = wallpaperValue
+
+                if (isGallery) {
+                    // Show immediately locally for responsive UX
+                    wallpaperValue = newValue
+                    Toast.makeText(context, "Uploading wallpaper...", Toast.LENGTH_SHORT).show()
+
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            val activeConvId = conversationId ?: chatRepo.getOrCreateConversationIdForMember(
+                                memberId = member.id,
+                                memberFirebaseUid = member.firebaseUid,
+                                memberPhone = member.phone
+                            )
+                            if (activeConvId.isNullOrBlank()) {
+                                throw java.io.IOException("Unable to resolve conversation ID for wallpaper")
+                            }
+                            withContext(Dispatchers.Main) {
+                                conversationId = activeConvId
+                            }
+
+                            val uploader = com.family.talkly.util.MediaCompressorAndUploader(context)
+                            val imageUri = android.net.Uri.parse(newValue)
+                            val compressedFile = uploader.compressImage(imageUri) { _, _ -> }
+                            val remotePath = "chat_wallpapers/$activeConvId/wp_${System.currentTimeMillis()}.jpg"
+                            val cloudUrl = uploader.uploadMediaFile(compressedFile, remotePath)
+
+                            if (cloudUrl.isNotBlank()) {
+                                val success = chatRepo.updateConversationWallpaper(activeConvId, cloudUrl)
+                                if (success) {
+                                    withContext(Dispatchers.Main) {
+                                        wallpaperValue = cloudUrl
+                                        prefs.edit().putString("wallpaper_${member.id}", cloudUrl).apply()
+                                        if (applyToAll) {
+                                            prefs.edit().putString("wallpaper_global", cloudUrl).apply()
+                                        }
+                                        Toast.makeText(context, "Wallpaper updated!", Toast.LENGTH_SHORT).show()
+                                    }
+                                } else {
+                                    throw java.io.IOException("Failed to save wallpaper to server")
+                                }
+                            } else {
+                                throw java.io.IOException("Upload returned empty URL")
+                            }
+                        } catch (e: Exception) {
+                            Log.e("ChatDetailScreen", "Gallery wallpaper upload failed: ${e.localizedMessage}", e)
+                            withContext(Dispatchers.Main) {
+                                wallpaperValue = previousWallpaper
+                                Toast.makeText(
+                                    context,
+                                    "Failed to upload wallpaper: ${e.localizedMessage ?: "Network error"}",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
                 } else {
-                    prefs.edit()
-                        .putString("wallpaper_${member.id}", newValue)
-                        .apply()
+                    // Built-in wallpaper (Color, Gradient, Default, or Resource)
+                    wallpaperValue = newValue
+                    prefs.edit().putString("wallpaper_${member.id}", newValue).apply()
+                    if (applyToAll) {
+                        prefs.edit().putString("wallpaper_global", newValue).apply()
+                    }
+                    Toast.makeText(context, "Wallpaper updated!", Toast.LENGTH_SHORT).show()
+
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            val activeConvId = conversationId ?: chatRepo.getOrCreateConversationIdForMember(
+                                memberId = member.id,
+                                memberFirebaseUid = member.firebaseUid,
+                                memberPhone = member.phone
+                            )
+                            if (!activeConvId.isNullOrBlank()) {
+                                withContext(Dispatchers.Main) {
+                                    conversationId = activeConvId
+                                }
+                                chatRepo.updateConversationWallpaper(activeConvId, newValue)
+                            }
+                        } catch (e: Exception) {
+                            Log.e("ChatDetailScreen", "Failed to sync built-in wallpaper: ${e.localizedMessage}", e)
+                        }
+                    }
                 }
-                Toast.makeText(context, "Wallpaper updated!", Toast.LENGTH_SHORT).show()
             }
         )
     }
@@ -1856,7 +1992,8 @@ fun ChatDetailScreen(
         val isWallpaperImage = wallpaperValue.startsWith("http://") ||
                 wallpaperValue.startsWith("https://") ||
                 wallpaperValue.startsWith("content://") ||
-                wallpaperValue.startsWith("file://")
+                wallpaperValue.startsWith("file://") ||
+                wallpaperValue.startsWith("android.resource://")
 
         Box(
             modifier = Modifier
@@ -1876,6 +2013,31 @@ fun ChatDetailScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(Color.Black.copy(alpha = 0.55f))
+                )
+            } else if (wallpaperValue.startsWith("gradient:")) {
+                val hexList = wallpaperValue.removePrefix("gradient:").split(",")
+                val colors = hexList.mapNotNull {
+                    try {
+                        Color(android.graphics.Color.parseColor(it.trim()))
+                    } catch (e: Exception) {
+                        null
+                    }
+                }.ifEmpty { listOf(TalklyChatBg, TalklyCard) }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Brush.verticalGradient(colors))
+                )
+            } else if (wallpaperValue.startsWith("#") && wallpaperValue != "#080B10") {
+                val col = try {
+                    Color(android.graphics.Color.parseColor(wallpaperValue))
+                } catch (e: Exception) {
+                    TalklyChatBg
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(col)
                 )
             } else {
                 // Subtle Talkly abstract geometric ambient backdrop
@@ -4539,215 +4701,17 @@ private fun isFinalMediaAvailable(message: ChatMessage): Boolean {
 // =========================================================================
 
 /**
- * Optical profile representing the physical and reflective properties of the
- * liquid glass header, dynamically derived from the underlying wallpaper.
- */
-private data class GlassOpticalProfile(
-    val bodyTop: Color,
-    val bodyBottom: Color,
-    val causticPrimary: Color,
-    val causticSecondary: Color,
-    val specularTop: Color,
-    val specularLeft: Color,
-    val specularRight: Color,
-    val rimBottomShadow: Color,
-    val innerFresnel: Color
-)
-
-/**
- * Derives an optical profile that dynamically reacts to the chat wallpaper.
- * Analyzes whether the wallpaper is a preset bundled asset, a gradient, a hex tone,
- * or a media image to produce accurate refractive coloring and light dispersion.
- */
-private fun resolveGlassOpticalProfile(wallpaperValue: String): GlassOpticalProfile {
-    val cleanVal = wallpaperValue.trim()
-
-    // 1. Preset Bundled Wallpapers
-    if (cleanVal.contains("vibrant_oil")) {
-        return GlassOpticalProfile(
-            bodyTop = Color(0xC6221524),
-            bodyBottom = Color(0xD8170D1A),
-            causticPrimary = Color(0xFFF59E0B),
-            causticSecondary = Color(0xFFEC4899),
-            specularTop = Color(0xF5FFFBEB),
-            specularLeft = Color(0x55F59E0B),
-            specularRight = Color(0x35EC4899),
-            rimBottomShadow = Color(0x50000000),
-            innerFresnel = Color(0x28F59E0B)
-        )
-    }
-    if (cleanVal.contains("pastel_blooms") || cleanVal.contains("pink_plumes")) {
-        return GlassOpticalProfile(
-            bodyTop = Color(0xC6261524),
-            bodyBottom = Color(0xD81A0B1A),
-            causticPrimary = Color(0xFFF472B6),
-            causticSecondary = Color(0xFFA78BFA),
-            specularTop = Color(0xF5FDF2F8),
-            specularLeft = Color(0x55F472B6),
-            specularRight = Color(0x35A78BFA),
-            rimBottomShadow = Color(0x50000000),
-            innerFresnel = Color(0x28F472B6)
-        )
-    }
-    if (cleanVal.contains("pastel_clouds")) {
-        return GlassOpticalProfile(
-            bodyTop = Color(0xC6142032),
-            bodyBottom = Color(0xD80D1524),
-            causticPrimary = Color(0xFF38BDF8),
-            causticSecondary = Color(0xFF818CF8),
-            specularTop = Color(0xF5F0F9FF),
-            specularLeft = Color(0x5538BDF8),
-            specularRight = Color(0x35818CF8),
-            rimBottomShadow = Color(0x50000000),
-            innerFresnel = Color(0x2838BDF8)
-        )
-    }
-
-    // 2. Gradients (e.g., "gradient:#111827,#1F2937,#0F172A")
-    if (cleanVal.startsWith("gradient:")) {
-        val parts = cleanVal.removePrefix("gradient:").split(",")
-        val firstColor = parts.firstOrNull()?.trim() ?: "#080B10"
-        return deriveProfileFromHex(firstColor)
-    }
-
-    // 3. Hex Color
-    if (cleanVal.startsWith("#")) {
-        return deriveProfileFromHex(cleanVal)
-    }
-
-    // 4. Image URL / URI / Resource wallpaper
-    val isImage = cleanVal.startsWith("http://") ||
-            cleanVal.startsWith("https://") ||
-            cleanVal.startsWith("content://") ||
-            cleanVal.startsWith("file://") ||
-            cleanVal.startsWith("android.resource://")
-
-    if (isImage) {
-        // Deep crystal optical glass with neutral translucent core and multi-spectral sheen
-        return GlassOpticalProfile(
-            bodyTop = Color(0xC4131A26),
-            bodyBottom = Color(0xD80B111C),
-            causticPrimary = Color(0xFF38BDF8),
-            causticSecondary = Color(0xFF5EEAD4),
-            specularTop = Color(0xF5FFFFFF),
-            specularLeft = Color(0x50FFFFFF),
-            specularRight = Color(0x3038BDF8),
-            rimBottomShadow = Color(0x55000000),
-            innerFresnel = Color(0x28FFFFFF)
-        )
-    }
-
-    // Fallback: Signature Talkly Dark with Cyan/Aqua caustics
-    return deriveProfileFromHex("#080B10")
-}
-
-private fun deriveProfileFromHex(hexColor: String): GlassOpticalProfile {
-    val parsed = try {
-        val clean = if (hexColor.startsWith("#")) hexColor else "#$hexColor"
-        android.graphics.Color.parseColor(clean)
-    } catch (_: Exception) {
-        0xFF080B10.toInt()
-    }
-
-    val r = android.graphics.Color.red(parsed) / 255f
-    val g = android.graphics.Color.green(parsed) / 255f
-    val b = android.graphics.Color.blue(parsed) / 255f
-    val brightness = (r * 0.299f + g * 0.587f + b * 0.114f)
-
-    // Talkly Signature Dark (#080B10, #0D1117, etc.)
-    if (brightness < 0.08f) {
-        return GlassOpticalProfile(
-            bodyTop = Color(0xC4111925),
-            bodyBottom = Color(0xD60A1018),
-            causticPrimary = Color(0xFF22D3EE),
-            causticSecondary = Color(0xFF0EA5A4),
-            specularTop = Color(0xF5E2F8FF),
-            specularLeft = Color(0x5022D3EE),
-            specularRight = Color(0x300EA5A4),
-            rimBottomShadow = Color(0x50000000),
-            innerFresnel = Color(0x2822D3EE)
-        )
-    }
-
-    // Emerald / Green tones (e.g. #062C24)
-    if (g > r && g > b) {
-        return GlassOpticalProfile(
-            bodyTop = Color(0xC40D201A),
-            bodyBottom = Color(0xD6071510),
-            causticPrimary = Color(0xFF34D399),
-            causticSecondary = Color(0xFF059669),
-            specularTop = Color(0xF5ECFDF5),
-            specularLeft = Color(0x5034D399),
-            specularRight = Color(0x3010B981),
-            rimBottomShadow = Color(0x50000000),
-            innerFresnel = Color(0x2834D399)
-        )
-    }
-
-    // Purple / Magenta tones
-    if (r > g && b > g) {
-        return GlassOpticalProfile(
-            bodyTop = Color(0xC41E1229),
-            bodyBottom = Color(0xD6120A1A),
-            causticPrimary = Color(0xFFA855F7),
-            causticSecondary = Color(0xFFEC4899),
-            specularTop = Color(0xF5FAF5FF),
-            specularLeft = Color(0x50A855F7),
-            specularRight = Color(0x30EC4899),
-            rimBottomShadow = Color(0x50000000),
-            innerFresnel = Color(0x28A855F7)
-        )
-    }
-
-    // Blue / Indigo / Midnight Slate tones (e.g. #0B132B, #0F172A)
-    if (b > r && b > g) {
-        return GlassOpticalProfile(
-            bodyTop = Color(0xC40F182C),
-            bodyBottom = Color(0xD6090F1E),
-            causticPrimary = Color(0xFF38BDF8),
-            causticSecondary = Color(0xFF6366F1),
-            specularTop = Color(0xF5F0F9FF),
-            specularLeft = Color(0x5038BDF8),
-            specularRight = Color(0x306366F1),
-            rimBottomShadow = Color(0x50000000),
-            innerFresnel = Color(0x2838BDF8)
-        )
-    }
-
-    // Warm Amber / Red tones
-    if (r > g && r > b) {
-        return GlassOpticalProfile(
-            bodyTop = Color(0xC4241612),
-            bodyBottom = Color(0xD6170D0B),
-            causticPrimary = Color(0xFFFB923C),
-            causticSecondary = Color(0xFFF43F5E),
-            specularTop = Color(0xF5FFF7ED),
-            specularLeft = Color(0x50FB923C),
-            specularRight = Color(0x30F43F5E),
-            rimBottomShadow = Color(0x50000000),
-            innerFresnel = Color(0x28FB923C)
-        )
-    }
-
-    // Neutral dark glass
-    return GlassOpticalProfile(
-        bodyTop = Color(0xC4161B23),
-        bodyBottom = Color(0xD60D1219),
-        causticPrimary = Color(0xFF22D3EE),
-        causticSecondary = Color(0xFF0EA5A4),
-        specularTop = Color(0xF5FFFFFF),
-        specularLeft = Color(0x45FFFFFF),
-        specularRight = Color(0x2522D3EE),
-        rimBottomShadow = Color(0x50000000),
-        innerFresnel = Color(0x25FFFFFF)
-    )
-}
-
-/**
  * Realistic iPhone-style Liquid Glass capsule surface for the conversation header.
- * Replaces simple flat alpha rectangles with a physically layered optical glass slab
- * featuring background-reactive caustics, internal light dispersion, convex specular
- * sheens, and a multi-zone beveled glass rim.
+ * Optically integrates with the ACTUAL underlying wallpaper/background without
+ * any fixed artificial cyan, blue, or colored tint in the glass body.
+ *
+ * Visual Stack:
+ * 1. ACTUAL BACKGROUND/WALLPAPER (Diffused & blurred backdrop layer)
+ * 2. SUBTLE OPTICAL REFRACTION (Neutral luminance transmission & thickness variation)
+ * 3. TRANSPARENT GLASS BODY (Center remains clear and transparent to the backdrop)
+ * 4. INTERNAL LIGHT RESPONSE & CONVEX SHEEN (Cylindrical ambient reflection)
+ * 5. DIRECTIONAL SPECULAR EDGE REFLECTION (Top-left keylight glints, curved corner reflections, soft dark bottom rim)
+ * 6. PHYSICAL DEPTH & SHADOW (Soft floating elevation above chat wallpaper)
  */
 @Composable
 private fun LiquidGlassHeaderCapsule(
@@ -4756,9 +4720,12 @@ private fun LiquidGlassHeaderCapsule(
     shape: RoundedCornerShape = RoundedCornerShape(22.dp),
     content: @Composable () -> Unit
 ) {
-    val opticalProfile = remember(wallpaperValue) {
-        resolveGlassOpticalProfile(wallpaperValue)
-    }
+    val cleanVal = wallpaperValue.trim()
+    val isWallpaperImage = cleanVal.startsWith("http://") ||
+            cleanVal.startsWith("https://") ||
+            cleanVal.startsWith("content://") ||
+            cleanVal.startsWith("file://") ||
+            cleanVal.startsWith("android.resource://")
 
     Box(
         modifier = modifier
@@ -4766,169 +4733,270 @@ private fun LiquidGlassHeaderCapsule(
             .shadow(
                 elevation = 8.dp,
                 shape = shape,
-                ambientColor = Color(0x80000000),
-                spotColor = Color(0x99000000)
+                ambientColor = Color(0x60000000),
+                spotColor = Color(0x75000000)
             )
-            .drawBehind {
-                val cornerRadiusPx = 22.dp.toPx()
-                val cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx)
-                val w = size.width
-                val h = size.height
-
-                // ==========================================
-                // LAYER 1: BASE TRANSLUCENT GLASS SUBSTRATE
-                // ==========================================
-                // Translucent optical material allowing background to transmit cleanly
-                drawRoundRect(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            opticalProfile.bodyTop,
-                            opticalProfile.bodyBottom
-                        ),
-                        startY = 0f,
-                        endY = h
-                    ),
-                    cornerRadius = cornerRadius
-                )
-
-                // ==========================================
-                // LAYER 2: BACKGROUND-REACTIVE REFRACTION & CAUSTICS
-                // ==========================================
-                // Liquid optical light scattering derived from background colors
-                // Primary caustic dispersion (upper-right/center)
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            opticalProfile.causticPrimary.copy(alpha = 0.22f),
-                            opticalProfile.causticPrimary.copy(alpha = 0.08f),
-                            Color.Transparent
-                        ),
-                        center = Offset(w * 0.72f, h * 0.20f),
-                        radius = w * 0.45f
-                    )
-                )
-
-                // Secondary subtle refractive bounce (lower-left)
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            opticalProfile.causticSecondary.copy(alpha = 0.16f),
-                            opticalProfile.causticSecondary.copy(alpha = 0.04f),
-                            Color.Transparent
-                        ),
-                        center = Offset(w * 0.18f, h * 0.82f),
-                        radius = w * 0.35f
-                    )
-                )
-
-                // ==========================================
-                // LAYER 3: CONVEX OPTICAL SHEEN (SURFACE REFRACTION)
-                // ==========================================
-                // A) Diagonal liquid light sweep
-                drawRoundRect(
-                    brush = Brush.linearGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = 0.13f),
-                            Color.White.copy(alpha = 0.04f),
-                            Color.Transparent,
-                            Color.White.copy(alpha = 0.03f)
-                        ),
-                        start = Offset(0f, 0f),
-                        end = Offset(w * 0.9f, h)
-                    ),
-                    cornerRadius = cornerRadius
-                )
-
-                // B) Upper curvature horizon reflection (top 45%)
-                drawRoundRect(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = 0.15f),
-                            Color.White.copy(alpha = 0.03f),
-                            Color.Transparent
-                        ),
-                        startY = 0f,
-                        endY = h * 0.48f
-                    ),
-                    cornerRadius = cornerRadius
-                )
-
-                // ==========================================
-                // LAYER 4: INNER FRESNEL SCATTERING LIP (GLASS WALL THICKNESS)
-                // ==========================================
-                val insetPx = 1.5.dp.toPx()
-                val innerCornerRadius = CornerRadius(
-                    (cornerRadiusPx - insetPx).coerceAtLeast(0f),
-                    (cornerRadiusPx - insetPx).coerceAtLeast(0f)
-                )
-                drawRoundRect(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = 0.18f),
-                            opticalProfile.innerFresnel,
-                            Color.Transparent,
-                            Color.Black.copy(alpha = 0.20f)
-                        ),
-                        startY = insetPx,
-                        endY = h - insetPx
-                    ),
-                    topLeft = Offset(insetPx, insetPx),
-                    size = Size(w - insetPx * 2, h - insetPx * 2),
-                    cornerRadius = innerCornerRadius,
-                    style = Stroke(width = 0.85.dp.toPx())
-                )
-
-                // ==========================================
-                // LAYER 5: PHYSICAL SPECULAR RIM (BEVELED GLASS EDGE)
-                // ==========================================
-                // 1) Multi-stop perimeter directional reflection
-                drawRoundRect(
-                    brush = Brush.linearGradient(
-                        0.00f to opticalProfile.specularTop.copy(alpha = 0.70f), // Top-left key light glint
-                        0.25f to Color.White.copy(alpha = 0.45f),                // Top edge bright highlight
-                        0.50f to opticalProfile.specularRight,                  // Right curve grazing catch
-                        0.75f to opticalProfile.rimBottomShadow,                // Bottom edge ambient shadow/refraction
-                        1.00f to opticalProfile.specularLeft,                   // Left curve soft reflection
-                        start = Offset(0f, 0f),
-                        end = Offset(w * 0.95f, h)
-                    ),
-                    cornerRadius = cornerRadius,
-                    style = Stroke(width = 1.2.dp.toPx())
-                )
-
-                // 2) Concentrated top-edge specular horizon glint
-                drawRoundRect(
-                    brush = Brush.horizontalGradient(
-                        0.00f to Color.Transparent,
-                        0.08f to opticalProfile.specularTop.copy(alpha = 0.40f),
-                        0.22f to Color.White.copy(alpha = 0.85f),
-                        0.55f to Color.White.copy(alpha = 0.55f),
-                        0.85f to opticalProfile.specularTop.copy(alpha = 0.30f),
-                        1.00f to Color.Transparent,
-                        startX = 0f,
-                        endX = w
-                    ),
-                    cornerRadius = cornerRadius,
-                    style = Stroke(width = 1.0.dp.toPx())
-                )
-
-                // 3) Bottom edge subtle dark refraction hairline
-                drawRoundRect(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Transparent,
-                            Color.Transparent,
-                            Color.Black.copy(alpha = 0.35f)
-                        ),
-                        startY = 0f,
-                        endY = h
-                    ),
-                    cornerRadius = cornerRadius,
-                    style = Stroke(width = 1.0.dp.toPx())
-                )
-            }
             .clip(shape)
     ) {
+        // =========================================================================
+        // 1. ACTUAL BACKGROUND/WALLPAPER OPTICAL DIFFUSION (BACKDROP)
+        // Inherits directly from the background; reacts naturally to pink, blue, green,
+        // photo images, or dark themes with NO artificial color tint overlay.
+        // =========================================================================
+        if (isWallpaperImage) {
+            AsyncImage(
+                model = cleanVal,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                alignment = Alignment.TopCenter,
+                modifier = Modifier
+                    .matchParentSize()
+                    .graphicsLayer {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            renderEffect = android.graphics.RenderEffect.createBlurEffect(
+                                26f, 26f, android.graphics.Shader.TileMode.CLAMP
+                            ).asComposeRenderEffect()
+                        }
+                    }
+            )
+            // Ambient contrast veil matching chat background scrim (ensures icons & text legibility)
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(Color.Black.copy(alpha = 0.48f))
+            )
+        } else if (cleanVal.startsWith("gradient:")) {
+            val hexList = cleanVal.removePrefix("gradient:").split(",")
+            val colors = hexList.mapNotNull {
+                try {
+                    Color(android.graphics.Color.parseColor(it.trim()))
+                } catch (_: Exception) {
+                    null
+                }
+            }.ifEmpty { listOf(TalklyChatBg, TalklyCard) }
+
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(Brush.verticalGradient(colors))
+            )
+            // Soft optical diffusion veil
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(Color.Black.copy(alpha = 0.20f))
+            )
+        } else if (cleanVal.startsWith("#") && cleanVal != "#080B10") {
+            val col = try {
+                Color(android.graphics.Color.parseColor(cleanVal))
+            } catch (_: Exception) {
+                TalklyChatBg
+            }
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(col)
+            )
+            // If the wallpaper color is bright (e.g. pastel/pink/bright tones), add ambient contrast so text is clear
+            val lum = (col.red * 0.299f + col.green * 0.587f + col.blue * 0.114f)
+            if (lum > 0.35f) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(Color.Black.copy(alpha = (lum * 0.50f).coerceIn(0.20f, 0.55f)))
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(Color.Black.copy(alpha = 0.15f))
+                )
+            }
+        } else {
+            // Default Talkly ambient backdrop slice: TalklyChatBg with soft ambient tone
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(TalklyChatBg)
+            )
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(Color.White.copy(alpha = 0.025f), Color.Transparent),
+                            center = Offset(0.5f, 0.2f),
+                            radius = 400f
+                        )
+                    )
+            )
+        }
+
+        // =========================================================================
+        // 2, 3, 4, 5, 6, 7: OPTICAL REFRACTION, INTERNAL LIGHT RESPONSE & SPECULAR RIM
+        // Pure neutral optical glass with NO fixed color tint.
+        // =========================================================================
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .drawBehind {
+                    val cornerRadiusPx = 22.dp.toPx()
+                    val cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx)
+                    val w = size.width
+                    val h = size.height
+
+                    // -----------------------------------------------------------------
+                    // A. PHYSICAL CURVATURE & THICKNESS (Neutral Light Response)
+                    // Top receives ambient overhead light; center is transparent;
+                    // bottom has subtle ambient thickness shading.
+                    // -----------------------------------------------------------------
+                    drawRoundRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.07f),
+                                Color.White.copy(alpha = 0.015f),
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.08f)
+                            ),
+                            startY = 0f,
+                            endY = h
+                        ),
+                        cornerRadius = cornerRadius
+                    )
+
+                    // -----------------------------------------------------------------
+                    // B. SUBTLE OPTICAL REFRACTION / CAUSTIC SCATTERING
+                    // Delicate neutral radial dispersion simulating light traversing curved glass.
+                    // Absolutely NO color tint (pure white/ambient).
+                    // -----------------------------------------------------------------
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.045f),
+                                Color.White.copy(alpha = 0.012f),
+                                Color.Transparent
+                            ),
+                            center = Offset(w * 0.45f, h * 0.30f),
+                            radius = w * 0.55f
+                        )
+                    )
+
+                    // -----------------------------------------------------------------
+                    // C. CONVEX OPTICAL SHEEN (Surface Polish)
+                    // Diagonal light sweep across polished curved glass face.
+                    // -----------------------------------------------------------------
+                    drawRoundRect(
+                        brush = Brush.linearGradient(
+                            0.00f to Color.White.copy(alpha = 0.08f),
+                            0.28f to Color.White.copy(alpha = 0.025f),
+                            0.55f to Color.Transparent,
+                            0.82f to Color.White.copy(alpha = 0.015f),
+                            1.00f to Color.Transparent,
+                            start = Offset(0f, 0f),
+                            end = Offset(w * 0.85f, h)
+                        ),
+                        cornerRadius = cornerRadius
+                    )
+
+                    // Top cylindrical horizon reflection (upper 42%)
+                    drawRoundRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.10f),
+                                Color.White.copy(alpha = 0.02f),
+                                Color.Transparent
+                            ),
+                            startY = 0f,
+                            endY = h * 0.42f
+                        ),
+                        cornerRadius = cornerRadius
+                    )
+
+                    // -----------------------------------------------------------------
+                    // D. INNER FRESNEL SCATTERING LIP (Glass Wall Depth)
+                    // Delicate inner bevel giving the glass tangible physical thickness.
+                    // -----------------------------------------------------------------
+                    val insetPx = 1.2.dp.toPx()
+                    val innerCornerRadius = CornerRadius(
+                        (cornerRadiusPx - insetPx).coerceAtLeast(0f),
+                        (cornerRadiusPx - insetPx).coerceAtLeast(0f)
+                    )
+                    drawRoundRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.22f),
+                                Color.White.copy(alpha = 0.05f),
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.16f)
+                            ),
+                            startY = insetPx,
+                            endY = h - insetPx
+                        ),
+                        topLeft = Offset(insetPx, insetPx),
+                        size = Size(w - insetPx * 2, h - insetPx * 2),
+                        cornerRadius = innerCornerRadius,
+                        style = Stroke(width = 0.75.dp.toPx())
+                    )
+
+                    // -----------------------------------------------------------------
+                    // E. DIRECTIONAL SPECULAR EDGE REFLECTION (Physical Beveled Rim)
+                    // Irregular natural optical variation:
+                    // - Stronger top-left keylight glint & curved corner reflection
+                    // - Soft bright top horizon edge
+                    // - Subtle side grazing reflections
+                    // - Soft darker refraction hairline along the bottom rim
+                    // -----------------------------------------------------------------
+                    // 1. Perimeter directional sweep
+                    drawRoundRect(
+                        brush = Brush.linearGradient(
+                            0.00f to Color.White.copy(alpha = 0.75f), // Top-left corner: strongest glint
+                            0.28f to Color.White.copy(alpha = 0.45f), // Top edge: clean highlight
+                            0.55f to Color.White.copy(alpha = 0.15f), // Right curve: subtle grazing catch
+                            0.78f to Color.Black.copy(alpha = 0.35f), // Bottom edge: soft dark refraction hairline
+                            1.00f to Color.White.copy(alpha = 0.22f), // Left curve: gentle secondary reflection
+                            start = Offset(0f, 0f),
+                            end = Offset(w * 0.90f, h)
+                        ),
+                        cornerRadius = cornerRadius,
+                        style = Stroke(width = 1.1.dp.toPx())
+                    )
+
+                    // 2. Concentrated top-edge specular horizon glint
+                    drawRoundRect(
+                        brush = Brush.horizontalGradient(
+                            0.00f to Color.Transparent,
+                            0.06f to Color.White.copy(alpha = 0.30f),
+                            0.18f to Color.White.copy(alpha = 0.85f), // Peak glint near top-left curvature
+                            0.45f to Color.White.copy(alpha = 0.50f),
+                            0.78f to Color.White.copy(alpha = 0.25f),
+                            1.00f to Color.Transparent,
+                            startX = 0f,
+                            endX = w
+                        ),
+                        cornerRadius = cornerRadius,
+                        style = Stroke(width = 0.9.dp.toPx())
+                    )
+
+                    // 3. Lower edge dark refraction hairline
+                    drawRoundRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.30f)
+                            ),
+                            startY = 0f,
+                            endY = h
+                        ),
+                        cornerRadius = cornerRadius,
+                        style = Stroke(width = 0.9.dp.toPx())
+                    )
+                }
+        )
+
+        // =========================================================================
+        // 8. CRISP PROFILE / HEADER CONTENT (Untouched)
+        // =========================================================================
         content()
     }
 }

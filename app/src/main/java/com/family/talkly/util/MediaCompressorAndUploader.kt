@@ -552,11 +552,20 @@ class MediaCompressorAndUploader(private val context: Context) {
                     }
                 }
 
-                val requestBody = MultipartBody.Builder()
+                val requestBodyBuilder = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("file", canonicalFile.name, fileBody)
                     .addFormDataPart("upload_preset", "talkly_media")
-                    .build()
+
+                if (remotePath.isNotBlank()) {
+                    val clean = remotePath.trim('/')
+                    val folder = if (clean.contains('/')) clean.substringBeforeLast('/') else clean
+                    if (folder.isNotBlank()) {
+                        requestBodyBuilder.addFormDataPart("folder", folder)
+                    }
+                }
+
+                val requestBody = requestBodyBuilder.build()
 
                 val uploadUrl = "https://api.cloudinary.com/v1_1/tsnijtq5/auto/upload"
 

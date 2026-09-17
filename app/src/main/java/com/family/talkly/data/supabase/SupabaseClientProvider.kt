@@ -47,13 +47,13 @@ object SupabaseClientProvider {
             supabaseUrl = supabaseUrl,
             supabaseKey = supabasePublishableKey
         ) {
-            requestTimeout = 45.seconds
+            requestTimeout = 25.seconds
             httpEngine = OkHttp.create {
                 config {
                     protocols(listOf(Protocol.HTTP_1_1))
-                    connectTimeout(30, TimeUnit.SECONDS)
-                    readTimeout(45, TimeUnit.SECONDS)
-                    writeTimeout(45, TimeUnit.SECONDS)
+                    connectTimeout(15, TimeUnit.SECONDS)
+                    readTimeout(30, TimeUnit.SECONDS)
+                    writeTimeout(30, TimeUnit.SECONDS)
                     retryOnConnectionFailure(true)
                 }
             }

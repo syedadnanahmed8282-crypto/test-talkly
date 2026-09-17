@@ -108,6 +108,10 @@ data class SupabaseConversation(
     val lastMessageTime: String? = null,
     @SerialName("last_message_sender_id")
     val lastMessageSenderId: String? = null,
+    @SerialName("wallpaper_value")
+    val wallpaperValue: String? = null,
+    @SerialName("wallpaper_updated_at")
+    val wallpaperUpdatedAt: String? = null,
     @SerialName("created_at")
     val createdAt: String? = null,
     @SerialName("updated_at")

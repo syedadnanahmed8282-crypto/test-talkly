@@ -23,7 +23,9 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -762,6 +764,98 @@ object SupabaseMessagingService {
             channel
         } catch (e: Exception) {
             Log.w(TAG, "Optional Statuses Realtime channel not connected: ${e.localizedMessage}")
+            null
+        }
+    }
+
+    suspend fun fetchConversationWallpaper(conversationId: String): String? = withContext(Dispatchers.IO) {
+        if (conversationId.isBlank()) return@withContext null
+        try {
+            val convList = SupabaseClientProvider.client.postgrest["conversations"]
+                .select {
+                    filter {
+                        eq("id", conversationId)
+                    }
+                    limit(1)
+                }
+                .decodeList<SupabaseConversation>()
+            convList.firstOrNull()?.wallpaperValue
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.w(TAG, "Error fetching conversation wallpaper for $conversationId: ${e.localizedMessage}")
+            null
+        }
+    }
+
+    suspend fun updateConversationWallpaper(conversationId: String, wallpaperValue: String): Boolean = withContext(Dispatchers.IO) {
+        if (conversationId.isBlank()) return@withContext false
+        try {
+            SupabaseClientProvider.client.postgrest["conversations"]
+                .update({
+                    set("wallpaper_value", wallpaperValue)
+                }) {
+                    filter {
+                        eq("id", conversationId)
+                    }
+                }
+            Log.d(TAG, "Successfully updated conversation wallpaper for $conversationId to: $wallpaperValue")
+            true
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.w(TAG, "Error updating conversation wallpaper for $conversationId: ${e.localizedMessage}")
+            false
+        }
+    }
+
+    suspend fun subscribeToConversationWallpaper(
+        conversationId: String,
+        coroutineScope: CoroutineScope,
+        onWallpaperUpdate: (String) -> Unit
+    ): RealtimeChannel? = withContext(Dispatchers.IO) {
+        if (conversationId.isBlank()) return@withContext null
+        try {
+            val channelName = "conv-wp-$conversationId"
+            try {
+                val matchingChannels = SupabaseClientProvider.client.realtime.subscriptions.values.filter {
+                    it.topic == "realtime:$channelName" || it.topic == channelName
+                }
+                for (existing in matchingChannels) {
+                    try { existing.unsubscribe() } catch (_: Exception) {}
+                    try { SupabaseClientProvider.client.realtime.removeChannel(existing) } catch (_: Exception) {}
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error cleaning previous conversation wallpaper channel: ${e.localizedMessage}")
+            }
+
+            val channel = SupabaseClientProvider.client.realtime.channel(channelName)
+            val convFlow = channel.postgresChangeFlow<PostgresAction>(schema = "public") {
+                table = "conversations"
+            }
+            convFlow.onEach { action ->
+                try {
+                    when (action) {
+                        is PostgresAction.Update -> {
+                            val recordId = action.record["id"]?.jsonPrimitive?.contentOrNull
+                            if (recordId == conversationId) {
+                                val updatedWallpaper = action.record["wallpaper_value"]?.jsonPrimitive?.contentOrNull
+                                if (!updatedWallpaper.isNullOrBlank()) {
+                                    Log.d(TAG, "Realtime conversation wallpaper update received for $conversationId: $updatedWallpaper")
+                                    onWallpaperUpdate(updatedWallpaper)
+                                }
+                            }
+                        }
+                        else -> {}
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error processing conversation wallpaper Realtime action: ${e.localizedMessage}")
+                }
+            }.launchIn(coroutineScope)
+
+            channel.subscribe(blockUntilSubscribed = false)
+            Log.i(TAG, "Subscribed to conversation wallpaper Realtime: $channelName")
+            channel
+        } catch (e: Exception) {
+            Log.w(TAG, "Error creating conversation wallpaper channel: ${e.localizedMessage}")
             null
         }
     }

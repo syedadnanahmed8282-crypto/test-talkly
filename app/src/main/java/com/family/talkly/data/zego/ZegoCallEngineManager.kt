@@ -900,12 +900,24 @@ class ZegoCallEngineManager(private val context: Context) {
 
     fun reconnectCallSync() {
         val now = System.currentTimeMillis()
-        var profile = currentUserProfile ?: getLocalUserProfile()
+        val authManager = com.family.talkly.data.auth.AuthManager.getInstance(context)
+        val authenticatedProfile = (authManager.authState.value as? com.family.talkly.data.auth.AuthState.Authenticated)?.profile
+        var profile = currentUserProfile ?: authenticatedProfile
         val authUid = try {
             SupabaseClientProvider.auth.currentUserOrNull()?.id
         } catch (e: Exception) {
             null
+        } ?: authenticatedProfile?.uid
+
+        if (profile == null && !authUid.isNullOrBlank()) {
+            profile = getLocalUserProfile().copy(uid = authUid)
         }
+
+        if (profile == null) {
+            Log.d(TAG, "reconnectCallSync: User not authenticated, skipping call sync")
+            return
+        }
+
         val effectiveUid = if (!authUid.isNullOrBlank()) authUid else profile.uid
         if (effectiveUid.isNotBlank() && effectiveUid != "self" && profile.uid != effectiveUid) {
             profile = profile.copy(uid = effectiveUid)
@@ -938,7 +950,7 @@ class ZegoCallEngineManager(private val context: Context) {
             return
         }
         currentSyncedUserId = null
-        startRealtimeCallSync(profile, repo)
+        startRealtimeCallSync(profile, repo, force = true)
     }
 
     private fun handleRealtimeCallAction(action: PostgresAction) {

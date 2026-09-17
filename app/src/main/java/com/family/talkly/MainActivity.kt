@@ -118,7 +118,7 @@ class MainActivity : ComponentActivity() {
             android.util.Log.e("MainActivity", "FirebaseApp initialization check in MainActivity: ${e.localizedMessage}")
         }
 
-        authManager = AuthManager(applicationContext)
+        authManager = AuthManager.getInstance(applicationContext)
         chatRepository = FirebaseChatRepository.getInstance(applicationContext)
         zegoManager = ZegoCallEngineManager.getInstance(applicationContext)
         themePreferences = ThemePreferences(applicationContext)
@@ -433,31 +433,37 @@ class MainActivity : ComponentActivity() {
             ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
                 override fun onStart(owner: LifecycleOwner) {
                     super.onStart(owner)
-                    val profile = zegoManager.getLocalUserProfile()
-                    if (profile.uid.isNotBlank() && profile.uid != "self") {
-                        Log.d("MainActivity", "App entered FOREGROUND -> triggering chatRepository.forceReconnectListeners and zegoManager.reconnectCallSync for ${profile.uid}")
-                        chatRepository.forceReconnectListeners("app_foreground")
-                        zegoManager.reconnectCallSync()
-                        chatRepository.setMemberPresence(
-                            memberId = profile.uid,
-                            isOnline = true,
-                            lastSeen = "Online",
-                            lastActiveTimestamp = System.currentTimeMillis()
-                        )
+                    val authState = authManager.authState.value
+                    if (authState is AuthState.Authenticated) {
+                        val profile = authState.profile
+                        if (profile.uid.isNotBlank() && profile.uid != "self") {
+                            Log.d("MainActivity", "App entered FOREGROUND -> triggering chatRepository.forceReconnectListeners and zegoManager.reconnectCallSync for ${profile.uid}")
+                            chatRepository.forceReconnectListeners("app_foreground")
+                            zegoManager.reconnectCallSync()
+                            chatRepository.setMemberPresence(
+                                memberId = profile.uid,
+                                isOnline = true,
+                                lastSeen = "Online",
+                                lastActiveTimestamp = System.currentTimeMillis()
+                            )
+                        }
                     }
                 }
 
                 override fun onStop(owner: LifecycleOwner) {
                     super.onStop(owner)
                     Log.d("MainActivity", "App entered BACKGROUND (ProcessLifecycleOwner.onStop)")
-                    val profile = zegoManager.getLocalUserProfile()
-                    if (profile.uid.isNotBlank() && profile.uid != "self") {
-                        chatRepository.setMemberPresence(
-                            memberId = profile.uid,
-                            isOnline = false,
-                            lastSeen = com.family.talkly.util.PhoneUtils.formatLastSeenTime(System.currentTimeMillis()),
-                            lastActiveTimestamp = System.currentTimeMillis()
-                        )
+                    val authState = authManager.authState.value
+                    if (authState is AuthState.Authenticated) {
+                        val profile = authState.profile
+                        if (profile.uid.isNotBlank() && profile.uid != "self") {
+                            chatRepository.setMemberPresence(
+                                memberId = profile.uid,
+                                isOnline = false,
+                                lastSeen = com.family.talkly.util.PhoneUtils.formatLastSeenTime(System.currentTimeMillis()),
+                                lastActiveTimestamp = System.currentTimeMillis()
+                            )
+                        }
                     }
                 }
             })
