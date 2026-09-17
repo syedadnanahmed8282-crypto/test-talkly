@@ -307,8 +307,9 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        // Small floating debug button, always on top-right of every screen (hidden in PiP mode)
-                        if (!isInPipMode) {
+                        // Small floating debug button: visible ONLY on Login/Auth screens, hidden after authentication and in PiP mode
+                        val isAuthenticated = authState is AuthState.Authenticated
+                        if (!isAuthenticated && !isInPipMode) {
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)

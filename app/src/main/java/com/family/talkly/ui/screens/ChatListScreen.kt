@@ -244,6 +244,7 @@ fun ChatListScreen(
     var showAddContactDialog by remember { mutableStateOf(false) }
     var showBlockedContactsDialog by remember { mutableStateOf(false) }
     var showPostStatusDialog by remember { mutableStateOf(false) }
+    var showDebugLogsDialog by remember { mutableStateOf(false) }
     var activeViewerGroupIndex by remember { mutableStateOf<Int?>(null) }
     var selectedContactForProfile by remember { mutableStateOf<FamilyMember?>(null) }
     var memberToDeleteHistory by remember { mutableStateOf<FamilyMember?>(null) }
@@ -255,6 +256,7 @@ fun ChatListScreen(
             showThemeDialog ||
             showBlockedContactsDialog ||
             showPostStatusDialog ||
+            showDebugLogsDialog ||
             memberToDeleteHistory != null ||
             currentTab != 0 ||
             isSearchExpanded
@@ -268,6 +270,7 @@ fun ChatListScreen(
             showThemeDialog -> showThemeDialog = false
             showBlockedContactsDialog -> showBlockedContactsDialog = false
             showPostStatusDialog -> showPostStatusDialog = false
+            showDebugLogsDialog -> showDebugLogsDialog = false
             memberToDeleteHistory != null -> memberToDeleteHistory = null
             isSearchExpanded -> {
                 isSearchExpanded = false
@@ -519,6 +522,12 @@ fun ChatListScreen(
         )
     }
 
+    if (showDebugLogsDialog) {
+        com.family.talkly.debug.DebugLogDialog(
+            onDismiss = { showDebugLogsDialog = false }
+        )
+    }
+
     if (activeViewerGroupIndex != null && statusGroups.isNotEmpty()) {
         StatusViewerDialog(
             statusGroups = statusGroups,
@@ -628,6 +637,7 @@ fun ChatListScreen(
                         onClearDemo = { onClearDemoContacts?.invoke() },
                         onOpenTheme = { showThemeDialog = true },
                         onOpenProfile = { showProfileDialog = true },
+                        onOpenDebugLogs = { showDebugLogsDialog = true },
                         onLogout = onLogout,
                         currentThemeMode = currentThemeMode
                     )
@@ -969,6 +979,7 @@ private fun TalklyPersonalHeader(
     onClearDemo: () -> Unit,
     onOpenTheme: () -> Unit,
     onOpenProfile: () -> Unit,
+    onOpenDebugLogs: () -> Unit = {},
     onLogout: (() -> Unit)?,
     currentThemeMode: ThemeMode
 ) {
@@ -1164,6 +1175,18 @@ private fun TalklyPersonalHeader(
                         onClick = {
                             onDismissMenu()
                             onOpenProfile()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text("🐞 Debug Logs", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                                Text("View categorized application logs", color = TextSecondary, fontSize = 11.sp)
+                            }
+                        },
+                        onClick = {
+                            onDismissMenu()
+                            onOpenDebugLogs()
                         }
                     )
                     if (onLogout != null) {
