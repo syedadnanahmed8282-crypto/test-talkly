@@ -138,6 +138,9 @@ import com.family.talkly.data.models.ChatMessage
 import com.family.talkly.data.models.FamilyMember
 import com.family.talkly.data.models.UserProfile
 import com.family.talkly.data.models.UserStatusGroup
+import com.family.talkly.ui.components.ActiveCallHeaderControl
+import com.family.talkly.data.zego.CurrentCallInfo
+import com.family.talkly.data.zego.CallState
 import com.family.talkly.ui.components.AddContactDialog
 import com.family.talkly.ui.components.BlockedContactsDialog
 import com.family.talkly.ui.components.ContactProfileDetailsDialog
@@ -200,7 +203,10 @@ fun ChatListScreen(
     isNetworkConnected: Boolean = true,
     callLogs: List<CallLog> = emptyList(),
     selectedTab: Int = 0,
-    onTabSelected: ((Int) -> Unit)? = null
+    onTabSelected: ((Int) -> Unit)? = null,
+    activeCallInfo: CurrentCallInfo? = null,
+    onRestoreCall: (() -> Unit)? = null,
+    onEndCall: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -639,7 +645,10 @@ fun ChatListScreen(
                         onOpenProfile = { showProfileDialog = true },
                         onOpenDebugLogs = { showDebugLogsDialog = true },
                         onLogout = onLogout,
-                        currentThemeMode = currentThemeMode
+                        currentThemeMode = currentThemeMode,
+                        activeCallInfo = activeCallInfo,
+                        onRestoreCall = onRestoreCall,
+                        onEndCall = onEndCall
                     )
 
                     // ==========================================
@@ -981,7 +990,10 @@ private fun TalklyPersonalHeader(
     onOpenProfile: () -> Unit,
     onOpenDebugLogs: () -> Unit = {},
     onLogout: (() -> Unit)?,
-    currentThemeMode: ThemeMode
+    currentThemeMode: ThemeMode,
+    activeCallInfo: CurrentCallInfo? = null,
+    onRestoreCall: (() -> Unit)? = null,
+    onEndCall: (() -> Unit)? = null
 ) {
     val currentHour = remember { Calendar.getInstance().get(Calendar.HOUR_OF_DAY) }
     val greetingText = when (currentHour) {
@@ -1085,6 +1097,20 @@ private fun TalklyPersonalHeader(
 
         // Right Controls: Compact Circular Action Controls
         Row(verticalAlignment = Alignment.CenterVertically) {
+            val isCallActive = activeCallInfo != null &&
+                    (activeCallInfo.state == CallState.ACTIVE ||
+                     activeCallInfo.state == CallState.OUTGOING_RINGING ||
+                     activeCallInfo.state == CallState.OUTGOING_CALLING)
+
+            if (isCallActive && onRestoreCall != null && onEndCall != null) {
+                ActiveCallHeaderControl(
+                    callInfo = activeCallInfo,
+                    onRestoreCall = onRestoreCall,
+                    onEndCall = onEndCall,
+                    modifier = Modifier.padding(end = 10.dp)
+                )
+            }
+
             // Search Button
             Box(
                 modifier = Modifier

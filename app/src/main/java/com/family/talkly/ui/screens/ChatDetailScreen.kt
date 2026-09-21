@@ -18,6 +18,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -186,6 +187,9 @@ import com.family.talkly.data.models.UserProfile
 import com.family.talkly.ui.components.AudioPlayerItem
 import com.family.talkly.ui.components.ContactProfileDetailsDialog
 import com.family.talkly.ui.components.FullMediaViewerDialog
+import com.family.talkly.ui.components.ActiveCallHeaderControl
+import com.family.talkly.data.zego.CurrentCallInfo
+import com.family.talkly.data.zego.CallState
 import com.family.talkly.ui.components.MediaAttachmentDialog
 import com.family.talkly.ui.components.MediaGroupCluster
 import com.family.talkly.ui.components.MediaMessageItem
@@ -194,6 +198,8 @@ import com.family.talkly.ui.components.OnlinePresenceIndicator
 import com.family.talkly.ui.components.ParticleDissolveWrapper
 import com.family.talkly.ui.components.rememberParticleDissolveManager
 import com.family.talkly.ui.components.WallpaperSelectionDialog
+import com.family.talkly.ui.components.UrlAwareMessageText
+import com.family.talkly.ui.components.openUrlSafely
 import com.family.talkly.util.AudioRecorder
 import com.family.talkly.util.MediaCompressorAndUploader
 import kotlinx.coroutines.Dispatchers
@@ -285,7 +291,10 @@ fun ChatDetailScreen(
     onClearChatHistory: () -> Unit = {},
     currentUserProfile: UserProfile? = null,
     isNetworkConnected: Boolean = true,
-    onRefreshMemberProfile: (() -> Unit)? = null
+    onRefreshMemberProfile: (() -> Unit)? = null,
+    activeCallInfo: CurrentCallInfo? = null,
+    onRestoreCall: (() -> Unit)? = null,
+    onEndCall: (() -> Unit)? = null
 ) {
     LaunchedEffect(member.id) {
         onRefreshMemberProfile?.invoke()
@@ -1762,10 +1771,16 @@ fun ChatDetailScreen(
                                         }
                                     }
                                     Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
+                                    UrlAwareMessageText(
                                         text = msg.textContent.ifEmpty { "[Media message]" },
-                                        fontSize = 14.sp,
-                                        color = TalklyTextPrimary
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontSize = 14.sp,
+                                            color = TalklyTextPrimary
+                                        ),
+                                        linkColor = TalklyCyan,
+                                        onLinkClick = { url ->
+                                            openUrlSafely(context, url)
+                                        }
                                     )
                                     Spacer(modifier = Modifier.height(2.dp))
                                     Text(
@@ -2453,6 +2468,21 @@ fun ChatDetailScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
+                            val isCallActiveWithParticipant = activeCallInfo != null &&
+                                    (activeCallInfo.state == CallState.ACTIVE ||
+                                     activeCallInfo.state == CallState.OUTGOING_RINGING ||
+                                     activeCallInfo.state == CallState.OUTGOING_CALLING) &&
+                                    (activeCallInfo.targetMember?.id == member.id || activeCallInfo.targetMember?.phone == member.phone)
+
+                            if (isCallActiveWithParticipant && onRestoreCall != null && onEndCall != null) {
+                                ActiveCallHeaderControl(
+                                    callInfo = activeCallInfo,
+                                    onRestoreCall = onRestoreCall,
+                                    onEndCall = onEndCall,
+                                    modifier = Modifier.padding(end = 4.dp)
+                                )
+                            }
+
                             // Search Action
                             IconButton(
                                 onClick = { isSearchActive = true },
@@ -3214,12 +3244,20 @@ fun ChatDetailScreen(
                                                         verticalAlignment = Alignment.Bottom,
                                                         horizontalArrangement = Arrangement.Start
                                                     ) {
-                                                        Text(
+                                                        UrlAwareMessageText(
                                                             text = msg.textContent,
                                                             style = MaterialTheme.typography.bodyMedium.copy(
                                                                 color = TalklyTextPrimary,
                                                                 fontSize = 14.5.sp
-                                                            )
+                                                            ),
+                                                            linkColor = TalklyCyan,
+                                                            onLinkClick = { url ->
+                                                                if (isSelectionMode) {
+                                                                    toggleMessageSelection(msg)
+                                                                } else {
+                                                                    openUrlSafely(context, url)
+                                                                }
+                                                            }
                                                         )
                                                         Spacer(modifier = Modifier.width(6.dp))
                                                         Row(
@@ -3425,12 +3463,20 @@ fun ChatDetailScreen(
 
                                                         // Text Content
                                                         if (msg.textContent.isNotEmpty() && !isVoiceNote) {
-                                                            Text(
+                                                            UrlAwareMessageText(
                                                                 text = msg.textContent,
                                                                 style = MaterialTheme.typography.bodyMedium.copy(
                                                                     color = TalklyTextPrimary,
                                                                     fontSize = if (isSingleEmoji) 42.sp else 14.5.sp
-                                                                )
+                                                                ),
+                                                                linkColor = TalklyCyan,
+                                                                onLinkClick = { url ->
+                                                                    if (isSelectionMode) {
+                                                                        toggleMessageSelection(msg)
+                                                                    } else {
+                                                                        openUrlSafely(context, url)
+                                                                    }
+                                                                }
                                                             )
                                                         }
                                                     }
@@ -3696,7 +3742,7 @@ fun ChatDetailScreen(
                         bottomComposerHeightPx = coords.size.height
                     }
             ) {
-                // LIVE TYPING INDICATOR BUBBLE (Visually anchored immediately ABOVE message composer)
+                // LIVE TYPING INDICATOR: Liquid Signal (Visually anchored immediately ABOVE message composer)
                 AnimatedVisibility(
                     visible = member.isTyping,
                     enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(tween(180)),
@@ -3705,32 +3751,11 @@ fun ChatDetailScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = 16.dp, bottom = 4.dp),
-                        horizontalArrangement = Arrangement.Start
+                            .padding(start = 20.dp, bottom = 6.dp),
+                        horizontalArrangement = Arrangement.Start,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Surface(
-                            shape = RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp),
-                            color = TalklyCard.copy(alpha = 0.95f),
-                            border = BorderStroke(0.5.dp, TalklyCyan.copy(alpha = 0.35f)),
-                            shadowElevation = 3.dp
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(
-                                    text = "${member.name} is typing",
-                                    fontSize = 11.5.sp,
-                                    color = TalklyTextSecondary,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                AnimatedTypingDotsIndicator(
-                                    dotColor = TalklyCyan,
-                                    dotSize = 4.5.dp
-                                )
-                            }
-                        }
+                        LiquidSignalTypingIndicator()
                     }
                 }
 
@@ -4387,81 +4412,86 @@ private fun isSingleEmojiOrSticker(text: String): Boolean {
 }
 
 @Composable
-fun AnimatedTypingDotsIndicator(
+private fun LiquidSignalTypingIndicator(
     modifier: Modifier = Modifier,
-    dotColor: Color = TalklyCyan,
-    dotSize: androidx.compose.ui.unit.Dp = 5.dp
+    baseColor: Color = TalklyCyan,
+    crestColor: Color = TalklyMint
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "typing_dots")
+    val infiniteTransition = rememberInfiniteTransition(label = "liquid_signal_transition")
 
-    val alpha1 by infiniteTransition.animateFloat(
-        initialValue = 0.2f,
-        targetValue = 1f,
+    val wavePhase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2.0 * Math.PI).toFloat(),
         animationSpec = infiniteRepeatable(
-            animation = keyframes {
-                durationMillis = 1000
-                0.2f at 0
-                1.0f at 250
-                0.2f at 500
-            },
+            animation = tween(durationMillis = 1300, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
-        label = "dot1"
-    )
-
-    val alpha2 by infiniteTransition.animateFloat(
-        initialValue = 0.2f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = keyframes {
-                durationMillis = 1000
-                0.2f at 200
-                1.0f at 450
-                0.2f at 700
-            },
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "dot2"
-    )
-
-    val alpha3 by infiniteTransition.animateFloat(
-        initialValue = 0.2f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = keyframes {
-                durationMillis = 1000
-                0.2f at 400
-                1.0f at 650
-                0.2f at 900
-            },
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "dot3"
+        label = "liquid_wave_phase"
     )
 
     Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        modifier = modifier.padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(dotSize)
-                .clip(CircleShape)
-                .background(dotColor.copy(alpha = alpha1))
-        )
-        Box(
-            modifier = Modifier
-                .size(dotSize)
-                .clip(CircleShape)
-                .background(dotColor.copy(alpha = alpha2))
-        )
-        Box(
-            modifier = Modifier
-                .size(dotSize)
-                .clip(CircleShape)
-                .background(dotColor.copy(alpha = alpha3))
-        )
+        for (i in 0 until 3) {
+            val phaseOffset = i * 0.7853982f // ~PI / 4 delay between dots for wave flow
+            val angle = wavePhase - phaseOffset
+            val wave = ((kotlin.math.sin(angle.toDouble()).toFloat() + 1f) / 2f).coerceIn(0f, 1f)
+
+            // Fluid wave dynamics:
+            // 1. Fluid rise (sequential vertical offset)
+            val translationYDip = -wave * 5.5f
+            // 2. Subtle organic scaling & fluid elongation
+            val scaleX = 0.85f + (wave * 0.30f)
+            val scaleY = 0.80f + (wave * 0.48f)
+            // 3. Smooth opacity wave
+            val alpha = 0.35f + (wave * 0.65f)
+
+            // 4. Color transition between TalklyCyan and TalklyMint at wave peak
+            val dotColor = Color(
+                red = baseColor.red + (crestColor.red - baseColor.red) * wave,
+                green = baseColor.green + (crestColor.green - baseColor.green) * wave,
+                blue = baseColor.blue + (crestColor.blue - baseColor.blue) * wave,
+                alpha = alpha
+            )
+
+            Box(
+                modifier = Modifier
+                    .size(width = 6.dp, height = 6.dp)
+                    .graphicsLayer {
+                        translationY = translationYDip.dp.toPx()
+                        this.scaleX = scaleX
+                        this.scaleY = scaleY
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                // Subtle expanding fluid signal effect at wave crest
+                if (wave > 0.45f) {
+                    val rippleProgress = (wave - 0.45f) / 0.55f
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .graphicsLayer {
+                                val s = 1f + (rippleProgress * 0.5f)
+                                this.scaleX = s
+                                this.scaleY = s
+                                this.alpha = (1f - rippleProgress) * 0.30f
+                            }
+                            .clip(CircleShape)
+                            .background(crestColor)
+                    )
+                }
+
+                // Core liquid signal dot
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(percent = 50))
+                        .background(dotColor)
+                )
+            }
+        }
     }
 }
 
@@ -4739,9 +4769,9 @@ private fun LiquidGlassHeaderCapsule(
             .clip(shape)
     ) {
         // =========================================================================
-        // 1. ACTUAL BACKGROUND/WALLPAPER OPTICAL DIFFUSION (BACKDROP)
-        // Inherits directly from the background; reacts naturally to pink, blue, green,
-        // photo images, or dark themes with NO artificial color tint overlay.
+        // 1. ACTUAL BACKGROUND/WALLPAPER OPTICAL DIFFUSION & TRANSMISSION
+        // Optical frosted transmission allowing messages/content passing behind the header
+        // and the background wallpaper to remain visible through the glass body.
         // =========================================================================
         if (isWallpaperImage) {
             AsyncImage(
@@ -4754,16 +4784,23 @@ private fun LiquidGlassHeaderCapsule(
                     .graphicsLayer {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                             renderEffect = android.graphics.RenderEffect.createBlurEffect(
-                                26f, 26f, android.graphics.Shader.TileMode.CLAMP
+                                14f, 14f, android.graphics.Shader.TileMode.CLAMP
                             ).asComposeRenderEffect()
                         }
                     }
             )
-            // Ambient contrast veil matching chat background scrim (ensures icons & text legibility)
+            // Ultra-subtle ambient contrast veil: mostly clear at center, gentle vignette at edges
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .background(Color.Black.copy(alpha = 0.48f))
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                Color.Black.copy(alpha = 0.08f), // Clear center
+                                Color.Black.copy(alpha = 0.22f)  // Soft edge vignette
+                            )
+                        )
+                    )
             )
         } else if (cleanVal.startsWith("gradient:")) {
             val hexList = cleanVal.removePrefix("gradient:").split(",")
@@ -4778,13 +4815,24 @@ private fun LiquidGlassHeaderCapsule(
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .background(Brush.verticalGradient(colors))
+                    .background(
+                        Brush.verticalGradient(
+                            colors.map { it.copy(alpha = 0.35f) }
+                        )
+                    )
             )
-            // Soft optical diffusion veil
+            // Soft optical transmission veil
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .background(Color.Black.copy(alpha = 0.20f))
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                Color.Black.copy(alpha = 0.04f),
+                                Color.Black.copy(alpha = 0.14f)
+                            )
+                        )
+                    )
             )
         } else if (cleanVal.startsWith("#") && cleanVal != "#080B10") {
             val col = try {
@@ -4792,41 +4840,60 @@ private fun LiquidGlassHeaderCapsule(
             } catch (_: Exception) {
                 TalklyChatBg
             }
+            // Semi-transparent wash so content moving behind transmits through
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .background(col)
+                    .background(col.copy(alpha = 0.32f))
             )
-            // If the wallpaper color is bright (e.g. pastel/pink/bright tones), add ambient contrast so text is clear
+            // If the wallpaper color is bright, use a soft radial darkening (transparent in center)
             val lum = (col.red * 0.299f + col.green * 0.587f + col.blue * 0.114f)
             if (lum > 0.35f) {
                 Box(
                     modifier = Modifier
                         .matchParentSize()
-                        .background(Color.Black.copy(alpha = (lum * 0.50f).coerceIn(0.20f, 0.55f)))
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    Color.Black.copy(alpha = (lum * 0.12f).coerceIn(0.06f, 0.20f)),
+                                    Color.Black.copy(alpha = (lum * 0.30f).coerceIn(0.16f, 0.38f))
+                                )
+                            )
+                        )
                 )
             } else {
                 Box(
                     modifier = Modifier
                         .matchParentSize()
-                        .background(Color.Black.copy(alpha = 0.15f))
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    Color.Black.copy(alpha = 0.03f),
+                                    Color.Black.copy(alpha = 0.10f)
+                                )
+                            )
+                        )
                 )
             }
         } else {
-            // Default Talkly ambient backdrop slice: TalklyChatBg with soft ambient tone
+            // Default Talkly ambient backdrop slice: transparent wash preserving talkly chat backdrop
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .background(TalklyChatBg)
+                    .background(TalklyChatBg.copy(alpha = 0.35f))
             )
             Box(
                 modifier = Modifier
                     .matchParentSize()
                     .background(
                         Brush.radialGradient(
-                            colors = listOf(Color.White.copy(alpha = 0.025f), Color.Transparent),
-                            center = Offset(0.5f, 0.2f),
-                            radius = 400f
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.02f),
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.10f)
+                            ),
+                            center = Offset(0.5f, 0.3f),
+                            radius = 450f
                         )
                     )
             )
@@ -4834,7 +4901,7 @@ private fun LiquidGlassHeaderCapsule(
 
         // =========================================================================
         // 2, 3, 4, 5, 6, 7: OPTICAL REFRACTION, INTERNAL LIGHT RESPONSE & SPECULAR RIM
-        // Pure neutral optical glass with NO fixed color tint.
+        // Pure neutral optical glass with clear center and stronger optical edge reflection.
         // =========================================================================
         Box(
             modifier = Modifier
@@ -4847,16 +4914,16 @@ private fun LiquidGlassHeaderCapsule(
 
                     // -----------------------------------------------------------------
                     // A. PHYSICAL CURVATURE & THICKNESS (Neutral Light Response)
-                    // Top receives ambient overhead light; center is transparent;
+                    // Top receives ambient overhead light; center is fully transparent;
                     // bottom has subtle ambient thickness shading.
                     // -----------------------------------------------------------------
                     drawRoundRect(
                         brush = Brush.verticalGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = 0.07f),
-                                Color.White.copy(alpha = 0.015f),
+                                Color.White.copy(alpha = 0.06f),
+                                Color.White.copy(alpha = 0.01f),
                                 Color.Transparent,
-                                Color.Black.copy(alpha = 0.08f)
+                                Color.Black.copy(alpha = 0.06f)
                             ),
                             startY = 0f,
                             endY = h
@@ -4865,32 +4932,33 @@ private fun LiquidGlassHeaderCapsule(
                     )
 
                     // -----------------------------------------------------------------
-                    // B. SUBTLE OPTICAL REFRACTION / CAUSTIC SCATTERING
-                    // Delicate neutral radial dispersion simulating light traversing curved glass.
-                    // Absolutely NO color tint (pure white/ambient).
+                    // B. OPTICAL PERIPHERAL DIFFUSION (Transparent Center, Subtle Edge Density)
+                    // High-transparency center allowing content behind to clearly transmit;
+                    // soft falloff toward the perimeter corners simulating glass volume.
                     // -----------------------------------------------------------------
-                    drawCircle(
+                    drawRoundRect(
                         brush = Brush.radialGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = 0.045f),
-                                Color.White.copy(alpha = 0.012f),
-                                Color.Transparent
+                                Color.Transparent,
+                                Color.White.copy(alpha = 0.008f),
+                                Color.White.copy(alpha = 0.035f)
                             ),
-                            center = Offset(w * 0.45f, h * 0.30f),
+                            center = Offset(w * 0.5f, h * 0.5f),
                             radius = w * 0.55f
-                        )
+                        ),
+                        cornerRadius = cornerRadius
                     )
 
                     // -----------------------------------------------------------------
                     // C. CONVEX OPTICAL SHEEN (Surface Polish)
-                    // Diagonal light sweep across polished curved glass face.
+                    // Diagonal light sweep across polished curved glass face without fogging the center.
                     // -----------------------------------------------------------------
                     drawRoundRect(
                         brush = Brush.linearGradient(
-                            0.00f to Color.White.copy(alpha = 0.08f),
-                            0.28f to Color.White.copy(alpha = 0.025f),
-                            0.55f to Color.Transparent,
-                            0.82f to Color.White.copy(alpha = 0.015f),
+                            0.00f to Color.White.copy(alpha = 0.06f),
+                            0.24f to Color.White.copy(alpha = 0.015f),
+                            0.50f to Color.Transparent,
+                            0.82f to Color.White.copy(alpha = 0.010f),
                             1.00f to Color.Transparent,
                             start = Offset(0f, 0f),
                             end = Offset(w * 0.85f, h)
@@ -4898,23 +4966,23 @@ private fun LiquidGlassHeaderCapsule(
                         cornerRadius = cornerRadius
                     )
 
-                    // Top cylindrical horizon reflection (upper 42%)
+                    // Top cylindrical horizon reflection (upper 38%)
                     drawRoundRect(
                         brush = Brush.verticalGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = 0.10f),
-                                Color.White.copy(alpha = 0.02f),
+                                Color.White.copy(alpha = 0.08f),
+                                Color.White.copy(alpha = 0.012f),
                                 Color.Transparent
                             ),
                             startY = 0f,
-                            endY = h * 0.42f
+                            endY = h * 0.38f
                         ),
                         cornerRadius = cornerRadius
                     )
 
                     // -----------------------------------------------------------------
                     // D. INNER FRESNEL SCATTERING LIP (Glass Wall Depth)
-                    // Delicate inner bevel giving the glass tangible physical thickness.
+                    // Crisp inner bevel giving the glass tangible physical thickness without blocking center.
                     // -----------------------------------------------------------------
                     val insetPx = 1.2.dp.toPx()
                     val innerCornerRadius = CornerRadius(
@@ -4924,10 +4992,10 @@ private fun LiquidGlassHeaderCapsule(
                     drawRoundRect(
                         brush = Brush.verticalGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = 0.22f),
-                                Color.White.copy(alpha = 0.05f),
+                                Color.White.copy(alpha = 0.26f),
+                                Color.White.copy(alpha = 0.04f),
                                 Color.Transparent,
-                                Color.Black.copy(alpha = 0.16f)
+                                Color.Black.copy(alpha = 0.18f)
                             ),
                             startY = insetPx,
                             endY = h - insetPx
@@ -4940,35 +5008,35 @@ private fun LiquidGlassHeaderCapsule(
 
                     // -----------------------------------------------------------------
                     // E. DIRECTIONAL SPECULAR EDGE REFLECTION (Physical Beveled Rim)
-                    // Irregular natural optical variation:
-                    // - Stronger top-left keylight glint & curved corner reflection
-                    // - Soft bright top horizon edge
+                    // Strong optical edge definition & refraction:
+                    // - Strong top-left keylight glint & curved corner reflection (alpha 0.80)
+                    // - Crisp top edge highlight (alpha 0.50)
                     // - Subtle side grazing reflections
-                    // - Soft darker refraction hairline along the bottom rim
+                    // - Controlled bottom refraction rim
                     // -----------------------------------------------------------------
                     // 1. Perimeter directional sweep
                     drawRoundRect(
                         brush = Brush.linearGradient(
-                            0.00f to Color.White.copy(alpha = 0.75f), // Top-left corner: strongest glint
-                            0.28f to Color.White.copy(alpha = 0.45f), // Top edge: clean highlight
-                            0.55f to Color.White.copy(alpha = 0.15f), // Right curve: subtle grazing catch
+                            0.00f to Color.White.copy(alpha = 0.80f), // Top-left corner: strongest glint
+                            0.28f to Color.White.copy(alpha = 0.50f), // Top edge: clean highlight
+                            0.55f to Color.White.copy(alpha = 0.16f), // Right curve: grazing catch
                             0.78f to Color.Black.copy(alpha = 0.35f), // Bottom edge: soft dark refraction hairline
-                            1.00f to Color.White.copy(alpha = 0.22f), // Left curve: gentle secondary reflection
+                            1.00f to Color.White.copy(alpha = 0.25f), // Left curve: gentle secondary reflection
                             start = Offset(0f, 0f),
                             end = Offset(w * 0.90f, h)
                         ),
                         cornerRadius = cornerRadius,
-                        style = Stroke(width = 1.1.dp.toPx())
+                        style = Stroke(width = 1.15.dp.toPx())
                     )
 
                     // 2. Concentrated top-edge specular horizon glint
                     drawRoundRect(
                         brush = Brush.horizontalGradient(
                             0.00f to Color.Transparent,
-                            0.06f to Color.White.copy(alpha = 0.30f),
-                            0.18f to Color.White.copy(alpha = 0.85f), // Peak glint near top-left curvature
-                            0.45f to Color.White.copy(alpha = 0.50f),
-                            0.78f to Color.White.copy(alpha = 0.25f),
+                            0.06f to Color.White.copy(alpha = 0.32f),
+                            0.18f to Color.White.copy(alpha = 0.88f), // Peak glint near top-left curvature
+                            0.45f to Color.White.copy(alpha = 0.52f),
+                            0.78f to Color.White.copy(alpha = 0.26f),
                             1.00f to Color.Transparent,
                             startX = 0f,
                             endX = w

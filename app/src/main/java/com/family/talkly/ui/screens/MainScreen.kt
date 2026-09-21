@@ -457,7 +457,10 @@ fun MainScreen(
                 isNetworkConnected = isNetworkConnected,
                 onRefreshMemberProfile = {
                     chatRepository.refreshContactProfile(currentMember.id)
-                }
+                },
+                activeCallInfo = if (isCallActive && isCallMinimized && !isInPipMode) callInfo else null,
+                onRestoreCall = { isCallMinimized = false },
+                onEndCall = { zegoManager.endCall() }
             )
         } else {
             // Main Screen Content
@@ -550,21 +553,8 @@ fun MainScreen(
                         chatRepository.startRealtimeMessageSync(null)
                     }
                 },
-                callLogs = callLogs
-            )
-        }
-
-        // Floating Minimized Call Overlay
-        AnimatedVisibility(
-            visible = isCallActive && isCallMinimized && !isInPipMode,
-            enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
-            exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-        ) {
-            TalklyMinimizedCallPill(
-                callInfo = callInfo,
+                callLogs = callLogs,
+                activeCallInfo = if (isCallActive && isCallMinimized && !isInPipMode) callInfo else null,
                 onRestoreCall = { isCallMinimized = false },
                 onEndCall = { zegoManager.endCall() }
             )

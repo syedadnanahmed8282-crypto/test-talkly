@@ -1142,55 +1142,107 @@ class FirebaseChatRepository private constructor(private val context: Context) {
 
     private val diskExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
+    fun mergeChatMessages(existing: ChatMessage, incoming: ChatMessage): ChatMessage {
+        val isDelForEveryone = existing.isDeletedForEveryone || incoming.isDeletedForEveryone || _deletedForEveryoneMessageIds.contains(incoming.id)
+        if (isDelForEveryone) {
+            _deletedForEveryoneMessageIds.add(incoming.id)
+        }
+        val currentUid = getAuthenticatedUserUid()
+        val combinedDeleted = (existing.deletedForUsers + incoming.deletedForUsers)
+            .filter { it.isNotBlank() && it != "self" }
+            .toMutableList()
+        if (_deletedForMeMessageIds.contains(incoming.id)) {
+            if (currentUid.isNotBlank() && !combinedDeleted.contains(currentUid)) {
+                combinedDeleted.add(currentUid)
+            }
+        }
+
+        val finalText = when {
+            isDelForEveryone -> "This message was deleted"
+            incoming.isEdited -> incoming.textContent
+            existing.isEdited -> existing.textContent
+            incoming.textContent.isNotBlank() -> incoming.textContent
+            else -> existing.textContent
+        }
+        val finalMedia = when {
+            isDelForEveryone -> null
+            existing.isDeletedForEveryone -> null
+            else -> incoming.mediaUrl ?: existing.mediaUrl
+        }
+
+        val isDelivered = existing.isDelivered || incoming.isDelivered
+        val isRead = existing.isRead || incoming.isRead
+        val readAt = incoming.readAtTimestamp ?: existing.readAtTimestamp
+        val reaction = incoming.reaction ?: existing.reaction
+        val isStarred = existing.isStarred || incoming.isStarred
+        val isPinned = if (incoming.isPinned) true else existing.isPinned
+        val pinnedBy = incoming.pinnedBy ?: existing.pinnedBy
+        val isEdited = existing.isEdited || incoming.isEdited
+        val isPending = if (!incoming.isPending && (isDelivered || isRead)) false else (existing.isPending && incoming.isPending)
+        val isUploading = if (!incoming.isPending && isDelivered) false else existing.isUploading
+        val isFailed = existing.isFailed && !isDelivered
+
+        return incoming.copy(
+            senderId = if (incoming.senderId.isNotBlank() && incoming.senderId != "self") incoming.senderId else existing.senderId,
+            senderName = if (incoming.senderName.isNotBlank() && incoming.senderName != "You") incoming.senderName else existing.senderName,
+            receiverId = if (incoming.receiverId.isNotBlank()) incoming.receiverId else existing.receiverId,
+            messageType = incoming.messageType,
+            textContent = finalText,
+            mediaUrl = finalMedia,
+            timestamp = if (existing.timestamp > 0L) existing.timestamp else incoming.timestamp,
+            callType = incoming.callType ?: existing.callType,
+            callDurationSec = if (incoming.callDurationSec > 0) incoming.callDurationSec else existing.callDurationSec,
+            isDelivered = isDelivered,
+            isRead = isRead,
+            readAtTimestamp = readAt,
+            reaction = reaction,
+            isStarred = isStarred,
+            isPinned = isPinned,
+            pinnedBy = pinnedBy,
+            replyToMessageId = incoming.replyToMessageId ?: existing.replyToMessageId,
+            replyToSenderName = incoming.replyToSenderName ?: existing.replyToSenderName,
+            replyToText = incoming.replyToText ?: existing.replyToText,
+            isEdited = isEdited,
+            isDeletedForEveryone = isDelForEveryone,
+            deletedForUsers = combinedDeleted.distinct(),
+            isPending = isPending,
+            isUploading = isUploading,
+            isFailed = isFailed,
+            fileSizeBytes = incoming.fileSizeBytes ?: existing.fileSizeBytes
+        )
+    }
+
     private fun startRoomDatabaseObserver() {
         repositoryScope.launch(Dispatchers.IO) {
             try {
                 database.chatMessageDao().getAllMessages().collect { entities ->
                     if (entities.isNotEmpty()) {
-                        val loadedMap = mutableMapOf<String, MutableList<ChatMessage>>()
+                        val loadedMap = mutableMapOf<String, MutableMap<String, ChatMessage>>()
                         for (entity in entities) {
                             val msg = entity.toChatMessage()
                             if (msg.isDeletedForEveryone) {
                                 _deletedForEveryoneMessageIds.add(msg.id)
                             }
-                            val list = loadedMap.getOrPut(entity.chatKey) { mutableListOf() }
-                            list.add(msg)
+                            val canonicalKey = getCanonicalMemberId(entity.chatKey)
+                            val chatMap = loadedMap.getOrPut(canonicalKey) { mutableMapOf() }
+                            val existingInMap = chatMap[msg.id]
+                            chatMap[msg.id] = if (existingInMap != null) mergeChatMessages(existingInMap, msg) else msg
                         }
-                        val resultMap = loadedMap.mapValues { entry -> entry.value.sortedBy { it.timestamp } }
+                        val resultMap = loadedMap.mapValues { entry ->
+                            entry.value.values.sortedBy { it.timestamp }
+                        }
                         if (resultMap.isNotEmpty()) {
                             _messagesMap.update { current ->
                                 val mergedMap = current.toMutableMap()
-                                resultMap.forEach { (key, roomList) ->
-                                    val existingList = current[key] ?: emptyList()
-                                    val existingById = existingList.associateBy { it.id }
-                                    val mergedList = roomList.map { roomMsg ->
-                                        val memMsg = existingById[roomMsg.id]
-                                        val isDelForEveryone = roomMsg.isDeletedForEveryone ||
-                                                (memMsg?.isDeletedForEveryone == true) ||
-                                                _deletedForEveryoneMessageIds.contains(roomMsg.id)
-                                        if (isDelForEveryone) {
-                                            _deletedForEveryoneMessageIds.add(roomMsg.id)
-                                        }
-                                        val combinedDeleted = (roomMsg.deletedForUsers + (memMsg?.deletedForUsers ?: emptyList()))
-                                            .filter { it.isNotBlank() && it != "self" }
-                                            .toMutableList()
-                                        if (_deletedForMeMessageIds.contains(roomMsg.id)) {
-                                            val myUid = getAuthenticatedUserUid()
-                                            if (myUid.isNotBlank() && !combinedDeleted.contains(myUid)) {
-                                                combinedDeleted.add(myUid)
-                                            }
-                                        }
-                                        val finalText = if (isDelForEveryone) "This message was deleted" else (memMsg?.textContent ?: roomMsg.textContent)
-                                        val finalMedia = if (isDelForEveryone) null else (if (memMsg?.isDeletedForEveryone == true) null else roomMsg.mediaUrl)
-                                        roomMsg.copy(
-                                            isDeletedForEveryone = isDelForEveryone,
-                                            textContent = finalText,
-                                            mediaUrl = finalMedia,
-                                            deletedForUsers = combinedDeleted.distinct()
-                                        )
+                                resultMap.forEach { (canonicalKey, roomList) ->
+                                    val existingList = current[canonicalKey] ?: emptyList()
+                                    val existingById = existingList.associateBy { it.id }.toMutableMap()
+                                    roomList.forEach { roomMsg ->
+                                        val existingMsg = existingById[roomMsg.id]
+                                        existingById[roomMsg.id] = if (existingMsg != null) mergeChatMessages(existingMsg, roomMsg) else roomMsg
                                     }
-                                    mergedMap[key] = mergedList
-                                    Log.e("SCROLL_DEBUG", "_messagesMap emission #${++emissionCounter}, chatKey=$key, entities=${entities.size}")
+                                    mergedMap[canonicalKey] = existingById.values.sortedBy { it.timestamp }
+                                    Log.e("SCROLL_DEBUG", "_messagesMap emission #${++emissionCounter}, chatKey=$canonicalKey, count=${existingById.size}")
                                 }
                                 mergedMap
                             }
@@ -1210,8 +1262,10 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                     val currentMap = _messagesMap.value
                     val entities = mutableListOf<ChatMessageEntity>()
                     val rootObj = org.json.JSONObject()
+                    val seenEntityIds = mutableSetOf<String>()
 
                     currentMap.forEach { (chatKey, msgList) ->
+                        val canonicalKey = getCanonicalMemberId(chatKey)
                         val arr = org.json.JSONArray()
                         msgList.forEach { rawMsg ->
                             val isDelForEveryone = rawMsg.isDeletedForEveryone || _deletedForEveryoneMessageIds.contains(rawMsg.id)
@@ -1228,7 +1282,9 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                                 mediaUrl = if (isDelForEveryone) null else rawMsg.mediaUrl,
                                 deletedForUsers = deletedUsers.distinct()
                             )
-                            entities.add(ChatMessageEntity.fromChatMessage(chatKey, msg))
+                            if (seenEntityIds.add(msg.id)) {
+                                entities.add(ChatMessageEntity.fromChatMessage(canonicalKey, msg))
+                            }
                             val obj = org.json.JSONObject().apply {
                                 put("id", msg.id)
                                 put("senderId", msg.senderId)
@@ -1263,7 +1319,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                             }
                             arr.put(obj)
                         }
-                        rootObj.put(chatKey, arr)
+                        rootObj.put(canonicalKey, arr)
                     }
 
                     // 1. Save to Room Database on IO thread using UPSERT (insertMessages with REPLACE)
@@ -1287,18 +1343,32 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                 // 1. Try loading from Room Database
                 val loadedEntities = database.chatMessageDao().getAllMessagesSync()
                 if (loadedEntities.isNotEmpty()) {
-                    val loadedMap = mutableMapOf<String, MutableList<ChatMessage>>()
+                    val loadedMap = mutableMapOf<String, MutableMap<String, ChatMessage>>()
                     for (entity in loadedEntities) {
                         val msg = entity.toChatMessage()
                         if (msg.isDeletedForEveryone) {
                             _deletedForEveryoneMessageIds.add(msg.id)
                         }
-                        val list = loadedMap.getOrPut(entity.chatKey) { mutableListOf() }
-                        list.add(msg)
+                        val canonicalKey = getCanonicalMemberId(entity.chatKey)
+                        val chatMap = loadedMap.getOrPut(canonicalKey) { mutableMapOf() }
+                        val existing = chatMap[msg.id]
+                        chatMap[msg.id] = if (existing != null) mergeChatMessages(existing, msg) else msg
                     }
-                    val resultMap = loadedMap.mapValues { entry -> entry.value.sortedBy { it.timestamp } }
+                    val resultMap = loadedMap.mapValues { entry -> entry.value.values.sortedBy { it.timestamp } }
                     if (resultMap.isNotEmpty()) {
-                        _messagesMap.update { resultMap }
+                        _messagesMap.update { current ->
+                            val mergedMap = current.toMutableMap()
+                            resultMap.forEach { (canonicalKey, roomList) ->
+                                val existingList = current[canonicalKey] ?: emptyList()
+                                val existingById = existingList.associateBy { it.id }.toMutableMap()
+                                roomList.forEach { roomMsg ->
+                                    val existingMsg = existingById[roomMsg.id]
+                                    existingById[roomMsg.id] = if (existingMsg != null) mergeChatMessages(existingMsg, roomMsg) else roomMsg
+                                }
+                                mergedMap[canonicalKey] = existingById.values.sortedBy { it.timestamp }
+                            }
+                            mergedMap
+                        }
                         Log.i(TAG, "Loaded ${loadedEntities.size} messages from Room Database for offline support")
                         return@launch
                     }
@@ -1314,8 +1384,9 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                 val keys = rootObj.keys()
                 while (keys.hasNext()) {
                     val chatKey = keys.next()
+                    val canonicalKey = getCanonicalMemberId(chatKey)
                     val arr = rootObj.getJSONArray(chatKey)
-                    val msgList = mutableListOf<ChatMessage>()
+                    val msgMap = mutableMapOf<String, ChatMessage>()
                     for (i in 0 until arr.length()) {
                         val obj = arr.getJSONObject(i)
                         val id = obj.optString("id", "")
@@ -1353,38 +1424,50 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                             }
                         }
 
-                        msgList.add(
-                            ChatMessage(
-                                id = id,
-                                senderId = senderId,
-                                senderName = senderName,
-                                receiverId = receiverId,
-                                messageType = type,
-                                textContent = textContent,
-                                mediaUrl = mediaUrl,
-                                timestamp = timestamp,
-                                callType = callType,
-                                callDurationSec = callDurationSec,
-                                isDelivered = isDelivered,
-                                isRead = isRead,
-                                readAtTimestamp = readAtTimestamp,
-                                reaction = reaction,
-                                isStarred = isStarred,
-                                isPinned = isPinned,
-                                replyToMessageId = replyToMessageId,
-                                replyToSenderName = replyToSenderName,
-                                replyToText = replyToText,
-                                isEdited = isEdited,
-                                isDeletedForEveryone = isDeletedForEveryone,
-                                deletedForUsers = deletedForUsers,
-                                fileSizeBytes = fileSizeBytes
-                            )
+                        val parsedMsg = ChatMessage(
+                            id = id,
+                            senderId = senderId,
+                            senderName = senderName,
+                            receiverId = receiverId,
+                            messageType = type,
+                            textContent = textContent,
+                            mediaUrl = mediaUrl,
+                            timestamp = timestamp,
+                            callType = callType,
+                            callDurationSec = callDurationSec,
+                            isDelivered = isDelivered,
+                            isRead = isRead,
+                            readAtTimestamp = readAtTimestamp,
+                            reaction = reaction,
+                            isStarred = isStarred,
+                            isPinned = isPinned,
+                            replyToMessageId = replyToMessageId,
+                            replyToSenderName = replyToSenderName,
+                            replyToText = replyToText,
+                            isEdited = isEdited,
+                            isDeletedForEveryone = isDeletedForEveryone,
+                            deletedForUsers = deletedForUsers,
+                            fileSizeBytes = fileSizeBytes
                         )
+                        val existing = msgMap[id]
+                        msgMap[id] = if (existing != null) mergeChatMessages(existing, parsedMsg) else parsedMsg
                     }
-                    loadedMap[chatKey] = msgList.sortedBy { it.timestamp }
+                    loadedMap[canonicalKey] = msgMap.values.sortedBy { it.timestamp }
                 }
                 if (loadedMap.isNotEmpty()) {
-                    _messagesMap.update { loadedMap }
+                    _messagesMap.update { current ->
+                        val merged = current.toMutableMap()
+                        loadedMap.forEach { (canonicalKey, list) ->
+                            val existing = merged[canonicalKey] ?: emptyList()
+                            val existingMap = existing.associateBy { it.id }.toMutableMap()
+                            list.forEach { msg ->
+                                val prev = existingMap[msg.id]
+                                existingMap[msg.id] = if (prev != null) mergeChatMessages(prev, msg) else msg
+                            }
+                            merged[canonicalKey] = existingMap.values.sortedBy { it.timestamp }
+                        }
+                        merged
+                    }
                     saveMessagesToDisk()
                 }
             } catch (e: Exception) {
@@ -1394,11 +1477,9 @@ class FirebaseChatRepository private constructor(private val context: Context) {
     }
 
     private fun autoStartRealtimeSyncIfLoggedIn() {
-        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
-        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
-        val currentUid = sessionPrefs.getString("user_uid", null) ?: fallbackPrefs.getString("user_uid", null)
-        if (!currentUid.isNullOrBlank()) {
-            startRealtimeMessageSync(currentUid)
+        val authUid = getAuthenticatedUserUid()
+        if (authUid.isNotBlank()) {
+            startRealtimeMessageSync(authUid)
         }
     }
 
@@ -1476,7 +1557,7 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             val isDeletedForMe = _deletedForMeMessageIds.contains(msg.id) ||
                 (currentUid.isNotBlank() && msg.deletedForUsers.contains(currentUid))
             !isDeletedForMe
-        }
+        }.distinctBy { it.id }
     }
 
     fun markMessagesAsRead(memberId: String) {
