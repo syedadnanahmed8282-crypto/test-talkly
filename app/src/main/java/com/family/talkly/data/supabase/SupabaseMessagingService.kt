@@ -411,7 +411,7 @@ object SupabaseMessagingService {
 
             // If there is no valid authenticated session token, do not attempt with publishable key fallback
             if (currentSessionToken.isNullOrBlank()) {
-                Log.w(TAG, "Skipping Cloudinary media deletion: No authenticated user session token available")
+                Log.w(TAG, "[CloudinaryDelete] Skipping Cloudinary media deletion: No authenticated user session token available for messageId=$messageId")
                 return@withContext
             }
 
@@ -435,10 +435,14 @@ object SupabaseMessagingService {
                 .build()
 
             edgeHttpClient.newCall(request).execute().use { response ->
-                Log.d(TAG, "delete-cloudinary-media Edge Function completed with status code: ${response.code}")
+                val resBody = response.body?.string() ?: ""
+                Log.i(
+                    TAG,
+                    "[CloudinaryDelete] HTTP ${response.code} (isSuccessful=${response.isSuccessful}) for messageId=$messageId: response=$resBody"
+                )
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Cloudinary cleanup attempt failed or timed out (continuing with deletion): ${e.localizedMessage}")
+            Log.w(TAG, "[CloudinaryDelete] Cloudinary cleanup attempt failed or timed out (continuing with deletion) for messageId=$messageId: ${e.localizedMessage}")
         }
     }
 

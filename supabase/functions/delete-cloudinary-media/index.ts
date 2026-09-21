@@ -27,13 +27,26 @@ function parseCloudinaryUrl(urlStr: string): { publicId: string; resourceType: s
   try {
     const url = new URL(urlStr);
     const parts = url.pathname.split("/").filter((p) => p.length > 0);
-    // Path looks like: /<cloud_name>/<resource_type>/upload/v<version>/<public_id>.<ext>
-    // or: /<cloud_name>/<resource_type>/upload/<public_id>.<ext>
+    // Path looks like: /<cloud_name>/<resource_type>/upload/.../v<version>/<public_id>.<ext>
+    // or: /<cloud_name>/<resource_type>/upload/.../<public_id>.<ext>
     const uploadIndex = parts.indexOf("upload");
     if (uploadIndex === -1) return null;
 
-    const resourceType = uploadIndex > 0 ? parts[uploadIndex - 1] : "image";
-    const postUploadParts = parts.slice(uploadIndex + 1);
+    let resourceType = uploadIndex > 0 ? parts[uploadIndex - 1] : "image";
+    if (resourceType === "auto") {
+      resourceType = "image";
+    }
+
+    let postUploadParts = parts.slice(uploadIndex + 1);
+
+    // Skip transformation segments (e.g., w_500, c_scale, q_auto, f_auto) if present
+    while (
+      postUploadParts.length > 1 &&
+      (postUploadParts[0].includes("_") || postUploadParts[0].includes(",")) &&
+      !postUploadParts[0].match(/^v\d+$/)
+    ) {
+      postUploadParts = postUploadParts.slice(1);
+    }
 
     // Skip version prefix (e.g., v1712345678)
     const relevantParts = postUploadParts[0]?.match(/^v\d+$/)
@@ -43,9 +56,12 @@ function parseCloudinaryUrl(urlStr: string): { publicId: string; resourceType: s
     if (relevantParts.length === 0) return null;
 
     const fullFileName = relevantParts.join("/");
-    // Strip file extension if present
-    const lastDotIndex = fullFileName.lastIndexOf(".");
-    const publicId = lastDotIndex !== -1 ? fullFileName.substring(0, lastDotIndex) : fullFileName;
+    // For raw resources (documents), public_id includes extension; for image/video, strip extension
+    let publicId = fullFileName;
+    if (resourceType !== "raw") {
+      const lastDotIndex = fullFileName.lastIndexOf(".");
+      publicId = lastDotIndex !== -1 ? fullFileName.substring(0, lastDotIndex) : fullFileName;
+    }
 
     return { publicId, resourceType };
   } catch (_e) {
@@ -72,6 +88,13 @@ serve(async (req: Request) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    if (!supabaseUrl || !serviceRoleKey) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Missing Supabase server configuration" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
 
     const { data: { user }, error: userAuthError } = await supabaseAdmin.auth.getUser(userToken);
@@ -145,8 +168,8 @@ serve(async (req: Request) => {
     if (!apiKey || !apiSecret) {
       console.warn("CLOUDINARY_API_KEY or CLOUDINARY_API_SECRET not configured on server");
       return new Response(
-        JSON.stringify({ success: false, error: "Cloudinary credentials not configured on server" }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ success: false, error: "Cloudinary credentials not configured on server (CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET missing in Supabase Edge Function Secrets)" }),
+        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -180,8 +203,16 @@ serve(async (req: Request) => {
       body: formData,
     });
 
-    const result = await response.json();
-    console.log(`Cloudinary destroy result for message ${messageId} (${targetPublicId}):`, result);
+    const result = await response.json().catch(() => ({}));
+    console.log(`Cloudinary destroy response for message ${messageId} (${targetPublicId}): status=${response.status}`, result);
+
+    if (!response.ok || result?.result !== "ok") {
+      const errorMsg = result?.error?.message || result?.result || `HTTP ${response.status}`;
+      return new Response(
+        JSON.stringify({ success: false, error: `Cloudinary destroy error: ${errorMsg}`, result }),
+        { status: response.ok ? 200 : response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     return new Response(
       JSON.stringify({ success: true, result }),
