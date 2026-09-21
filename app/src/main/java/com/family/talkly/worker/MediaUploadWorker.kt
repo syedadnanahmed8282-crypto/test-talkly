@@ -15,6 +15,7 @@ import com.family.talkly.data.firebase.FirebaseChatRepository
 import com.family.talkly.data.local.TalklyDatabase
 import com.family.talkly.data.local.entity.ChatMessageEntity
 import com.family.talkly.data.models.MessageType
+import com.family.talkly.data.supabase.SupabaseMessagingService
 import com.family.talkly.util.MediaCompressorAndUploader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -67,6 +68,15 @@ class MediaUploadWorker(
         val db = TalklyDatabase.getInstance(appContext)
         val dao = db.chatMessageDao()
         val uploader = MediaCompressorAndUploader(appContext)
+        val repository = FirebaseChatRepository.getInstance(appContext)
+
+        // Scenario 7: User immediately presses Delete for Everyone before upload begins
+        Log.i(TAG, "MediaUploadWorker: deletion check before upload for $messageId")
+        if (isMessageDeletedForEveryone(dao, repository, messageId)) {
+            Log.i(TAG, "MediaUploadWorker: message already deleted, aborting upload for $messageId")
+            cancelNotification(notificationId)
+            return@withContext Result.success()
+        }
 
         // Set foreground info for persistent background execution even if app is killed
         try {
@@ -75,6 +85,8 @@ class MediaUploadWorker(
         } catch (e: Exception) {
             Log.w(TAG, "Foreground notification start exception: ${e.localizedMessage}")
         }
+
+        var tempFileToClean: File? = null
 
         try {
             // 1. Ensure local DB has initial pending/uploading entity
@@ -121,6 +133,16 @@ class MediaUploadWorker(
                     val overallProgress = ((progress / 100.0) * 30).toInt().coerceIn(0, 30)
                     updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
                 }
+                tempFileToClean = compressedFile
+
+                // Check A — before Cloudinary upload
+                Log.i(TAG, "MediaUploadWorker: deletion check before upload for $messageId")
+                if (isMessageDeletedForEveryone(dao, repository, messageId)) {
+                    Log.i(TAG, "MediaUploadWorker: message already deleted, aborting upload for $messageId")
+                    cleanUpTempFile(tempFileToClean)
+                    cancelNotification(notificationId)
+                    return@withContext Result.success()
+                }
 
                 val compressedPath = compressedFile.absolutePath
                 dao.updateUploadState(
@@ -142,9 +164,19 @@ class MediaUploadWorker(
                     val overallProgress = ((progress / 100.0) * 30).toInt().coerceIn(0, 30)
                     updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
                 }
+                tempFileToClean = compressedFile
 
                 if (!compressedFile.exists() || compressedFile.length() <= 0) {
                     throw IOException("Image compression failed to produce a valid file")
+                }
+
+                // Check A — before Cloudinary upload
+                Log.i(TAG, "MediaUploadWorker: deletion check before upload for $messageId")
+                if (isMessageDeletedForEveryone(dao, repository, messageId)) {
+                    Log.i(TAG, "MediaUploadWorker: message already deleted, aborting upload for $messageId")
+                    cleanUpTempFile(tempFileToClean)
+                    cancelNotification(notificationId)
+                    return@withContext Result.success()
                 }
 
                 compressedImageSizeBytes = compressedFile.length()
@@ -165,6 +197,12 @@ class MediaUploadWorker(
                         updateProgressState(dao, messageId, overallProgress, notificationId, statusText)
                     }
                 } catch (e: Exception) {
+                    if (isMessageDeletedForEveryone(dao, repository, messageId)) {
+                        Log.i(TAG, "MediaUploadWorker: message already deleted during upload failure, aborting for $messageId")
+                        cleanUpTempFile(tempFileToClean)
+                        cancelNotification(notificationId)
+                        return@withContext Result.success()
+                    }
                     Log.w(TAG, "Cloudinary upload failed for image, using fallback: ${e.localizedMessage}")
                     if (compressedFile.exists() && compressedFile.length() > 0) {
                         uploader.encodeFileToBase64(compressedFile)
@@ -176,19 +214,49 @@ class MediaUploadWorker(
                 val filePath = if (localMediaUrl.startsWith("file://")) Uri.parse(localMediaUrl).path ?: "" else localMediaUrl
                 val file = File(filePath)
                 val remotePath = "family_chats/${recipientId}/voice_notes/vn_${System.currentTimeMillis()}.m4a"
+
+                // Check A — before Cloudinary upload
+                Log.i(TAG, "MediaUploadWorker: deletion check before upload for $messageId")
+                if (isMessageDeletedForEveryone(dao, repository, messageId)) {
+                    Log.i(TAG, "MediaUploadWorker: message already deleted, aborting upload for $messageId")
+                    cancelNotification(notificationId)
+                    return@withContext Result.success()
+                }
+
                 finalRemoteUrl = try {
                     uploader.uploadMediaFile(file, remotePath) { progress, statusText ->
                         updateProgressState(dao, messageId, progress, notificationId, statusText)
                     }
                 } catch (e: Exception) {
+                    if (isMessageDeletedForEveryone(dao, repository, messageId)) {
+                        Log.i(TAG, "MediaUploadWorker: message already deleted during upload failure, aborting for $messageId")
+                        cancelNotification(notificationId)
+                        return@withContext Result.success()
+                    }
                     if (file.exists() && file.length() > 0) uploader.encodeFileToBase64(file) else localMediaUrl
                 }
+            }
+
+            // Check B — after Cloudinary upload
+            Log.i(TAG, "MediaUploadWorker: upload completed, rechecking deletion state for $messageId")
+            if (isMessageDeletedForEveryone(dao, repository, messageId)) {
+                Log.i(TAG, "MediaUploadWorker: message deleted during upload, cleaning orphan asset for $messageId ($finalRemoteUrl)")
+                if (finalRemoteUrl.contains("cloudinary.com", ignoreCase = true)) {
+                    val cleanupSuccess = SupabaseMessagingService.deleteCloudinaryOrphanMedia(messageId, finalRemoteUrl)
+                    if (cleanupSuccess) {
+                        Log.i(TAG, "MediaUploadWorker: orphan Cloudinary cleanup succeeded for $messageId")
+                    } else {
+                        Log.w(TAG, "MediaUploadWorker: orphan Cloudinary cleanup failed for $messageId")
+                    }
+                }
+                cleanUpTempFile(tempFileToClean)
+                cancelNotification(notificationId)
+                return@withContext Result.success()
             }
 
             // 3. Complete process & sync message to Firebase Repository
             updateProgressState(dao, messageId, 100, notificationId, "Upload complete!")
 
-            val repository = FirebaseChatRepository.getInstance(appContext)
             val originalTimestamp = dao.getMessageById(messageId)?.timestamp ?: System.currentTimeMillis()
             repository.sendMessage(
                 memberId = recipientId.ifBlank { chatKey },
@@ -225,10 +293,18 @@ class MediaUploadWorker(
                 )
             }
 
+            cleanUpTempFile(tempFileToClean)
             cancelNotification(notificationId)
             Log.i(TAG, "Video/Media upload worker successfully completed for $messageId")
             Result.success()
         } catch (e: Exception) {
+            val repository = FirebaseChatRepository.getInstance(appContext)
+            if (isMessageDeletedForEveryone(dao, repository, messageId)) {
+                Log.i(TAG, "MediaUploadWorker: error caught but message is already deleted, aborting retry for $messageId")
+                cleanUpTempFile(tempFileToClean)
+                cancelNotification(notificationId)
+                return@withContext Result.success()
+            }
             Log.e(TAG, "MediaUploadWorker error for $messageId: ${e.localizedMessage}", e)
             val currentAttempt = runAttemptCount
             if (currentAttempt < 3) {
@@ -246,6 +322,46 @@ class MediaUploadWorker(
                 showErrorNotification(notificationId, "Video upload failed. Tap to retry in chat.")
                 Result.failure()
             }
+        }
+    }
+
+    private suspend fun isMessageDeletedForEveryone(
+        dao: com.family.talkly.data.local.dao.ChatMessageDao,
+        repository: FirebaseChatRepository,
+        messageId: String
+    ): Boolean {
+        // 1. In-memory check on repository
+        if (repository.isMessageDeletedForEveryone(messageId)) {
+            return true
+        }
+        // 2. Room local DB check
+        val localEntity = try {
+            dao.getMessageById(messageId)
+        } catch (e: Exception) {
+            null
+        }
+        if (localEntity != null && (localEntity.isDeletedForEveryone || localEntity.textContent == "This message was deleted")) {
+            return true
+        }
+        // 3. Supabase remote check
+        val isRemoteDeleted = try {
+            SupabaseMessagingService.isMessageDeletedForEveryone(messageId)
+        } catch (e: Exception) {
+            false
+        }
+        return isRemoteDeleted
+    }
+
+    private fun cleanUpTempFile(file: File?) {
+        try {
+            if (file != null && file.exists()) {
+                val cachePath = appContext.cacheDir.absolutePath
+                if (file.absolutePath.startsWith(cachePath)) {
+                    file.delete()
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to clean up temp file ${file?.name}: ${e.localizedMessage}")
         }
     }
 

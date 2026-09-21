@@ -12,6 +12,8 @@ interface DeleteMediaRequest {
   messageId?: string;
   media_url?: string;
   mediaUrl?: string;
+  deleted_cleanup?: boolean;
+  deletedCleanup?: boolean;
 }
 
 // SHA-1 helper using Web Crypto API
@@ -108,11 +110,12 @@ serve(async (req: Request) => {
     const body: DeleteMediaRequest = await req.json().catch(() => ({}));
     const messageId = body.message_id || body.messageId;
     let targetMediaUrl = body.media_url || body.mediaUrl;
+    const isOrphanCleanup = body.deleted_cleanup === true || body.deletedCleanup === true;
 
     // 2. Reject requests without a valid messageId (do NOT trust arbitrary client-provided URLs)
     if (!messageId) {
       return new Response(
-        JSON.stringify({ success: false, error: "Missing message_id parameter to authorize deletion" }),
+        JSON.stringify({ success: false, ok: false, error: "Missing message_id parameter to authorize deletion" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -126,7 +129,7 @@ serve(async (req: Request) => {
 
     if (msgError || !messageRecord) {
       return new Response(
-        JSON.stringify({ success: false, error: "Message not found" }),
+        JSON.stringify({ success: false, ok: false, error: "Message not found" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -134,31 +137,55 @@ serve(async (req: Request) => {
     // Caller must be sender or receiver of the message
     if (messageRecord.sender_id !== user.id && messageRecord.receiver_id !== user.id) {
       return new Response(
-        JSON.stringify({ success: false, error: "Forbidden: Not authorized to delete media for this message" }),
+        JSON.stringify({ success: false, ok: false, error: "Forbidden: Not authorized to delete media for this message" }),
         { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // If media_url was not provided, use the message's recorded media_url
-    if (!targetMediaUrl && messageRecord.media_url) {
-      targetMediaUrl = messageRecord.media_url;
-    }
+    if (isOrphanCleanup) {
+      // Orphan cleanup path (race condition where media upload completed after Delete-for-Everyone)
+      // Requirements:
+      // 1. Valid authenticated Supabase JWT (verified above)
+      // 2. Valid message_id (verified above)
+      // 3. Valid Cloudinary URL
+      // 4. Message exists (verified above)
+      // 5. Caller is authorized for that message (verified above)
+      // 6. is_deleted_for_everyone == true
+      // 7. deleted_cleanup == true
+      if (!targetMediaUrl || typeof targetMediaUrl !== "string" || !targetMediaUrl.includes("cloudinary.com")) {
+        return new Response(
+          JSON.stringify({ success: false, ok: false, error: "Valid Cloudinary media_url is required for orphan cleanup" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
 
-    // If message already had its media URL cleared or was already deleted, and targetMediaUrl is provided,
-    // verify it matches what was recorded if recorded media_url is still present
-    if (messageRecord.media_url && targetMediaUrl && messageRecord.media_url !== targetMediaUrl) {
-      return new Response(
-        JSON.stringify({ success: false, error: "Target media URL does not match message record" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+      if (messageRecord.is_deleted_for_everyone !== true) {
+        return new Response(
+          JSON.stringify({ success: false, ok: false, error: "Message must be deleted for everyone to perform orphan cleanup" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    } else {
+      // Normal Delete-for-Everyone path
+      if (!targetMediaUrl && messageRecord.media_url) {
+        targetMediaUrl = messageRecord.media_url;
+      }
 
-    if (!targetMediaUrl) {
-      // Message has no media to delete
-      return new Response(
-        JSON.stringify({ success: true, message: "No media associated with this message" }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      if (!targetMediaUrl) {
+        // Message has no media to delete
+        return new Response(
+          JSON.stringify({ success: true, ok: true, cloudinaryResult: "ok", message: "No media associated with this message" }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Normal security validation: supplied URL must match the message's recorded media_url
+      if (messageRecord.media_url !== targetMediaUrl) {
+        return new Response(
+          JSON.stringify({ success: false, ok: false, error: "Target media URL does not match message record" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
     }
 
     const cloudName = Deno.env.get("CLOUDINARY_CLOUD_NAME") || "tsnijtq5";
@@ -168,7 +195,7 @@ serve(async (req: Request) => {
     if (!apiKey || !apiSecret) {
       console.warn("CLOUDINARY_API_KEY or CLOUDINARY_API_SECRET not configured on server");
       return new Response(
-        JSON.stringify({ success: false, error: "Cloudinary credentials not configured on server (CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET missing in Supabase Edge Function Secrets)" }),
+        JSON.stringify({ success: false, ok: false, error: "Cloudinary credentials not configured on server (CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET missing in Supabase Edge Function Secrets)" }),
         { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -176,7 +203,7 @@ serve(async (req: Request) => {
     const parsed = parseCloudinaryUrl(targetMediaUrl);
     if (!parsed || !parsed.publicId) {
       return new Response(
-        JSON.stringify({ success: false, error: "Could not parse Cloudinary public_id from media URL" }),
+        JSON.stringify({ success: false, ok: false, error: "Could not parse Cloudinary public_id from media URL" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -206,16 +233,28 @@ serve(async (req: Request) => {
     const result = await response.json().catch(() => ({}));
     console.log(`Cloudinary destroy response for message ${messageId} (${targetPublicId}): status=${response.status}`, result);
 
-    if (!response.ok || result?.result !== "ok") {
+    const isOk = response.ok && result?.result === "ok";
+    if (!isOk) {
       const errorMsg = result?.error?.message || result?.result || `HTTP ${response.status}`;
       return new Response(
-        JSON.stringify({ success: false, error: `Cloudinary destroy error: ${errorMsg}`, result }),
-        { status: response.ok ? 200 : response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({
+          success: false,
+          ok: false,
+          cloudinaryResult: result?.result || "error",
+          error: `Cloudinary destroy error: ${errorMsg}`,
+          result,
+        }),
+        { status: response.ok ? 400 : response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     return new Response(
-      JSON.stringify({ success: true, result }),
+      JSON.stringify({
+        success: true,
+        ok: true,
+        cloudinaryResult: result?.result || "ok",
+        result,
+      }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err: any) {

@@ -398,10 +398,14 @@ object SupabaseMessagingService {
             .build()
     }
 
-    private suspend fun awaitCloudinaryMediaDeletion(messageId: String, mediaUrl: String) = withContext(Dispatchers.IO) {
+    suspend fun awaitCloudinaryMediaDeletion(
+        messageId: String,
+        mediaUrl: String,
+        isOrphanCleanup: Boolean = false
+    ): Boolean = withContext(Dispatchers.IO) {
         try {
             if (mediaUrl.isBlank() || !mediaUrl.contains("cloudinary.com", ignoreCase = true)) {
-                return@withContext
+                return@withContext true
             }
             val currentSessionToken = try {
                 SupabaseClientProvider.auth.currentAccessTokenOrNull()
@@ -412,7 +416,7 @@ object SupabaseMessagingService {
             // If there is no valid authenticated session token, do not attempt with publishable key fallback
             if (currentSessionToken.isNullOrBlank()) {
                 Log.w(TAG, "[CloudinaryDelete] Skipping Cloudinary media deletion: No authenticated user session token available for messageId=$messageId")
-                return@withContext
+                return@withContext false
             }
 
             val supabaseUrl = SupabaseClientProvider.supabaseUrl
@@ -421,6 +425,9 @@ object SupabaseMessagingService {
             val json = JSONObject().apply {
                 put("message_id", messageId)
                 put("media_url", mediaUrl)
+                if (isOrphanCleanup) {
+                    put("deleted_cleanup", true)
+                }
             }
 
             val requestBody = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
@@ -438,18 +445,68 @@ object SupabaseMessagingService {
                 val resBody = response.body?.string() ?: ""
                 Log.i(
                     TAG,
-                    "[CloudinaryDelete] HTTP ${response.code} (isSuccessful=${response.isSuccessful}) for messageId=$messageId: response=$resBody"
+                    "[CloudinaryDelete] HTTP ${response.code} (isSuccessful=${response.isSuccessful}) for messageId=$messageId (orphanCleanup=$isOrphanCleanup): response=$resBody"
                 )
+                if (!response.isSuccessful) {
+                    return@withContext false
+                }
+                val jsonRes = try { JSONObject(resBody) } catch (e: Exception) { null }
+                val ok = jsonRes?.optBoolean("ok", false) ?: false
+                val success = jsonRes?.optBoolean("success", false) ?: false
+                val cloudinaryResult = jsonRes?.optString("cloudinaryResult", "") ?: ""
+                val innerResultOk = jsonRes?.optJSONObject("result")?.optString("result", "").equals("ok", ignoreCase = true)
+                val isCloudinaryOk = cloudinaryResult.equals("ok", ignoreCase = true) || innerResultOk
+
+                if ((ok || success) && isCloudinaryOk) {
+                    true
+                } else {
+                    Log.w(TAG, "[CloudinaryDelete] Media deletion rejected or failed for messageId=$messageId: resBody=$resBody")
+                    false
+                }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "[CloudinaryDelete] Cloudinary cleanup attempt failed or timed out (continuing with deletion) for messageId=$messageId: ${e.localizedMessage}")
+            Log.w(TAG, "[CloudinaryDelete] Cloudinary cleanup attempt failed or timed out for messageId=$messageId: ${e.localizedMessage}")
+            false
+        }
+    }
+
+    suspend fun deleteCloudinaryOrphanMedia(messageId: String, mediaUrl: String): Boolean = withContext(Dispatchers.IO) {
+        if (mediaUrl.isBlank() || !mediaUrl.contains("cloudinary.com", ignoreCase = true)) {
+            return@withContext false
+        }
+        awaitCloudinaryMediaDeletion(messageId, mediaUrl, isOrphanCleanup = true)
+    }
+
+    suspend fun isMessageDeletedForEveryone(messageId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val list = SupabaseClientProvider.client.postgrest["messages"]
+                .select {
+                    filter {
+                        eq("id", messageId)
+                    }
+                    limit(1)
+                }
+                .decodeList<SupabaseMessage>()
+            val msg = list.firstOrNull()
+            msg?.isDeletedForEveryone == true || msg?.textContent == "This message was deleted"
+        } catch (e: Exception) {
+            Log.w(TAG, "Error checking if message is deleted for everyone in Supabase: ${e.localizedMessage}")
+            false
         }
     }
 
     suspend fun deleteMessageForEveryone(messageId: String, mediaUrl: String? = null): Boolean = withContext(Dispatchers.IO) {
         try {
-            // 1. Cloudinary cleanup attempt before clearing media_url (awaitable with timeout, never blocks on failure)
-            if (!mediaUrl.isNullOrBlank()) {
+            val isCloudinary = !mediaUrl.isNullOrBlank() && mediaUrl.contains("cloudinary.com", ignoreCase = true)
+            // 1. Cloudinary cleanup attempt before clearing media_url
+            if (isCloudinary) {
+                val deletionSuccess = awaitCloudinaryMediaDeletion(messageId, mediaUrl!!)
+                if (!deletionSuccess) {
+                    Log.w(TAG, "Delete-for-Everyone aborted for $messageId: Cloudinary media deletion failed")
+                    return@withContext false
+                }
+            } else if (!mediaUrl.isNullOrBlank()) {
+                // Non-Cloudinary media (or local path/base64), best-effort cleanup
                 awaitCloudinaryMediaDeletion(messageId, mediaUrl)
             }
 

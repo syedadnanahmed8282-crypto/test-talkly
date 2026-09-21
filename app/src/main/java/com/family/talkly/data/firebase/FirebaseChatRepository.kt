@@ -1791,10 +1791,17 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         repositoryScope.launch(Dispatchers.IO) {
             for (msg in targetMessages) {
                 val mediaUrlToDelete = msg.mediaUrl
-                try {
+                val deleteSuccess = try {
                     SupabaseMessagingService.deleteMessageForEveryone(msg.id, mediaUrlToDelete)
                 } catch (e: Exception) {
                     Log.w(TAG, "Error in bulk deleteMessageForEveryone for ${msg.id}: ${e.localizedMessage}")
+                    false
+                }
+                // If Cloudinary media deletion failed, do not update Room as deleted
+                val isCloudinary = !mediaUrlToDelete.isNullOrBlank() && mediaUrlToDelete.contains("cloudinary.com", ignoreCase = true)
+                if (isCloudinary && !deleteSuccess) {
+                    Log.w(TAG, "Skipping Room delete update for ${msg.id} because Cloudinary deletion failed")
+                    continue
                 }
                 try {
                     database.chatMessageDao().updateMessageDeletion(
@@ -1809,6 +1816,15 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         }
 
         return targetMessages.size
+    }
+
+    fun isMessageDeletedForEveryone(messageId: String): Boolean {
+        if (_deletedForEveryoneMessageIds.contains(messageId)) return true
+        for (list in _messagesMap.value.values) {
+            val found = list.firstOrNull { it.id == messageId }
+            if (found != null && found.isDeletedForEveryone) return true
+        }
+        return false
     }
 
     fun editMessage(memberId: String, messageId: String, newText: String): Boolean {
@@ -2909,6 +2925,11 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             }
         } else {
             java.util.UUID.randomUUID().toString()
+        }
+
+        if (isMessageDeletedForEveryone(canonicalMessageId)) {
+            Log.w(TAG, "sendMessage aborted for $canonicalMessageId: message is already marked deleted for everyone")
+            return
         }
 
         val newMessage = ChatMessage(
