@@ -1,8 +1,10 @@
 package com.family.talkly.ui.components
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.material3.MaterialTheme
@@ -100,10 +102,65 @@ fun openUrlSafely(context: Context, urlString: String) {
             trimmed
         }
         val uri = Uri.parse(validUrl)
-        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+
+        // 1. First attempt to resolve URL using Android native App Link / Intent system prioritizing non-browser apps
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val appIntent = Intent(Intent.ACTION_VIEW, uri).apply {
+                    addCategory(Intent.CATEGORY_BROWSABLE)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REQUIRE_NON_BROWSER)
+                }
+                context.startActivity(appIntent)
+                return
+            } catch (_: ActivityNotFoundException) {
+                // No verified / default non-browser app handled this via require-non-browser.
+                // Fall through to query for any installed compatible app.
+            }
+        }
+
+        // 2. Query packageManager to find if any installed non-browser app is registered for this specific URL
+        // (handles unverified App Links or pre-Android 11 deep link handlers)
+        try {
+            val viewIntent = Intent(Intent.ACTION_VIEW, uri).apply {
+                addCategory(Intent.CATEGORY_BROWSABLE)
+            }
+            val genericBrowserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com")).apply {
+                addCategory(Intent.CATEGORY_BROWSABLE)
+            }
+            val browserPackages = context.packageManager
+                .queryIntentActivities(genericBrowserIntent, 0)
+                .mapNotNull { it.activityInfo?.packageName }
+                .toSet()
+
+            val resolvedActivities = context.packageManager.queryIntentActivities(viewIntent, 0)
+            val nonBrowserActivity = resolvedActivities.firstOrNull {
+                it.activityInfo != null && !browserPackages.contains(it.activityInfo.packageName)
+            }
+
+            if (nonBrowserActivity != null) {
+                val specificAppIntent = Intent(Intent.ACTION_VIEW, uri).apply {
+                    setPackage(nonBrowserActivity.activityInfo.packageName)
+                    addCategory(Intent.CATEGORY_BROWSABLE)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(specificAppIntent)
+                return
+            }
+        } catch (_: Throwable) {
+            // If package manager query fails, continue to browser fallback
+        }
+
+        // 3. Fallback to normal browser
+        val browserIntent = Intent(Intent.ACTION_VIEW, uri).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(intent)
+        context.startActivity(browserIntent)
+    } catch (e: ActivityNotFoundException) {
+        Log.e("UrlAwareMessageText", "No activity found to handle URL: $urlString", e)
+        try {
+            Toast.makeText(context, "Cannot open link: $urlString", Toast.LENGTH_SHORT).show()
+        } catch (_: Throwable) {}
     } catch (t: Throwable) {
         Log.e("UrlAwareMessageText", "Failed to open URL: $urlString", t)
         try {

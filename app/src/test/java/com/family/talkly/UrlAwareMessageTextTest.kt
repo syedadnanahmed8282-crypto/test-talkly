@@ -161,4 +161,66 @@ class UrlAwareMessageTextTest {
         assertTrue(segments[1].isUrl)
         assertEquals(" right here", segments[2].text)
     }
+
+    @Test
+    fun testYouTubeUrl() {
+        val input = "Check out this video: https://youtube.com/watch?v=dQw4w9WgXcQ"
+        val segments = parseUrlSegments(input)
+        assertEquals(2, segments.size)
+        assertEquals("Check out this video: ", segments[0].text)
+        assertFalse(segments[0].isUrl)
+        assertEquals("https://youtube.com/watch?v=dQw4w9WgXcQ", segments[1].text)
+        assertTrue(segments[1].isUrl)
+        assertEquals("https://youtube.com/watch?v=dQw4w9WgXcQ", segments[1].url)
+    }
+
+    @Test
+    fun testInstagramUrl() {
+        val input = "Follow on Instagram: https://instagram.com/talkly_app"
+        val segments = parseUrlSegments(input)
+        assertEquals(2, segments.size)
+        assertEquals("Follow on Instagram: ", segments[0].text)
+        assertFalse(segments[0].isUrl)
+        assertEquals("https://instagram.com/talkly_app", segments[1].text)
+        assertTrue(segments[1].isUrl)
+        assertEquals("https://instagram.com/talkly_app", segments[1].url)
+    }
+
+    @Test
+    fun testWhatsAppUrl() {
+        val input = "Message me on WhatsApp: https://wa.me/1234567890"
+        val segments = parseUrlSegments(input)
+        assertEquals(2, segments.size)
+        assertEquals("Message me on WhatsApp: ", segments[0].text)
+        assertFalse(segments[0].isUrl)
+        assertEquals("https://wa.me/1234567890", segments[1].text)
+        assertTrue(segments[1].isUrl)
+        assertEquals("https://wa.me/1234567890", segments[1].url)
+    }
+
+    @Test
+    fun testNormalWebsiteUrl() {
+        val input = "Visit https://example.com for more info"
+        val segments = parseUrlSegments(input)
+        assertEquals(3, segments.size)
+        assertEquals("Visit ", segments[0].text)
+        assertFalse(segments[0].isUrl)
+        assertEquals("https://example.com", segments[1].text)
+        assertTrue(segments[1].isUrl)
+        assertEquals(" for more info", segments[2].text)
+        assertFalse(segments[2].isUrl)
+    }
+
+    @Test
+    fun testMultipleAppAndWebUrlsMultiline() {
+        val input = "Links:\nhttps://youtube.com/watch?v=123\nhttps://instagram.com/profile\nhttps://wa.me/9876\nhttps://example.com"
+        val segments = parseUrlSegments(input)
+        val urlSegments = segments.filter { it.isUrl }
+        assertEquals(4, urlSegments.size)
+        assertEquals("https://youtube.com/watch?v=123", urlSegments[0].url)
+        assertEquals("https://instagram.com/profile", urlSegments[1].url)
+        assertEquals("https://wa.me/9876", urlSegments[2].url)
+        assertEquals("https://example.com", urlSegments[3].url)
+        assertEquals(input, segments.joinToString("") { it.text })
+    }
 }
