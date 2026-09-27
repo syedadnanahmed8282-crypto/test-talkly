@@ -12,8 +12,6 @@ import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.PowerManager
-import android.provider.Settings
 import android.util.Log
 import android.util.Rational
 import android.view.WindowManager
@@ -89,7 +87,6 @@ class MainActivity : ComponentActivity() {
 
         // ===== DEBUG: install crash handler FIRST so it catches everything after this point =====
         CrashHandler.install(applicationContext)
-        com.family.talkly.service.MessageSyncForegroundService.start(applicationContext)
 
         enableEdgeToEdge()
 
@@ -128,9 +125,6 @@ class MainActivity : ComponentActivity() {
 
         // Setup lifecycle & network-aware realtime reconnection for messages
         setupLifecycleAndNetworkSync()
-
-        // Request battery optimization exemption for uninterrupted push delivery
-        requestBatteryOptimizationExemption()
 
         // Schedule WorkManager job for deleting expired Firestore messages (>48 hours old)
         DeleteExpiredMessagesWorker.schedulePeriodicCleanup(applicationContext)
@@ -409,22 +403,6 @@ class MainActivity : ComponentActivity() {
                 )
                 zegoManager.setIncomingCallFromKilledState(incomingMember, roomId, callType)
             }
-        }
-    }
-
-    private fun requestBatteryOptimizationExemption() {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
-                if (powerManager != null && !powerManager.isIgnoringBatteryOptimizations(packageName)) {
-                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                        data = Uri.parse("package:$packageName")
-                    }
-                    startActivity(intent)
-                }
-            }
-        } catch (e: Exception) {
-            android.util.Log.w("MainActivity", "Battery optimization request failed/ignored: ${e.localizedMessage}")
         }
     }
 

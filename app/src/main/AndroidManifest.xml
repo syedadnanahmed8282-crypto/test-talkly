@@ -24,7 +24,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" tools:ignore="ScopedStorage" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
@@ -90,11 +89,6 @@
             android:exported="false"
             android:foregroundServiceType="phoneCall|microphone|camera">
         </service>
-
-        <service
-            android:name=".service.MessageSyncForegroundService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
 
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
