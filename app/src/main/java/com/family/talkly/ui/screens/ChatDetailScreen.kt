@@ -176,6 +176,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import coil.imageLoader
+import coil.request.ImageRequest
+import coil.request.SuccessResult
+import android.graphics.drawable.BitmapDrawable
 import com.family.talkly.data.models.CallType
 import com.family.talkly.data.models.ChatMessage
 import com.family.talkly.data.models.FamilyMember
@@ -4731,17 +4735,15 @@ private fun isFinalMediaAvailable(message: ChatMessage): Boolean {
 // =========================================================================
 
 /**
- * Realistic iPhone-style Liquid Glass capsule surface for the conversation header.
- * Optically integrates with the ACTUAL underlying wallpaper/background without
- * any fixed artificial cyan, blue, or colored tint in the glass body.
+ * TALKLY FLOATING LIQUID GLASS CAPSULE HEADER
  *
- * Visual Stack:
- * 1. ACTUAL BACKGROUND/WALLPAPER (Diffused & blurred backdrop layer)
- * 2. SUBTLE OPTICAL REFRACTION (Neutral luminance transmission & thickness variation)
- * 3. TRANSPARENT GLASS BODY (Center remains clear and transparent to the backdrop)
- * 4. INTERNAL LIGHT RESPONSE & CONVEX SHEEN (Cylindrical ambient reflection)
- * 5. DIRECTIONAL SPECULAR EDGE REFLECTION (Top-left keylight glints, curved corner reflections, soft dark bottom rim)
- * 6. PHYSICAL DEPTH & SHADOW (Soft floating elevation above chat wallpaper)
+ * Implements real physical transparent glass floating above the continuous chat wallpaper:
+ * 1. PHYSICAL ELEVATION & DEPTH (Drop shadow separating glass plane from wallpaper)
+ * 2. SUBTLE BACKDROP DIFFUSION & TRANSMISSION (Softening content moving underneath while preserving transparency)
+ * 3. BACKGROUND REACTION (Dynamically adapts to underlying wallpaper brightness, luminance & hue)
+ * 4. ULTRA-LOW OPACITY GLASS TINT (Clear center, wallpaper perceptible through the material)
+ * 5. CONVEX OPTICAL SHEEN & SPECULAR RIM (Directional keylight glint, inner bevel, bottom refraction hairline)
+ * 6. CRISP PROFILE / HEADER CONTENT (Protected and clearly readable across all wallpaper types)
  */
 @Composable
 private fun LiquidGlassHeaderCapsule(
@@ -4750,158 +4752,151 @@ private fun LiquidGlassHeaderCapsule(
     shape: RoundedCornerShape = RoundedCornerShape(22.dp),
     content: @Composable () -> Unit
 ) {
-    val cleanVal = wallpaperValue.trim()
-    val isWallpaperImage = cleanVal.startsWith("http://") ||
-            cleanVal.startsWith("https://") ||
-            cleanVal.startsWith("content://") ||
-            cleanVal.startsWith("file://") ||
-            cleanVal.startsWith("android.resource://")
+    val context = LocalContext.current
+    val cleanVal = remember(wallpaperValue) { wallpaperValue.trim() }
+
+    val isWallpaperImage = remember(cleanVal) {
+        cleanVal.startsWith("http://") ||
+                cleanVal.startsWith("https://") ||
+                cleanVal.startsWith("content://") ||
+                cleanVal.startsWith("file://") ||
+                cleanVal.startsWith("android.resource://")
+    }
+
+    var sampledColor by remember(cleanVal) { mutableStateOf<Color?>(null) }
+    var sampledLuminance by remember(cleanVal) { mutableFloatStateOf(0.12f) }
+
+    LaunchedEffect(cleanVal) {
+        if (isWallpaperImage) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val request = ImageRequest.Builder(context)
+                        .data(cleanVal)
+                        .size(32, 16)
+                        .allowHardware(false)
+                        .build()
+                    val drawable = (context.imageLoader.execute(request) as? SuccessResult)?.drawable
+                    val bitmap = (drawable as? BitmapDrawable)?.bitmap
+                    if (bitmap != null && !bitmap.isRecycled) {
+                        var rSum = 0L
+                        var gSum = 0L
+                        var bSum = 0L
+                        var count = 0
+                        val w = bitmap.width
+                        val h = bitmap.height
+                        for (x in 0 until w step 2) {
+                            for (y in 0 until (h / 2).coerceAtLeast(1) step 2) {
+                                val pixel = bitmap.getPixel(x, y)
+                                rSum += android.graphics.Color.red(pixel)
+                                gSum += android.graphics.Color.green(pixel)
+                                bSum += android.graphics.Color.blue(pixel)
+                                count++
+                            }
+                        }
+                        if (count > 0) {
+                            val avgR = (rSum / count).toInt()
+                            val avgG = (gSum / count).toInt()
+                            val avgB = (bSum / count).toInt()
+                            val lum = (0.299f * avgR + 0.587f * avgG + 0.114f * avgB) / 255f
+                            sampledColor = Color(avgR, avgG, avgB)
+                            sampledLuminance = lum
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Fallback to default subtle dark neutral
+                }
+            }
+        } else if (cleanVal.startsWith("gradient:")) {
+            val hexList = cleanVal.removePrefix("gradient:").split(",")
+            val firstHex = hexList.firstOrNull()?.trim()
+            if (!firstHex.isNullOrBlank()) {
+                try {
+                    val parsed = android.graphics.Color.parseColor(firstHex)
+                    val r = android.graphics.Color.red(parsed)
+                    val g = android.graphics.Color.green(parsed)
+                    val b = android.graphics.Color.blue(parsed)
+                    val lum = (0.299f * r + 0.587f * g + 0.114f * b) / 255f
+                    sampledColor = Color(r, g, b)
+                    sampledLuminance = lum
+                } catch (_: Exception) {}
+            }
+        } else if (cleanVal.startsWith("#") && cleanVal != "#080B10") {
+            try {
+                val parsed = android.graphics.Color.parseColor(cleanVal)
+                val r = android.graphics.Color.red(parsed)
+                val g = android.graphics.Color.green(parsed)
+                val b = android.graphics.Color.blue(parsed)
+                val lum = (0.299f * r + 0.587f * g + 0.114f * b) / 255f
+                sampledColor = Color(r, g, b)
+                sampledLuminance = lum
+            } catch (_: Exception) {}
+        } else {
+            sampledColor = TalklyChatBg
+            sampledLuminance = 0.05f
+        }
+    }
+
+    val isVeryBright = sampledLuminance > 0.65f
+    val isBright = sampledLuminance > 0.45f
+    val isVeryDark = sampledLuminance < 0.20f
+    val ambientTint = sampledColor ?: Color(0xFF10141D)
 
     Box(
         modifier = modifier
-            // Physical soft depth / drop shadow separating the glass from underlying wallpaper
+            // 0. PHYSICAL ELEVATION & SHADOW SEPARATION
             .shadow(
-                elevation = 8.dp,
+                elevation = 10.dp,
                 shape = shape,
-                ambientColor = Color(0x60000000),
-                spotColor = Color(0x75000000)
+                ambientColor = Color.Black.copy(alpha = if (isVeryBright) 0.45f else 0.35f),
+                spotColor = Color.Black.copy(alpha = if (isVeryBright) 0.60f else 0.45f)
             )
             .clip(shape)
     ) {
         // =========================================================================
-        // 1. ACTUAL BACKGROUND/WALLPAPER OPTICAL DIFFUSION & TRANSMISSION
-        // Optical frosted transmission allowing messages/content passing behind the header
-        // and the background wallpaper to remain visible through the glass body.
+        // 1. SUBTLE BACKDROP DIFFUSION & TRANSMISSION SCATTERING
+        // Allows continuous wallpaper and messages moving underneath to remain visible
+        // while softly diffusing high-contrast edges and text.
         // =========================================================================
-        if (isWallpaperImage) {
-            AsyncImage(
-                model = cleanVal,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                alignment = Alignment.TopCenter,
-                modifier = Modifier
-                    .matchParentSize()
-                    .graphicsLayer {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                            renderEffect = android.graphics.RenderEffect.createBlurEffect(
-                                14f, 14f, android.graphics.Shader.TileMode.CLAMP
-                            ).asComposeRenderEffect()
-                        }
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .graphicsLayer {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        renderEffect = android.graphics.RenderEffect.createBlurEffect(
+                            16f, 16f, android.graphics.Shader.TileMode.CLAMP
+                        ).asComposeRenderEffect()
                     }
-            )
-            // Ultra-subtle ambient contrast veil: mostly clear at center, gentle vignette at edges
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(
-                                Color.Black.copy(alpha = 0.08f), // Clear center
-                                Color.Black.copy(alpha = 0.22f)  // Soft edge vignette
-                            )
-                        )
-                    )
-            )
-        } else if (cleanVal.startsWith("gradient:")) {
-            val hexList = cleanVal.removePrefix("gradient:").split(",")
-            val colors = hexList.mapNotNull {
-                try {
-                    Color(android.graphics.Color.parseColor(it.trim()))
-                } catch (_: Exception) {
-                    null
                 }
-            }.ifEmpty { listOf(TalklyChatBg, TalklyCard) }
-
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colors.map { it.copy(alpha = 0.35f) }
-                        )
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = if (isVeryBright) 0.02f else 0.035f),
+                            ambientTint.copy(alpha = if (isVeryBright) 0.09f else 0.05f),
+                            Color.Black.copy(alpha = if (isVeryBright) 0.22f else 0.12f)
+                        ),
+                        radius = 650f
                     )
-            )
-            // Soft optical transmission veil
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(
-                                Color.Black.copy(alpha = 0.04f),
-                                Color.Black.copy(alpha = 0.14f)
-                            )
-                        )
-                    )
-            )
-        } else if (cleanVal.startsWith("#") && cleanVal != "#080B10") {
-            val col = try {
-                Color(android.graphics.Color.parseColor(cleanVal))
-            } catch (_: Exception) {
-                TalklyChatBg
-            }
-            // Semi-transparent wash so content moving behind transmits through
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(col.copy(alpha = 0.32f))
-            )
-            // If the wallpaper color is bright, use a soft radial darkening (transparent in center)
-            val lum = (col.red * 0.299f + col.green * 0.587f + col.blue * 0.114f)
-            if (lum > 0.35f) {
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(
-                            Brush.radialGradient(
-                                colors = listOf(
-                                    Color.Black.copy(alpha = (lum * 0.12f).coerceIn(0.06f, 0.20f)),
-                                    Color.Black.copy(alpha = (lum * 0.30f).coerceIn(0.16f, 0.38f))
-                                )
-                            )
-                        )
                 )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(
-                            Brush.radialGradient(
-                                colors = listOf(
-                                    Color.Black.copy(alpha = 0.03f),
-                                    Color.Black.copy(alpha = 0.10f)
-                                )
-                            )
-                        )
-                )
-            }
-        } else {
-            // Default Talkly ambient backdrop slice: transparent wash preserving talkly chat backdrop
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(TalklyChatBg.copy(alpha = 0.35f))
-            )
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = 0.02f),
-                                Color.Transparent,
-                                Color.Black.copy(alpha = 0.10f)
-                            ),
-                            center = Offset(0.5f, 0.3f),
-                            radius = 450f
-                        )
-                    )
-            )
-        }
+        )
 
         // =========================================================================
-        // 2, 3, 4, 5, 6, 7: OPTICAL REFRACTION, INTERNAL LIGHT RESPONSE & SPECULAR RIM
-        // Pure neutral optical glass with clear center and stronger optical edge reflection.
+        // 2. VERY LOW-OPACITY GLASS BASE TINT
+        // Subtly adapts to wallpaper tone, center remains visibly transparent.
+        // =========================================================================
+        val glassBaseTint = when {
+            isVeryBright -> Color(0xFF0D1118).copy(alpha = 0.20f)
+            isBright -> Color(0xFF101520).copy(alpha = 0.14f)
+            isVeryDark -> Color(0xFF141922).copy(alpha = 0.07f)
+            else -> ambientTint.copy(alpha = 0.08f)
+        }
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(glassBaseTint)
+        )
+
+        // =========================================================================
+        // 3. BACKGROUND-REACTIVE OPTICAL LIGHT, SPECULAR RIM & DEPTH
         // =========================================================================
         Box(
             modifier = Modifier
@@ -4912,18 +4907,14 @@ private fun LiquidGlassHeaderCapsule(
                     val w = size.width
                     val h = size.height
 
-                    // -----------------------------------------------------------------
-                    // A. PHYSICAL CURVATURE & THICKNESS (Neutral Light Response)
-                    // Top receives ambient overhead light; center is fully transparent;
-                    // bottom has subtle ambient thickness shading.
-                    // -----------------------------------------------------------------
+                    // A. PHYSICAL CURVATURE & THICKNESS GRADIENT
                     drawRoundRect(
                         brush = Brush.verticalGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = 0.06f),
-                                Color.White.copy(alpha = 0.01f),
+                                Color.White.copy(alpha = if (isVeryBright) 0.06f else 0.09f),
+                                Color.White.copy(alpha = if (isVeryBright) 0.01f else 0.02f),
                                 Color.Transparent,
-                                Color.Black.copy(alpha = 0.06f)
+                                Color.Black.copy(alpha = if (isVeryBright) 0.14f else 0.07f)
                             ),
                             startY = 0f,
                             endY = h
@@ -4931,34 +4922,13 @@ private fun LiquidGlassHeaderCapsule(
                         cornerRadius = cornerRadius
                     )
 
-                    // -----------------------------------------------------------------
-                    // B. OPTICAL PERIPHERAL DIFFUSION (Transparent Center, Subtle Edge Density)
-                    // High-transparency center allowing content behind to clearly transmit;
-                    // soft falloff toward the perimeter corners simulating glass volume.
-                    // -----------------------------------------------------------------
-                    drawRoundRect(
-                        brush = Brush.radialGradient(
-                            colors = listOf(
-                                Color.Transparent,
-                                Color.White.copy(alpha = 0.008f),
-                                Color.White.copy(alpha = 0.035f)
-                            ),
-                            center = Offset(w * 0.5f, h * 0.5f),
-                            radius = w * 0.55f
-                        ),
-                        cornerRadius = cornerRadius
-                    )
-
-                    // -----------------------------------------------------------------
-                    // C. CONVEX OPTICAL SHEEN (Surface Polish)
-                    // Diagonal light sweep across polished curved glass face without fogging the center.
-                    // -----------------------------------------------------------------
+                    // B. CONVEX OPTICAL SHEEN (Polished Glass Surface Reflection)
                     drawRoundRect(
                         brush = Brush.linearGradient(
-                            0.00f to Color.White.copy(alpha = 0.06f),
-                            0.24f to Color.White.copy(alpha = 0.015f),
+                            0.00f to Color.White.copy(alpha = if (isVeryBright) 0.08f else 0.07f),
+                            0.20f to Color.White.copy(alpha = 0.02f),
                             0.50f to Color.Transparent,
-                            0.82f to Color.White.copy(alpha = 0.010f),
+                            0.80f to Color.White.copy(alpha = 0.015f),
                             1.00f to Color.Transparent,
                             start = Offset(0f, 0f),
                             end = Offset(w * 0.85f, h)
@@ -4966,24 +4936,21 @@ private fun LiquidGlassHeaderCapsule(
                         cornerRadius = cornerRadius
                     )
 
-                    // Top cylindrical horizon reflection (upper 38%)
+                    // Upper cylindrical horizon reflection (upper 35% curvature)
                     drawRoundRect(
                         brush = Brush.verticalGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = 0.08f),
-                                Color.White.copy(alpha = 0.012f),
+                                Color.White.copy(alpha = if (isVeryBright) 0.11f else 0.09f),
+                                Color.White.copy(alpha = 0.015f),
                                 Color.Transparent
                             ),
                             startY = 0f,
-                            endY = h * 0.38f
+                            endY = h * 0.35f
                         ),
                         cornerRadius = cornerRadius
                     )
 
-                    // -----------------------------------------------------------------
-                    // D. INNER FRESNEL SCATTERING LIP (Glass Wall Depth)
-                    // Crisp inner bevel giving the glass tangible physical thickness without blocking center.
-                    // -----------------------------------------------------------------
+                    // C. INNER FRESNEL BEVEL (Glass Wall Depth & Edge Highlight)
                     val insetPx = 1.2.dp.toPx()
                     val innerCornerRadius = CornerRadius(
                         (cornerRadiusPx - insetPx).coerceAtLeast(0f),
@@ -4992,10 +4959,10 @@ private fun LiquidGlassHeaderCapsule(
                     drawRoundRect(
                         brush = Brush.verticalGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = 0.26f),
-                                Color.White.copy(alpha = 0.04f),
+                                Color.White.copy(alpha = if (isVeryBright) 0.36f else 0.28f),
+                                Color.White.copy(alpha = 0.05f),
                                 Color.Transparent,
-                                Color.Black.copy(alpha = 0.18f)
+                                Color.Black.copy(alpha = if (isVeryBright) 0.28f else 0.18f)
                             ),
                             startY = insetPx,
                             endY = h - insetPx
@@ -5003,40 +4970,32 @@ private fun LiquidGlassHeaderCapsule(
                         topLeft = Offset(insetPx, insetPx),
                         size = Size(w - insetPx * 2, h - insetPx * 2),
                         cornerRadius = innerCornerRadius,
-                        style = Stroke(width = 0.75.dp.toPx())
+                        style = Stroke(width = 0.8.dp.toPx())
                     )
 
-                    // -----------------------------------------------------------------
-                    // E. DIRECTIONAL SPECULAR EDGE REFLECTION (Physical Beveled Rim)
-                    // Strong optical edge definition & refraction:
-                    // - Strong top-left keylight glint & curved corner reflection (alpha 0.80)
-                    // - Crisp top edge highlight (alpha 0.50)
-                    // - Subtle side grazing reflections
-                    // - Controlled bottom refraction rim
-                    // -----------------------------------------------------------------
-                    // 1. Perimeter directional sweep
+                    // D. DIRECTIONAL SPECULAR PERIMETER RIM (Physical Beveled Edge - Neutral Crystal)
                     drawRoundRect(
                         brush = Brush.linearGradient(
-                            0.00f to Color.White.copy(alpha = 0.80f), // Top-left corner: strongest glint
-                            0.28f to Color.White.copy(alpha = 0.50f), // Top edge: clean highlight
-                            0.55f to Color.White.copy(alpha = 0.16f), // Right curve: grazing catch
-                            0.78f to Color.Black.copy(alpha = 0.35f), // Bottom edge: soft dark refraction hairline
-                            1.00f to Color.White.copy(alpha = 0.25f), // Left curve: gentle secondary reflection
+                            0.00f to Color.White.copy(alpha = 0.85f),
+                            0.28f to Color.White.copy(alpha = 0.50f),
+                            0.55f to Color.White.copy(alpha = 0.18f),
+                            0.75f to Color.Black.copy(alpha = if (isVeryBright) 0.45f else 0.32f),
+                            1.00f to Color.White.copy(alpha = 0.25f),
                             start = Offset(0f, 0f),
                             end = Offset(w * 0.90f, h)
                         ),
                         cornerRadius = cornerRadius,
-                        style = Stroke(width = 1.15.dp.toPx())
+                        style = Stroke(width = 1.2.dp.toPx())
                     )
 
-                    // 2. Concentrated top-edge specular horizon glint
+                    // E. CONCENTRATED TOP-EDGE SPECULAR HORIZON GLINT
                     drawRoundRect(
                         brush = Brush.horizontalGradient(
                             0.00f to Color.Transparent,
-                            0.06f to Color.White.copy(alpha = 0.32f),
-                            0.18f to Color.White.copy(alpha = 0.88f), // Peak glint near top-left curvature
-                            0.45f to Color.White.copy(alpha = 0.52f),
-                            0.78f to Color.White.copy(alpha = 0.26f),
+                            0.06f to Color.White.copy(alpha = 0.35f),
+                            0.18f to Color.White.copy(alpha = 0.90f),
+                            0.45f to Color.White.copy(alpha = 0.55f),
+                            0.78f to Color.White.copy(alpha = 0.28f),
                             1.00f to Color.Transparent,
                             startX = 0f,
                             endX = w
@@ -5045,25 +5004,25 @@ private fun LiquidGlassHeaderCapsule(
                         style = Stroke(width = 0.9.dp.toPx())
                     )
 
-                    // 3. Lower edge dark refraction hairline
+                    // F. LOWER EDGE DARK REFRACTION HAIRLINE (Physical Separation)
                     drawRoundRect(
                         brush = Brush.verticalGradient(
                             colors = listOf(
                                 Color.Transparent,
                                 Color.Transparent,
-                                Color.Black.copy(alpha = 0.30f)
+                                Color.Black.copy(alpha = if (isVeryBright) 0.42f else 0.28f)
                             ),
                             startY = 0f,
                             endY = h
                         ),
                         cornerRadius = cornerRadius,
-                        style = Stroke(width = 0.9.dp.toPx())
+                        style = Stroke(width = 1.0.dp.toPx())
                     )
                 }
         )
 
         // =========================================================================
-        // 8. CRISP PROFILE / HEADER CONTENT (Untouched)
+        // 4. HEADER CONTENT (Untouched)
         // =========================================================================
         content()
     }

@@ -510,10 +510,11 @@ class MediaCompressorAndUploader(private val context: Context) {
     suspend fun uploadMediaFile(
         file: File,
         remotePath: String = "",
+        folder: String? = null,
         onProgress: (Int, String) -> Unit = { _, _ -> }
     ): String = withContext(Dispatchers.IO) {
         val canonicalFile = file.absoluteFile
-        Log.d(TAG, "uploadMediaFile (Cloudinary) called: remotePath='$remotePath', file='${canonicalFile.absolutePath}', exists=${canonicalFile.exists()}, length=${canonicalFile.length()}")
+        Log.d(TAG, "uploadMediaFile (Cloudinary) called: remotePath='$remotePath', folder='$folder', file='${canonicalFile.absolutePath}', exists=${canonicalFile.exists()}, length=${canonicalFile.length()}")
 
         if (!canonicalFile.exists() || canonicalFile.length() == 0L) {
             val errorMsg = "Upload aborted: File does not exist at location (${canonicalFile.absolutePath})"
@@ -557,12 +558,17 @@ class MediaCompressorAndUploader(private val context: Context) {
                     .addFormDataPart("file", canonicalFile.name, fileBody)
                     .addFormDataPart("upload_preset", "talkly_media")
 
-                if (remotePath.isNotBlank()) {
+                val targetFolder = if (!folder.isNullOrBlank()) {
+                    folder.trim('/')
+                } else if (remotePath.isNotBlank()) {
                     val clean = remotePath.trim('/')
-                    val folder = if (clean.contains('/')) clean.substringBeforeLast('/') else clean
-                    if (folder.isNotBlank()) {
-                        requestBodyBuilder.addFormDataPart("folder", folder)
-                    }
+                    if (clean.contains('/')) clean.substringBeforeLast('/') else clean
+                } else {
+                    ""
+                }
+
+                if (targetFolder.isNotBlank()) {
+                    requestBodyBuilder.addFormDataPart("folder", targetFolder)
                 }
 
                 val requestBody = requestBodyBuilder.build()
@@ -632,7 +638,7 @@ class MediaCompressorAndUploader(private val context: Context) {
         file: File,
         remotePath: String,
         onProgress: (Int, String) -> Unit
-    ): String = uploadMediaFile(file, remotePath, onProgress)
+    ): String = uploadMediaFile(file = file, remotePath = remotePath, onProgress = onProgress)
 
     fun encodeFileToBase64(file: File): String {
         return try {

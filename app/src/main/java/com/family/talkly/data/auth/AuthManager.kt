@@ -750,7 +750,12 @@ class AuthManager(private val context: Context) {
             if (localPicFile.exists()) {
                 try {
                     val uploader = MediaCompressorAndUploader(context)
-                    val uploadedUrl = uploader.uploadMediaFile(localPicFile, "avatars/${uid}_avatar.jpg") { _, _ -> }
+                    val actualUserId = (auth.currentUserOrNull()?.id ?: auth.currentSessionOrNull()?.user?.id)?.takeIf { it.isNotBlank() } ?: uid
+                    val uploadedUrl = uploader.uploadMediaFile(
+                        file = localPicFile,
+                        remotePath = "profiles/${actualUserId}/${actualUserId}_avatar.jpg",
+                        folder = "profiles/$actualUserId"
+                    ) { _, _ -> }
                     if (uploadedUrl.startsWith("http://") || uploadedUrl.startsWith("https://")) {
                         remoteAvatarUrl = uploadedUrl
                     }
@@ -881,9 +886,14 @@ class AuthManager(private val context: Context) {
             var remoteCoverUrl = if (!coverPhotoUrl.startsWith("content://") && !coverPhotoUrl.startsWith("file://")) coverPhotoUrl else ""
 
             val uploader = MediaCompressorAndUploader(context)
+            val actualUserId = (auth.currentUserOrNull()?.id ?: auth.currentSessionOrNull()?.user?.id)?.takeIf { it.isNotBlank() } ?: uid
             if (localPicFile != null && localPicFile.exists()) {
                 try {
-                    val uploadedUrl = uploader.uploadMediaFile(localPicFile, "avatars/${uid}_avatar.jpg") { _, _ -> }
+                    val uploadedUrl = uploader.uploadMediaFile(
+                        file = localPicFile,
+                        remotePath = "profiles/${actualUserId}/${actualUserId}_avatar.jpg",
+                        folder = "profiles/$actualUserId"
+                    ) { _, _ -> }
                     if (uploadedUrl.startsWith("http://") || uploadedUrl.startsWith("https://")) {
                         remoteAvatarUrl = uploadedUrl
                     }
@@ -894,7 +904,11 @@ class AuthManager(private val context: Context) {
 
             if (localCoverFile != null && localCoverFile.exists()) {
                 try {
-                    val uploadedUrl = uploader.uploadMediaFile(localCoverFile, "covers/${uid}_cover.jpg") { _, _ -> }
+                    val uploadedUrl = uploader.uploadMediaFile(
+                        file = localCoverFile,
+                        remotePath = "covers/${actualUserId}/${actualUserId}_cover.jpg",
+                        folder = "covers/$actualUserId"
+                    ) { _, _ -> }
                     if (uploadedUrl.startsWith("http://") || uploadedUrl.startsWith("https://")) {
                         remoteCoverUrl = uploadedUrl
                     }
