@@ -4853,9 +4853,74 @@ private fun LiquidGlassHeaderCapsule(
             .clip(shape)
     ) {
         // =========================================================================
-        // 1. SUBTLE BACKDROP DIFFUSION & TRANSMISSION SCATTERING
-        // Allows continuous wallpaper and messages moving underneath to remain visible
-        // while softly diffusing high-contrast edges and text.
+        // 1. SUBTLE BACKDROP DIFFUSION LAYER
+        // Softly blurs underlying wallpaper and content while keeping transparency high (~70-75% pass-through).
+        // Blurring the wallpaper high frequencies ensures content underneath is visible but not sharp.
+        // =========================================================================
+        if (isWallpaperImage) {
+            AsyncImage(
+                model = cleanVal,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                alignment = Alignment.TopCenter,
+                modifier = Modifier
+                    .matchParentSize()
+                    .graphicsLayer {
+                        alpha = if (isVeryBright) 0.48f else 0.54f
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            renderEffect = android.graphics.RenderEffect.createBlurEffect(
+                                56f, 56f, android.graphics.Shader.TileMode.CLAMP
+                            ).asComposeRenderEffect()
+                        }
+                    }
+            )
+        } else if (cleanVal.startsWith("gradient:")) {
+            val hexList = cleanVal.removePrefix("gradient:").split(",")
+            val colors = hexList.mapNotNull {
+                try {
+                    Color(android.graphics.Color.parseColor(it.trim()))
+                } catch (_: Exception) {
+                    null
+                }
+            }.ifEmpty { listOf(TalklyChatBg, TalklyCard) }
+
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .graphicsLayer {
+                        alpha = 0.52f
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            renderEffect = android.graphics.RenderEffect.createBlurEffect(
+                                56f, 56f, android.graphics.Shader.TileMode.CLAMP
+                            ).asComposeRenderEffect()
+                        }
+                    }
+                    .background(Brush.verticalGradient(colors))
+            )
+        } else if (cleanVal.startsWith("#") && cleanVal != "#080B10") {
+            val col = try {
+                Color(android.graphics.Color.parseColor(cleanVal))
+            } catch (_: Exception) {
+                TalklyChatBg
+            }
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .graphicsLayer {
+                        alpha = 0.46f
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            renderEffect = android.graphics.RenderEffect.createBlurEffect(
+                                56f, 56f, android.graphics.Shader.TileMode.CLAMP
+                            ).asComposeRenderEffect()
+                        }
+                    }
+                    .background(col)
+            )
+        }
+
+        // =========================================================================
+        // 2. OPTICAL LIGHT-BLOOM & CHROMATIC DIFFUSION SCRIM
+        // Softly spreads highlights across the glass face and diffuses bright colors.
         // =========================================================================
         Box(
             modifier = Modifier
@@ -4863,31 +4928,34 @@ private fun LiquidGlassHeaderCapsule(
                 .graphicsLayer {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         renderEffect = android.graphics.RenderEffect.createBlurEffect(
-                            16f, 16f, android.graphics.Shader.TileMode.CLAMP
+                            38f, 38f, android.graphics.Shader.TileMode.CLAMP
                         ).asComposeRenderEffect()
                     }
                 }
                 .background(
                     Brush.radialGradient(
                         colors = listOf(
-                            Color.White.copy(alpha = if (isVeryBright) 0.02f else 0.035f),
-                            ambientTint.copy(alpha = if (isVeryBright) 0.09f else 0.05f),
-                            Color.Black.copy(alpha = if (isVeryBright) 0.22f else 0.12f)
+                            // Center bloom: highlights spread softly through the glass
+                            (sampledColor ?: Color.White).copy(alpha = if (isVeryBright) 0.06f else 0.08f),
+                            // Ambient color bleed adapting to wallpaper
+                            ambientTint.copy(alpha = if (isVeryBright) 0.10f else 0.07f),
+                            // Peripheral optical absorption vignette
+                            Color.Black.copy(alpha = if (isVeryBright) 0.18f else 0.11f)
                         ),
-                        radius = 650f
+                        radius = 600f
                     )
                 )
         )
 
         // =========================================================================
-        // 2. VERY LOW-OPACITY GLASS BASE TINT
-        // Subtly adapts to wallpaper tone, center remains visibly transparent.
+        // 3. LOW-OPACITY GLASS BASE TINT (Transparent center preserved)
+        // Subtly adapts to wallpaper tone without creating an opaque panel.
         // =========================================================================
         val glassBaseTint = when {
-            isVeryBright -> Color(0xFF0D1118).copy(alpha = 0.20f)
-            isBright -> Color(0xFF101520).copy(alpha = 0.14f)
-            isVeryDark -> Color(0xFF141922).copy(alpha = 0.07f)
-            else -> ambientTint.copy(alpha = 0.08f)
+            isVeryBright -> Color(0xFF0D1118).copy(alpha = 0.15f)
+            isBright -> Color(0xFF101520).copy(alpha = 0.10f)
+            isVeryDark -> Color(0xFF141922).copy(alpha = 0.05f)
+            else -> ambientTint.copy(alpha = 0.06f)
         }
         Box(
             modifier = Modifier
@@ -4896,7 +4964,7 @@ private fun LiquidGlassHeaderCapsule(
         )
 
         // =========================================================================
-        // 3. BACKGROUND-REACTIVE OPTICAL LIGHT, SPECULAR RIM & DEPTH
+        // 4. BACKGROUND-REACTIVE OPTICAL LIGHT, SPECULAR RIM & REFRACTION
         // =========================================================================
         Box(
             modifier = Modifier
@@ -4950,7 +5018,30 @@ private fun LiquidGlassHeaderCapsule(
                         cornerRadius = cornerRadius
                     )
 
-                    // C. INNER FRESNEL BEVEL (Glass Wall Depth & Edge Highlight)
+                    // C. LIGHT-BENDING REFRACTION HALO ALONG CURVED EDGE
+                    // Concentrates ambient light inside the curved bevel perimeter simulating Snell's law refraction
+                    val refrInsetPx = 2.0.dp.toPx()
+                    val refrCornerRadius = CornerRadius(
+                        (cornerRadiusPx - refrInsetPx).coerceAtLeast(0f),
+                        (cornerRadiusPx - refrInsetPx).coerceAtLeast(0f)
+                    )
+                    drawRoundRect(
+                        brush = Brush.linearGradient(
+                            0.00f to (sampledColor ?: Color.White).copy(alpha = if (isVeryBright) 0.20f else 0.15f),
+                            0.25f to Color.White.copy(alpha = if (isVeryBright) 0.11f else 0.08f),
+                            0.52f to Color.Transparent,
+                            0.80f to Color.Black.copy(alpha = if (isVeryBright) 0.16f else 0.10f),
+                            1.00f to Color.Transparent,
+                            start = Offset(0f, 0f),
+                            end = Offset(w * 0.95f, h)
+                        ),
+                        topLeft = Offset(refrInsetPx, refrInsetPx),
+                        size = Size(w - refrInsetPx * 2, h - refrInsetPx * 2),
+                        cornerRadius = refrCornerRadius,
+                        style = Stroke(width = 1.0.dp.toPx())
+                    )
+
+                    // D. INNER FRESNEL BEVEL (Glass Wall Depth & Edge Highlight)
                     val insetPx = 1.2.dp.toPx()
                     val innerCornerRadius = CornerRadius(
                         (cornerRadiusPx - insetPx).coerceAtLeast(0f),
@@ -4973,7 +5064,7 @@ private fun LiquidGlassHeaderCapsule(
                         style = Stroke(width = 0.8.dp.toPx())
                     )
 
-                    // D. DIRECTIONAL SPECULAR PERIMETER RIM (Physical Beveled Edge - Neutral Crystal)
+                    // E. DIRECTIONAL SPECULAR PERIMETER RIM (Physical Beveled Edge - Neutral Crystal)
                     drawRoundRect(
                         brush = Brush.linearGradient(
                             0.00f to Color.White.copy(alpha = 0.85f),
@@ -4988,7 +5079,7 @@ private fun LiquidGlassHeaderCapsule(
                         style = Stroke(width = 1.2.dp.toPx())
                     )
 
-                    // E. CONCENTRATED TOP-EDGE SPECULAR HORIZON GLINT
+                    // F. CONCENTRATED TOP-EDGE SPECULAR HORIZON GLINT
                     drawRoundRect(
                         brush = Brush.horizontalGradient(
                             0.00f to Color.Transparent,
@@ -5004,7 +5095,7 @@ private fun LiquidGlassHeaderCapsule(
                         style = Stroke(width = 0.9.dp.toPx())
                     )
 
-                    // F. LOWER EDGE DARK REFRACTION HAIRLINE (Physical Separation)
+                    // G. LOWER EDGE DARK REFRACTION HAIRLINE (Physical Separation)
                     drawRoundRect(
                         brush = Brush.verticalGradient(
                             colors = listOf(
@@ -5022,7 +5113,7 @@ private fun LiquidGlassHeaderCapsule(
         )
 
         // =========================================================================
-        // 4. HEADER CONTENT (Untouched)
+        // 5. HEADER CONTENT (Untouched)
         // =========================================================================
         content()
     }
