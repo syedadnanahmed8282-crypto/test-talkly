@@ -43,7 +43,9 @@ data class ChatMessage(
     val fileSizeBytes: Long? = null
 ) {
     companion object {
-        const val EXPIRATION_48_HOURS_MS = 48 * 60 * 60 * 1000L // 172,800,000 ms
+        const val EXPIRATION_72_HOURS_MS = 72 * 60 * 60 * 1000L // 259,200,000 ms
+        @Deprecated("Use EXPIRATION_72_HOURS_MS instead", ReplaceWith("EXPIRATION_72_HOURS_MS"))
+        const val EXPIRATION_48_HOURS_MS = EXPIRATION_72_HOURS_MS
     }
 
     fun isMediaExpired(simulatedTimeOffsetMs: Long = 0L): Boolean {
@@ -51,7 +53,7 @@ data class ChatMessage(
             return false
         }
         val effectiveCurrentTime = System.currentTimeMillis() + simulatedTimeOffsetMs
-        return (effectiveCurrentTime - timestamp) >= EXPIRATION_48_HOURS_MS
+        return (effectiveCurrentTime - timestamp) >= EXPIRATION_72_HOURS_MS
     }
 
     val formattedTime: String
