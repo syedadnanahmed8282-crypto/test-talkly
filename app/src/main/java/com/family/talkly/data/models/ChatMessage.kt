@@ -40,8 +40,12 @@ data class ChatMessage(
     val isUploading: Boolean = false,
     val isFailed: Boolean = false,
     val uploadProgress: Int = 0,
-    val fileSizeBytes: Long? = null
+    val fileSizeBytes: Long? = null,
+    val forwardedFromMessageId: String? = null,
+    val forwardedFromSenderName: String? = null
 ) {
+    val isForwarded: Boolean
+        get() = !forwardedFromMessageId.isNullOrBlank() || !forwardedFromSenderName.isNullOrBlank()
     companion object {
         const val EXPIRATION_72_HOURS_MS = 72 * 60 * 60 * 1000L // 259,200,000 ms
         @Deprecated("Use EXPIRATION_72_HOURS_MS instead", ReplaceWith("EXPIRATION_72_HOURS_MS"))

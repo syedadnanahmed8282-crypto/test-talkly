@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Forward
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.HourglassDisabled
@@ -50,6 +51,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -223,6 +225,28 @@ fun MediaMessageItem(
                 .widthIn(min = 160.dp, max = 280.dp)
         ) {
             Column {
+                if (message.isForwarded) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Forward,
+                            contentDescription = "Forwarded",
+                            tint = TalklyCyan.copy(alpha = 0.85f),
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        val originalSender = message.forwardedFromSenderName?.takeIf { it.isNotBlank() }
+                        Text(
+                            text = if (originalSender != null) "Forwarded • $originalSender" else "Forwarded",
+                            fontSize = 11.sp,
+                            fontStyle = FontStyle.Italic,
+                            fontWeight = FontWeight.Medium,
+                            color = TalklyCyan.copy(alpha = 0.85f)
+                        )
+                    }
+                }
                 Box(
                     modifier = Modifier
                         .combinedClickable(

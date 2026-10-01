@@ -45,7 +45,9 @@ data class ChatMessageEntity(
     val isUploading: Boolean = false,
     val isFailed: Boolean = false,
     val uploadProgress: Int = 0,
-    val fileSizeBytes: Long? = null
+    val fileSizeBytes: Long? = null,
+    val forwardedFromMessageId: String? = null,
+    val forwardedFromSenderName: String? = null
 ) {
     fun toChatMessage(): ChatMessage {
         val type = try {
@@ -87,7 +89,9 @@ data class ChatMessageEntity(
             isUploading = isUploading,
             isFailed = isFailed,
             uploadProgress = uploadProgress,
-            fileSizeBytes = fileSizeBytes
+            fileSizeBytes = fileSizeBytes,
+            forwardedFromMessageId = forwardedFromMessageId,
+            forwardedFromSenderName = forwardedFromSenderName
         )
     }
 
@@ -122,7 +126,9 @@ data class ChatMessageEntity(
                 isUploading = message.isUploading,
                 isFailed = message.isFailed,
                 uploadProgress = message.uploadProgress,
-                fileSizeBytes = message.fileSizeBytes
+                fileSizeBytes = message.fileSizeBytes,
+                forwardedFromMessageId = message.forwardedFromMessageId,
+                forwardedFromSenderName = message.forwardedFromSenderName
             )
         }
     }

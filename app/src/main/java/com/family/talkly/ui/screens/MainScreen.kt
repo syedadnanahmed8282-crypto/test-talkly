@@ -460,7 +460,8 @@ fun MainScreen(
                 },
                 activeCallInfo = if (isCallActive && isCallMinimized && !isInPipMode) callInfo else null,
                 onRestoreCall = { isCallMinimized = false },
-                onEndCall = { zegoManager.endCall() }
+                onEndCall = { zegoManager.endCall() },
+                allFamilyMembers = familyMembers
             )
         } else {
             // Main Screen Content

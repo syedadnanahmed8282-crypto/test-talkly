@@ -188,8 +188,10 @@ import com.family.talkly.data.models.MessageType
 import androidx.compose.foundation.layout.navigationBarsPadding
 import com.family.talkly.data.models.ReactionUtils
 import com.family.talkly.data.models.UserProfile
+import androidx.compose.material.icons.automirrored.filled.Forward
 import com.family.talkly.ui.components.AudioPlayerItem
 import com.family.talkly.ui.components.ContactProfileDetailsDialog
+import com.family.talkly.ui.components.ForwardMessageRecipientDialog
 import com.family.talkly.ui.components.FullMediaViewerDialog
 import com.family.talkly.ui.components.ActiveCallHeaderControl
 import com.family.talkly.data.zego.CurrentCallInfo
@@ -298,7 +300,8 @@ fun ChatDetailScreen(
     onRefreshMemberProfile: (() -> Unit)? = null,
     activeCallInfo: CurrentCallInfo? = null,
     onRestoreCall: (() -> Unit)? = null,
-    onEndCall: (() -> Unit)? = null
+    onEndCall: (() -> Unit)? = null,
+    allFamilyMembers: List<FamilyMember> = emptyList()
 ) {
     LaunchedEffect(member.id) {
         onRefreshMemberProfile?.invoke()
@@ -316,6 +319,9 @@ fun ChatDetailScreen(
     var isSearchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var showStarredMessagesDialog by remember { mutableStateOf(false) }
+    var showForwardDialog by remember { mutableStateOf(false) }
+    var isForwardingMessages by remember { mutableStateOf(false) }
+    var forwardProgressText by remember { mutableStateOf("") }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -345,6 +351,7 @@ fun ChatDetailScreen(
     // Intercept back presses to close overlays or go back to chat list
     BackHandler(enabled = true) {
         when {
+            showForwardDialog -> if (!isForwardingMessages) showForwardDialog = false
             showBulkDeleteDialog -> showBulkDeleteDialog = false
             selectedMessageIds.isNotEmpty() -> selectedMessageIds = emptySet()
             fullMediaViewerMessage != null -> fullMediaViewerMessage = null
@@ -1511,6 +1518,48 @@ fun ChatDetailScreen(
         }
     }
 
+    // Forward Message Recipient Dialog
+    if (showForwardDialog && selectedMessageIds.isNotEmpty()) {
+        val selectedList = combinedMessages.filter { it.id in selectedMessageIds }
+        ForwardMessageRecipientDialog(
+            allMembers = if (allFamilyMembers.isNotEmpty()) allFamilyMembers else listOf(member),
+            messageCount = selectedList.size,
+            isForwarding = isForwardingMessages,
+            progressText = forwardProgressText,
+            onDismiss = { showForwardDialog = false },
+            onConfirmForward = { recipientIds ->
+                if (recipientIds.isEmpty()) return@ForwardMessageRecipientDialog
+                isForwardingMessages = true
+                forwardProgressText = "Forwarding ${selectedList.size} message(s)..."
+                val chatRepo = com.family.talkly.data.firebase.FirebaseChatRepository.getInstance(context)
+                scope.launch {
+                    try {
+                        val (success, failed) = chatRepo.forwardMessages(
+                            messagesToForward = selectedList,
+                            targetMemberIds = recipientIds,
+                            onProgress = { completed, total ->
+                                forwardProgressText = "Forwarding $completed of $total..."
+                            }
+                        )
+                        isForwardingMessages = false
+                        showForwardDialog = false
+                        selectedMessageIds = emptySet()
+                        if (success > 0) {
+                            val recipientText = if (recipientIds.size == 1) "1 contact" else "${recipientIds.size} contacts"
+                            Toast.makeText(context, "Forwarded to $recipientText", Toast.LENGTH_SHORT).show()
+                        } else if (failed > 0) {
+                            Toast.makeText(context, "Failed to forward messages", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        isForwardingMessages = false
+                        showForwardDialog = false
+                        Toast.makeText(context, "Error forwarding: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        )
+    }
+
     // Reaction Details Dialog
     if (reactionDetailsMessage != null) {
         val targetMsg = reactionDetailsMessage!!
@@ -2179,6 +2228,24 @@ fun ChatDetailScreen(
                                                 modifier = Modifier.size(19.dp)
                                             )
                                         }
+                                    }
+                                }
+
+                                val forwardableMessages = combinedMessages
+                                    .filter { it.id in selectedMessageIds }
+                                    .filter { !it.isDeletedForEveryone && it.messageType != MessageType.CALL_LOG }
+
+                                if (forwardableMessages.isNotEmpty()) {
+                                    IconButton(
+                                        onClick = { showForwardDialog = true },
+                                        modifier = Modifier.size(34.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.Forward,
+                                            contentDescription = "Forward",
+                                            tint = TalklyCyan,
+                                            modifier = Modifier.size(20.dp)
+                                        )
                                     }
                                 }
 
@@ -3238,6 +3305,7 @@ fun ChatDetailScreen(
                                                 )
                                         ) {
                                             val isShortSingleLine = !hasMedia && !hasReply && !msg.isDeletedForEveryone &&
+                                                    !msg.isForwarded &&
                                                     !isVoiceNote && !isSingleEmoji &&
                                                     !msg.textContent.contains('\n') && msg.textContent.length <= 26
 
@@ -3394,6 +3462,30 @@ fun ChatDetailScreen(
                                                             )
                                                         }
                                                     } else {
+                                                        // Forwarded Indicator inside Bubble
+                                                        if (msg.isForwarded) {
+                                                            Row(
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                modifier = Modifier.padding(bottom = 4.dp)
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = Icons.AutoMirrored.Filled.Forward,
+                                                                    contentDescription = "Forwarded",
+                                                                    tint = TalklyCyan.copy(alpha = 0.85f),
+                                                                    modifier = Modifier.size(13.dp)
+                                                                )
+                                                                Spacer(modifier = Modifier.width(4.dp))
+                                                                val originalSender = msg.forwardedFromSenderName?.takeIf { it.isNotBlank() }
+                                                                Text(
+                                                                    text = if (originalSender != null) "Forwarded • $originalSender" else "Forwarded",
+                                                                    fontSize = 11.sp,
+                                                                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                                                    fontWeight = FontWeight.Medium,
+                                                                    color = TalklyCyan.copy(alpha = 0.85f)
+                                                                )
+                                                            }
+                                                        }
+
                                                         // Quoted Reply Preview inside Bubble
                                                         if (msg.replyToSenderName != null) {
                                                             Surface(

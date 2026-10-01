@@ -29,6 +29,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -475,6 +476,92 @@ object SupabaseMessagingService {
             return@withContext false
         }
         awaitCloudinaryMediaDeletion(messageId, mediaUrl, isOrphanCleanup = true)
+    }
+
+    suspend fun copyCloudinaryMedia(originalMediaUrl: String, originalMessageId: String? = null): String? = withContext(Dispatchers.IO) {
+        if (originalMediaUrl.isBlank() || !originalMediaUrl.contains("cloudinary.com", ignoreCase = true)) {
+            Log.w(TAG, "[CloudinaryCopy] Invalid or non-Cloudinary mediaUrl: $originalMediaUrl")
+            return@withContext null
+        }
+
+        val supabaseUrl = SupabaseClientProvider.supabaseUrl
+        val publishableKey = SupabaseClientProvider.supabasePublishableKey
+        val currentSessionToken = try {
+            SupabaseClientProvider.auth.currentAccessTokenOrNull()
+        } catch (e: Exception) {
+            null
+        }
+
+        // 1. Primary path: Server-side copy via Supabase Edge Function `copy-cloudinary-media`
+        if (!currentSessionToken.isNullOrBlank()) {
+            try {
+                val json = JSONObject().apply {
+                    put("media_url", originalMediaUrl)
+                    if (!originalMessageId.isNullOrBlank()) {
+                        put("message_id", originalMessageId)
+                    }
+                }
+                val requestBody = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                val edgeFunctionUrl = "$supabaseUrl/functions/v1/copy-cloudinary-media"
+
+                val request = Request.Builder()
+                    .url(edgeFunctionUrl)
+                    .addHeader("apikey", publishableKey)
+                    .addHeader("Authorization", "Bearer $currentSessionToken")
+                    .addHeader("Content-Type", "application/json")
+                    .post(requestBody)
+                    .build()
+
+                edgeHttpClient.newCall(request).execute().use { response ->
+                    val resBody = response.body?.string() ?: ""
+                    Log.i(TAG, "[CloudinaryCopy] Edge Function response HTTP ${response.code}: $resBody")
+                    if (response.isSuccessful) {
+                        val jsonRes = try { JSONObject(resBody) } catch (e: Exception) { null }
+                        val secureUrl = jsonRes?.optString("secure_url", "")?.ifBlank {
+                            jsonRes.optString("url", "")
+                        }
+                        if (!secureUrl.isNullOrBlank()) {
+                            return@withContext secureUrl
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "[CloudinaryCopy] Server-side copy attempt error: ${e.localizedMessage}")
+            }
+        }
+
+        // 2. Resilient fallback: Cloudinary unsigned remote copy using talkly_media preset
+        // Note: No API secrets are in client code. Cloudinary unsigned preset allows remote URL upload directly.
+        try {
+            val uploadUrl = "https://api.cloudinary.com/v1_1/tsnijtq5/auto/upload"
+            val requestBody = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file", originalMediaUrl)
+                .addFormDataPart("upload_preset", "talkly_media")
+                .addFormDataPart("folder", "talkly_media/forwarded")
+                .build()
+
+            val request = Request.Builder()
+                .url(uploadUrl)
+                .post(requestBody)
+                .build()
+
+            edgeHttpClient.newCall(request).execute().use { response ->
+                val resBody = response.body?.string() ?: ""
+                Log.i(TAG, "[CloudinaryCopy] Unsigned upload fallback HTTP ${response.code}: $resBody")
+                if (response.isSuccessful) {
+                    val json = JSONObject(resBody)
+                    val secureUrl = json.optString("secure_url", "").ifBlank { json.optString("url", "") }
+                    if (secureUrl.isNotBlank()) {
+                        return@withContext secureUrl
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "[CloudinaryCopy] Unsigned fallback failed: ${e.localizedMessage}")
+        }
+
+        return@withContext null
     }
 
     suspend fun isMessageDeletedForEveryone(messageId: String): Boolean = withContext(Dispatchers.IO) {

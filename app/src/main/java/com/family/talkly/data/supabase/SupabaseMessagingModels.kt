@@ -163,6 +163,10 @@ data class SupabaseMessage(
     @Serializable(with = PostgresStringListSerializer::class)
     @SerialName("deleted_for_users")
     val deletedForUsers: List<String> = emptyList(),
+    @SerialName("forwarded_from_message_id")
+    val forwardedFromMessageId: String? = null,
+    @SerialName("forwarded_from_sender_name")
+    val forwardedFromSenderName: String? = null,
     @SerialName("created_at")
     val createdAt: String? = null
 ) {
@@ -206,7 +210,9 @@ data class SupabaseMessage(
             isPending = false,
             isUploading = false,
             isFailed = false,
-            uploadProgress = 0
+            uploadProgress = 0,
+            forwardedFromMessageId = forwardedFromMessageId,
+            forwardedFromSenderName = forwardedFromSenderName
         )
     }
 
@@ -252,6 +258,8 @@ data class SupabaseMessage(
             val replyToText = getString("reply_to_text")
             val isEdited = getBoolean("is_edited", false)
             val isDeletedForEveryone = getBoolean("is_deleted_for_everyone", false)
+            val forwardedFromMsgId = getString("forwarded_from_message_id")
+            val forwardedFromSenderName = getString("forwarded_from_sender_name")
 
             val deletedForUsers = record["deleted_for_users"]?.let {
                 PostgresStringListSerializer.parseStringList(it).filter { u -> u.isNotBlank() && u != "self" }
@@ -282,6 +290,8 @@ data class SupabaseMessage(
                 isEdited = isEdited,
                 isDeletedForEveryone = isDeletedForEveryone,
                 deletedForUsers = deletedForUsers,
+                forwardedFromMessageId = forwardedFromMsgId,
+                forwardedFromSenderName = forwardedFromSenderName,
                 createdAt = createdAt
             )
         }
@@ -438,6 +448,15 @@ fun ChatMessage.toSupabaseMessage(
         }
     }
 
+    val validForwardedFromMsgId = forwardedFromMessageId?.takeIf { it.isNotBlank() }?.let { raw ->
+        try {
+            java.util.UUID.fromString(raw)
+            raw
+        } catch (e: Exception) {
+            java.util.UUID.nameUUIDFromBytes(raw.toByteArray()).toString()
+        }
+    }
+
     return SupabaseMessage(
         id = validSupabaseId,
         conversationId = conversationId,
@@ -461,6 +480,8 @@ fun ChatMessage.toSupabaseMessage(
         isEdited = isEdited,
         isDeletedForEveryone = isDeletedForEveryone,
         deletedForUsers = deletedForUsers,
+        forwardedFromMessageId = validForwardedFromMsgId,
+        forwardedFromSenderName = forwardedFromSenderName,
         createdAt = SupabaseMessage.millisToIsoTimestamp(timestamp)
     )
 }

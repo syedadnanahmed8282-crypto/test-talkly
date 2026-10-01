@@ -2888,7 +2888,9 @@ class FirebaseChatRepository private constructor(private val context: Context) {
         replyToText: String? = null,
         explicitSenderUid: String? = null,
         explicitMessageId: String? = null,
-        fileSizeBytes: Long? = null
+        fileSizeBytes: Long? = null,
+        forwardedFromMessageId: String? = null,
+        forwardedFromSenderName: String? = null
     ) {
         val canonicalId = getCanonicalMemberId(memberId)
 
@@ -2947,7 +2949,9 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             replyToMessageId = replyToMessageId,
             replyToSenderName = replyToSenderName,
             replyToText = replyToText,
-            fileSizeBytes = fileSizeBytes
+            fileSizeBytes = fileSizeBytes,
+            forwardedFromMessageId = forwardedFromMessageId,
+            forwardedFromSenderName = forwardedFromSenderName
         )
 
         _messagesMap.update { current ->
@@ -3050,6 +3054,105 @@ class FirebaseChatRepository private constructor(private val context: Context) {
             targetPhoneSuffix = targetSuffix,
             dataPayload = fcmPayload
         )
+    }
+
+    suspend fun forwardMessages(
+        messagesToForward: List<ChatMessage>,
+        targetMemberIds: List<String>,
+        onProgress: ((completed: Int, total: Int) -> Unit)? = null
+    ): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        val validMessages = messagesToForward
+            .filter { !it.isDeletedForEveryone && it.messageType != MessageType.CALL_LOG }
+            .sortedBy { it.timestamp }
+
+        if (validMessages.isEmpty() || targetMemberIds.isEmpty()) {
+            return@withContext Pair(0, 0)
+        }
+
+        var successCount = 0
+        var failedCount = 0
+        val totalOperations = validMessages.size * targetMemberIds.size
+        var progressCounter = 0
+
+        val sessionPrefs = context.getSharedPreferences("talkly_auth_session", Context.MODE_PRIVATE)
+        val fallbackPrefs = context.getSharedPreferences("talkly_user_session", Context.MODE_PRIVATE)
+        val currentUserName = sessionPrefs.getString("user_name", null)
+            ?: fallbackPrefs.getString("user_name", null)
+            ?: "You"
+
+        for (targetMemberId in targetMemberIds) {
+            val canonicalTargetId = getCanonicalMemberId(targetMemberId)
+            for ((index, origMsg) in validMessages.withIndex()) {
+                try {
+                    // Check media expiry
+                    if (origMsg.isMediaExpired(_simulatedTimeOffsetMs.value)) {
+                        Log.w(TAG, "Cannot forward message ${origMsg.id}: media is expired")
+                        failedCount++
+                        progressCounter++
+                        onProgress?.invoke(progressCounter, totalOperations)
+                        continue
+                    }
+
+                    // Resolve original sender name
+                    val originalSender = if (!origMsg.forwardedFromSenderName.isNullOrBlank()) {
+                        origMsg.forwardedFromSenderName
+                    } else if (origMsg.senderName.isNotBlank() && origMsg.senderName != "You") {
+                        origMsg.senderName
+                    } else if (origMsg.senderId == "self" || origMsg.senderId == currentSyncedUserId) {
+                        currentUserName
+                    } else {
+                        val member = _familyMembers.value.firstOrNull { it.id == origMsg.senderId || it.firebaseUid == origMsg.senderId }
+                        member?.name ?: origMsg.senderName.ifBlank { "User" }
+                    }
+
+                    val originalMsgId = origMsg.forwardedFromMessageId?.takeIf { it.isNotBlank() } ?: origMsg.id
+
+                    var destinationMediaUrl: String? = null
+                    if (origMsg.messageType == MessageType.IMAGE ||
+                        origMsg.messageType == MessageType.VIDEO ||
+                        origMsg.messageType == MessageType.VOICE_NOTE
+                    ) {
+                        if (!origMsg.mediaUrl.isNullOrBlank()) {
+                            // Copy Cloudinary asset to create an independent asset
+                            val copiedUrl = SupabaseMessagingService.copyCloudinaryMedia(origMsg.mediaUrl, origMsg.id)
+                            if (copiedUrl.isNullOrBlank()) {
+                                Log.e(TAG, "Media copy failed for message ${origMsg.id}, aborting forward of this message")
+                                failedCount++
+                                progressCounter++
+                                onProgress?.invoke(progressCounter, totalOperations)
+                                continue
+                            }
+                            destinationMediaUrl = copiedUrl
+                        }
+                    }
+
+                    // Strict timestamp preservation with slight ms delta for sequence ordering
+                    val newTimestamp = System.currentTimeMillis() + index
+
+                    sendMessage(
+                        memberId = canonicalTargetId,
+                        textContent = origMsg.textContent,
+                        type = origMsg.messageType,
+                        mediaUrl = destinationMediaUrl,
+                        forcedTimestamp = newTimestamp,
+                        explicitMessageId = UUID.randomUUID().toString(),
+                        fileSizeBytes = origMsg.fileSizeBytes,
+                        forwardedFromMessageId = originalMsgId,
+                        forwardedFromSenderName = originalSender
+                    )
+
+                    successCount++
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error forwarding message ${origMsg.id} to $targetMemberId: ${e.localizedMessage}", e)
+                    failedCount++
+                }
+
+                progressCounter++
+                onProgress?.invoke(progressCounter, totalOperations)
+            }
+        }
+
+        Pair(successCount, failedCount)
     }
 
     fun toggle48HourFastForward() {

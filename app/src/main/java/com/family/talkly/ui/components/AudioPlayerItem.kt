@@ -17,9 +17,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Forward
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -42,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -249,18 +252,43 @@ fun AudioPlayerItem(
         ),
         modifier = modifier
             .widthIn(min = 210.dp, max = 280.dp)
-            .height(54.dp)
+            .then(
+                if (message.isForwarded) Modifier.wrapContentHeight() else Modifier.height(54.dp)
+            )
             .combinedClickable(
                 onClick = { onClick?.invoke() },
                 onLongClick = { onLongClick?.invoke() }
             )
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
         ) {
+            if (message.isForwarded) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Forward,
+                        contentDescription = "Forwarded",
+                        tint = TalklyCyan.copy(alpha = 0.85f),
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    val originalSender = message.forwardedFromSenderName?.takeIf { it.isNotBlank() }
+                    Text(
+                        text = if (originalSender != null) "Forwarded • $originalSender" else "Forwarded",
+                        fontSize = 10.5.sp,
+                        fontStyle = FontStyle.Italic,
+                        fontWeight = FontWeight.Medium,
+                        color = TalklyCyan.copy(alpha = 0.85f)
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
             // Slim Play / Pause Button
             Surface(
                 shape = CircleShape,
@@ -337,6 +365,7 @@ fun AudioPlayerItem(
                 color = if (isSelf) TalklyTextPrimary else TalklyTextSecondary
             )
         }
+    }
     }
 }
 
