@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -240,9 +241,9 @@ fun WallpaperSelectionDialog(
     onWallpaperSelected: (value: String, applyToAll: Boolean) -> Unit
 ) {
     val context = LocalContext.current
-    var selectedValue by remember { mutableStateOf(currentValue) }
-    var selectedCategory by remember { mutableStateOf(WallpaperCategory.COLORS) }
-    var applyToAllChats by remember { mutableStateOf(false) }
+    var selectedValue by rememberSaveable { mutableStateOf(currentValue) }
+    var selectedCategory by rememberSaveable { mutableStateOf(WallpaperCategory.COLORS) }
+    var applyToAllChats by rememberSaveable { mutableStateOf(false) }
 
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()

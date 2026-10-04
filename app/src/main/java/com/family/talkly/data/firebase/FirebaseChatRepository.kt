@@ -1109,22 +1109,59 @@ class FirebaseChatRepository private constructor(private val context: Context) {
                 ?: currentUid
 
             val canonicalId = getCanonicalMemberId(memberId)
-            val targetLookupKey = when {
-                !memberFirebaseUid.isNullOrBlank() -> memberFirebaseUid
-                !memberPhone.isNullOrBlank() -> memberPhone
-                else -> canonicalId
+
+            fun isUuidString(s: String?): Boolean {
+                if (s.isNullOrBlank()) return false
+                return try {
+                    java.util.UUID.fromString(s.trim())
+                    true
+                } catch (e: Exception) {
+                    false
+                }
             }
-            val resolvedReceiverUuid = SupabaseMessagingService.resolveUserUuid(targetLookupKey)
+
+            // Priority 1: Direct Supabase UUID if already valid in memberId, canonicalId, or memberFirebaseUid
+            val directUuidCandidate = when {
+                isUuidString(memberId) -> memberId.trim()
+                isUuidString(canonicalId) -> canonicalId.trim()
+                isUuidString(memberFirebaseUid) -> memberFirebaseUid!!.trim()
+                else -> null
+            }
+            val resolvedDirectUuid = directUuidCandidate?.let { SupabaseMessagingService.resolveUserUuid(it) }
+
+            // Priority 2: Authoritative Supabase profile lookup via phone number
+            val resolvedFromPhone = if (resolvedDirectUuid.isNullOrBlank()) {
+                val candidatePhone = when {
+                    !memberPhone.isNullOrBlank() -> memberPhone
+                    canonicalId.any { it.isDigit() } && !isUuidString(canonicalId) -> canonicalId
+                    memberId.any { it.isDigit() } && !isUuidString(memberId) -> memberId
+                    else -> null
+                }
+                candidatePhone?.let { SupabaseMessagingService.resolveUserUuid(it) }
+            } else null
+
+            // Priority 3: Legacy Firebase UID fallback
+            val resolvedReceiverUuid = resolvedDirectUuid
+                ?: resolvedFromPhone
+                ?: memberFirebaseUid?.let { SupabaseMessagingService.resolveUserUuid(it) }
                 ?: SupabaseMessagingService.resolveUserUuid(memberId)
                 ?: SupabaseMessagingService.resolveUserUuid(canonicalId)
                 ?: ""
 
             if (resolvedSenderUuid.isBlank() || resolvedReceiverUuid.isBlank()) {
-                Log.w(TAG, "Cannot resolve conversation ID: invalid UUIDs (sender='$resolvedSenderUuid', receiver='$resolvedReceiverUuid')")
+                Log.w(TAG, "Cannot resolve conversation ID: invalid UUIDs (sender='$resolvedSenderUuid', receiver='$resolvedReceiverUuid') for memberId='$memberId', phone='$memberPhone', fbUid='$memberFirebaseUid'")
                 return@withContext null
             }
 
-            SupabaseMessagingService.getOrCreateConversationId(resolvedSenderUuid, resolvedReceiverUuid)
+            val convId = SupabaseMessagingService.getOrCreateConversationId(resolvedSenderUuid, resolvedReceiverUuid)
+            if (!convId.isNullOrBlank()) {
+                val appPrefs = context.getSharedPreferences("talkly_prefs", android.content.Context.MODE_PRIVATE)
+                appPrefs.edit()
+                    .putString("conv_id_${memberId}", convId)
+                    .putString("conv_id_${canonicalId}", convId)
+                    .apply()
+            }
+            convId
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             Log.w(TAG, "Error getting or creating conversation ID for $memberId: ${e.localizedMessage}")

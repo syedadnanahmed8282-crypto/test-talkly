@@ -338,7 +338,7 @@ fun ChatDetailScreen(
     var isBlocked by remember(isInitiallyBlocked) { mutableStateOf(isInitiallyBlocked) }
     var showBlockConfirmDialog by remember { mutableStateOf(false) }
     var showClearChatConfirmDialog by remember { mutableStateOf(false) }
-    var showWallpaperDialog by remember { mutableStateOf(false) }
+    var showWallpaperDialog by rememberSaveable { mutableStateOf(false) }
     var localClearedMessages by remember { mutableStateOf(false) }
     var chatWindowScreenHeight by remember { mutableFloatStateOf(1000f) }
     var selectedMsgIsTopHalf by remember { mutableStateOf(false) }
@@ -443,7 +443,10 @@ fun ChatDetailScreen(
         )
     }
     val chatRepo = remember(context) { com.family.talkly.data.firebase.FirebaseChatRepository.getInstance(context) }
-    var conversationId by remember(member.id) { mutableStateOf<String?>(null) }
+    var conversationId by rememberSaveable(member.id) {
+        val cached = prefs.getString("conv_id_${member.id}", null)
+        mutableStateOf<String?>(cached)
+    }
 
     // Fetch shared conversation wallpaper on enter
     LaunchedEffect(member.id, member.firebaseUid, member.phone) {
@@ -456,6 +459,7 @@ fun ChatDetailScreen(
             if (!resolvedConvId.isNullOrBlank()) {
                 withContext(Dispatchers.Main) {
                     conversationId = resolvedConvId
+                    prefs.edit().putString("conv_id_${member.id}", resolvedConvId).apply()
                 }
                 val remoteWp = chatRepo.fetchConversationWallpaper(resolvedConvId)
                 if (!remoteWp.isNullOrBlank()) {
@@ -1952,16 +1956,19 @@ fun ChatDetailScreen(
 
                     scope.launch(Dispatchers.IO) {
                         try {
-                            val activeConvId = conversationId ?: chatRepo.getOrCreateConversationIdForMember(
-                                memberId = member.id,
-                                memberFirebaseUid = member.firebaseUid,
-                                memberPhone = member.phone
-                            )
+                            val activeConvId = conversationId
+                                ?: prefs.getString("conv_id_${member.id}", null)
+                                ?: chatRepo.getOrCreateConversationIdForMember(
+                                    memberId = member.id,
+                                    memberFirebaseUid = member.firebaseUid,
+                                    memberPhone = member.phone
+                                )
                             if (activeConvId.isNullOrBlank()) {
                                 throw java.io.IOException("Unable to resolve conversation ID for wallpaper")
                             }
                             withContext(Dispatchers.Main) {
                                 conversationId = activeConvId
+                                prefs.edit().putString("conv_id_${member.id}", activeConvId).apply()
                             }
 
                             val uploader = com.family.talkly.util.MediaCompressorAndUploader(context)
@@ -2010,14 +2017,17 @@ fun ChatDetailScreen(
 
                     scope.launch(Dispatchers.IO) {
                         try {
-                            val activeConvId = conversationId ?: chatRepo.getOrCreateConversationIdForMember(
-                                memberId = member.id,
-                                memberFirebaseUid = member.firebaseUid,
-                                memberPhone = member.phone
-                            )
+                            val activeConvId = conversationId
+                                ?: prefs.getString("conv_id_${member.id}", null)
+                                ?: chatRepo.getOrCreateConversationIdForMember(
+                                    memberId = member.id,
+                                    memberFirebaseUid = member.firebaseUid,
+                                    memberPhone = member.phone
+                                )
                             if (!activeConvId.isNullOrBlank()) {
                                 withContext(Dispatchers.Main) {
                                     conversationId = activeConvId
+                                    prefs.edit().putString("conv_id_${member.id}", activeConvId).apply()
                                 }
                                 chatRepo.updateConversationWallpaper(activeConvId, newValue)
                             }
