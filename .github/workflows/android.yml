@@ -40,14 +40,17 @@ jobs:
       run: |
         if [ -f "./gradlew" ]; then
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug --stacktrace -Djava.awt.headless=true
         else
-          gradle assembleDebug --stacktrace
+          gradle assembleDebug --stacktrace -Djava.awt.headless=true
         fi
 
     - name: Upload Debug APK Artifact
       uses: actions/upload-artifact@v4
+      continue-on-error: true
       with:
         name: talkly-debug-apk
         path: app/build/outputs/apk/debug/*.apk
+        retention-days: 1
+
 
