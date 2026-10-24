@@ -201,8 +201,8 @@ import com.family.talkly.ui.components.MediaGroupCluster
 import com.family.talkly.ui.components.MediaMessageItem
 import com.family.talkly.ui.components.MessageLoadingState
 import com.family.talkly.ui.components.OnlinePresenceIndicator
-import com.family.talkly.ui.components.ParticleDissolveWrapper
-import com.family.talkly.ui.components.rememberParticleDissolveManager
+import com.family.talkly.ui.components.DisintegrateBox
+import com.family.talkly.ui.components.rememberDisintegrateManager
 import com.family.talkly.ui.components.WallpaperSelectionDialog
 import com.family.talkly.ui.components.UrlAwareMessageText
 import com.family.talkly.ui.components.openUrlSafely
@@ -346,7 +346,7 @@ fun ChatDetailScreen(
     var selectedMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showBulkDeleteDialog by remember { mutableStateOf(false) }
     val isSelectionMode = selectedMessageIds.isNotEmpty()
-    val dissolveManager = rememberParticleDissolveManager()
+    val dissolveManager = rememberDisintegrateManager()
 
     // Intercept back presses to close overlays or go back to chat list
     BackHandler(enabled = true) {
@@ -3130,16 +3130,14 @@ fun ChatDetailScreen(
                                         }
                                     }
 
-                                    val dissolveProgress = when (item) {
-                                        is ChatUiItem.SingleMessage -> dissolveManager.getProgress(item.message.id)
-                                        is ChatUiItem.MediaCluster -> item.messages.firstNotNullOfOrNull { dissolveManager.getProgress(it.id) }
-                                    }
-
-                                    ParticleDissolveWrapper(
-                                        progress = dissolveProgress,
-                                        isSelf = isSelf,
-                                        messageType = msg.messageType,
-                                        hasMedia = hasMedia
+                                    DisintegrateBox(
+                                        dissolve = isItemDissolving,
+                                        onFinished = {
+                                            when (item) {
+                                                is ChatUiItem.SingleMessage -> dissolveManager.finishDissolve(item.message.id)
+                                                is ChatUiItem.MediaCluster -> dissolveManager.finishDissolve(item.messages.map { it.id })
+                                            }
+                                        }
                                     ) {
                                         Box {
                                             when (item) {

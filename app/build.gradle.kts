@@ -22,6 +22,9 @@ android {
     versionName = "1.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    ndk {
+      abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86_64"))
+    }
   }
 
   splits {
@@ -90,6 +93,12 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
+  }
+  packaging {
+    jniLibs {
+      useLegacyPackaging = true
+      pickFirsts.add("lib/**/libaosl.so")
+    }
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
 }
