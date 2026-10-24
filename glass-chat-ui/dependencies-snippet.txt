@@ -1,0 +1,14 @@
+// app/build.gradle.kts  ->  dependencies { ... }
+
+// Blur for the glass effect (last stable 1.x line; works on Android 8+ via automatic fallback)
+implementation("dev.chrisbanes.haze:haze:1.6.10")
+
+// Icons used by the UI (Rounded / Outlined sets)
+implementation("androidx.compose.material:material-icons-extended")
+
+// Already needed by any Compose + Material3 app (skip if you have them):
+// implementation(platform("androidx.compose:compose-bom:<your-bom>"))
+// implementation("androidx.compose.material3:material3")
+// implementation("androidx.compose.ui:ui-tooling-preview")
+
+// minSdk can stay 26 (Android 8.0). Make sure mavenCentral() is in your repositories.
