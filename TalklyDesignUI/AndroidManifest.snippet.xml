@@ -1,0 +1,6 @@
+<!-- Put inside <application> in app/src/main/AndroidManifest.xml to preview the demo -->
+<activity
+    android:name="com.talkly.designui.demo.TalklyDemoActivity"
+    android:exported="true"
+    android:theme="@style/Theme.AppCompat.Light.NoActionBar" />
+<!-- If your app has no AppCompat theme, use: android:theme="@android:style/Theme.Material.Light.NoActionBar" -->

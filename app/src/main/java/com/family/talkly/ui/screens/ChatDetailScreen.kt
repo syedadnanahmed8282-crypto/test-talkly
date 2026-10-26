@@ -5,12 +5,13 @@
 
 package com.family.talkly.ui.screens
 
-import com.family.talkly.ui.glasschat.GlassChatScreen
-import com.family.talkly.ui.glasschat.ChatActions
-import com.family.talkly.ui.glasschat.ChatUiMapper
-import com.family.talkly.ui.glasschat.MessageContent
-import com.family.talkly.ui.glasschat.AttachType
-import com.family.talkly.ui.glasschat.GlassColors
+import com.talkly.designui.chat.ChatScreen
+import com.talkly.designui.chat.ChatCallbacks
+import com.talkly.designui.chat.TalklyUiMapper
+import com.talkly.designui.chat.rememberChatUiState
+import com.talkly.designui.chat.rememberComposerState
+import com.talkly.designui.components.ArtBox
+import com.talkly.designui.theme.TalklyTheme
 
 import android.content.Context
 import android.media.MediaPlayer
@@ -2049,156 +2050,222 @@ fun ChatDetailScreen(
 
     val currentUid = currentUserProfile?.uid
     val currentPhone = currentUserProfile?.phoneNumber
-    val headerState = remember(member) {
-        ChatUiMapper.mapToHeader(member)
-    }
-    val chatItems = remember(displayedMessages, currentUid, currentPhone, member) {
-        ChatUiMapper.mapToChatItems(displayedMessages, currentUid, currentPhone, member)
+    val uiMessages = remember(displayedMessages, currentUid, currentPhone, member) {
+        TalklyUiMapper.mapToUiMessages(displayedMessages, currentUid, currentPhone, member)
     }
 
-    GlassChatScreen(
-        header = headerState,
-        items = chatItems,
-        input = textInput,
-        onInputChange = {
-            textInput = it
-            onTypingStateChanged(it.isNotBlank())
-        },
-        actions = ChatActions(
-            onBack = onBack,
-            onAudioCall = { onStartCall(CallType.AUDIO) },
-            onVideoCall = { onStartCall(CallType.VIDEO) },
-            onSend = {
-                if (textInput.isNotBlank()) {
-                    if (editingMessage != null) {
-                        val success = onEditMessage(editingMessage!!.id, textInput)
-                        if (!success) {
-                            Toast.makeText(context, "Cannot edit message after 10 minutes", Toast.LENGTH_SHORT).show()
-                        }
-                        editingMessage = null
-                    } else {
-                        onSendMessage(
-                            textInput,
-                            MessageType.TEXT,
-                            null,
-                            replyingToMessage?.id,
-                            replyingToMessage?.senderName,
-                            replyingToMessage?.textContent?.ifEmpty { "Media" }
-                        )
-                        replyingToMessage = null
-                    }
-                    textInput = ""
-                    onTypingStateChanged(false)
+    val subtitleText = when {
+        member.isOnline -> "online"
+        member.displayLastSeen.isNotBlank() -> member.displayLastSeen.lowercase(Locale.getDefault())
+        else -> "offline"
+    }
+
+    val chatUiState = rememberChatUiState()
+    val composerState = rememberComposerState()
+
+    LaunchedEffect(composerState.text) {
+        onTypingStateChanged(composerState.text.isNotBlank())
+    }
+
+    LaunchedEffect(composerState.recording) {
+        if (composerState.recording) {
+            val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.RECORD_AUDIO
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+            if (hasPermission) {
+                val file = audioRecorder.startRecording()
+                if (file != null) {
+                    currentAudioFile = file
+                    isRecording = true
                 }
-            },
-            onProfileClick = { showContactProfile = true },
-            onVoiceRecord = {
-                if (isRecording) {
-                    stopAndPreparePreview()
-                } else {
-                    startVoiceRecording()
+            } else {
+                micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+            }
+        }
+    }
+
+    val callbacks = remember(displayedMessages, currentUid) {
+        object : ChatCallbacks() {
+            override fun onBack() {
+                onBack()
+            }
+
+            override fun onSendText(text: String, replyToId: String?) {
+                val repMsg = if (replyToId != null) displayedMessages.firstOrNull { it.id == replyToId } else null
+                onSendMessage(
+                    text,
+                    MessageType.TEXT,
+                    null,
+                    repMsg?.id,
+                    repMsg?.senderName,
+                    repMsg?.textContent?.ifEmpty { "Media" }
+                )
+                onTypingStateChanged(false)
+            }
+
+            override fun onEditText(id: String, newText: String) {
+                val success = onEditMessage(id, newText)
+                if (!success) {
+                    Toast.makeText(context, "Cannot edit message after 10 minutes", Toast.LENGTH_SHORT).show()
                 }
-            },
-            onAttach = { attachType ->
-                when (attachType) {
-                    AttachType.Gallery, AttachType.Camera, AttachType.File -> {
-                        showAttachmentDialog = true
-                    }
-                    AttachType.Location -> {
-                        Toast.makeText(context, "Location sharing coming soon", Toast.LENGTH_SHORT).show()
-                    }
+            }
+
+            override fun onVoiceSend(seconds: Int) {
+                val file = audioRecorder.stopRecording() ?: currentAudioFile
+                isRecording = false
+                if (file != null && file.exists() && file.length() > 0L) {
+                    val durationText = "${seconds}s"
+                    sendPendingMediaMessage(
+                        textContent = "Voice Message ($durationText)",
+                        messageType = MessageType.VOICE_NOTE,
+                        localMediaUrl = file.absolutePath
+                    )
+                    currentAudioFile = null
                 }
-            },
-            onReply = { messageItem ->
-                val chatMsg = displayedMessages.firstOrNull { it.id == messageItem.id }
-                if (chatMsg != null) {
-                    replyingToMessage = chatMsg
-                }
-            },
-            onCopy = { messageItem ->
-                when (val c = messageItem.content) {
-                    is MessageContent.Text -> {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-                        val clip = android.content.ClipData.newPlainText("Message", c.text)
-                        clipboard?.setPrimaryClip(clip)
-                        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
-                    }
-                    else -> {
-                        Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            },
-            onDelete = { messageItem ->
-                val chatMsg = displayedMessages.firstOrNull { it.id == messageItem.id }
-                if (chatMsg != null) {
-                    val isOwn = chatMsg.senderId == "self" || chatMsg.senderId == (currentUserProfile?.uid ?: "")
-                    if (isOwn) {
-                        val deleted = onDeleteForEveryone(chatMsg.id)
-                        if (!deleted) {
+            }
+
+            override fun onDelete(ids: List<String>, forEveryone: Boolean) {
+                for (id in ids) {
+                    val chatMsg = displayedMessages.firstOrNull { it.id == id }
+                    if (chatMsg != null) {
+                        if (forEveryone) {
+                            val isOwn = chatMsg.senderId == "self" || chatMsg.senderId == (currentUid ?: "")
+                            if (isOwn) {
+                                val deleted = onDeleteForEveryone(chatMsg.id)
+                                if (!deleted) {
+                                    onDeleteForYou(chatMsg.id)
+                                }
+                            } else {
+                                onDeleteForYou(chatMsg.id)
+                            }
+                        } else {
                             onDeleteForYou(chatMsg.id)
                         }
-                    } else {
-                        onDeleteForYou(chatMsg.id)
                     }
-                    Toast.makeText(context, "Message deleted", Toast.LENGTH_SHORT).show()
                 }
-            },
-            onReact = { messageItem, emoji ->
-                onToggleReaction(messageItem.id, emoji)
+                Toast.makeText(context, "Message deleted", Toast.LENGTH_SHORT).show()
             }
-        ),
-        unreadCount = member.unreadCount,
-        mediaLoader = ChatUiMapper.CoilMediaLoader,
-        replyTo = replyingToMessage?.let {
-            com.family.talkly.ui.glasschat.UiReply(
-                author = it.senderName,
-                preview = it.textContent.ifBlank { "Media" }
-            )
-        },
-        onDismissReply = { replyingToMessage = null },
-        bottomOverlay = if (isPreviewingVoiceNote && currentAudioFile != null) {
-            {
-                VoiceNotePreviewBar(
-                    audioFile = currentAudioFile!!,
-                    durationSec = recordingDurationSec,
-                    onCancel = { cancelVoicePreview() },
-                    onSend = { sendPreviewedVoiceNote() }
-                )
+
+            override fun onStar(ids: List<String>, starred: Boolean) {
+                for (id in ids) {
+                    onToggleStarMessage(id)
+                }
             }
-        } else if (isRecording) {
-            {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                        .background(Color.White.copy(alpha = 0.95f), RoundedCornerShape(24.dp))
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "Recording: s",
-                        color = GlassColors.Danger,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+
+            override fun onPin(id: String?) {
+                if (id != null) {
+                    onTogglePinMessage(id)
+                }
+            }
+
+            override fun onReact(messageId: String, emoji: String) {
+                onToggleReaction(messageId, emoji)
+            }
+
+            override fun onRemoveMyReaction(messageId: String) {
+                val chatMsg = displayedMessages.firstOrNull { it.id == messageId }
+                val myReaction = chatMsg?.reaction?.let {
+                    ReactionUtils.parseReactions(it, chatMsg.senderId, chatMsg.senderName, chatMsg.timestamp).firstOrNull { r ->
+                        r.userId == "self" || (currentUid != null && r.userId == currentUid)
+                    }
+                }
+                if (myReaction != null) {
+                    onToggleReaction(messageId, myReaction.emoji)
+                }
+            }
+
+            override fun onForward(ids: List<String>) {
+                if (ids.isNotEmpty()) {
+                    selectedMessageIds = ids.toSet()
+                    showForwardDialog = true
+                }
+            }
+
+            override fun onOpenMedia(messageId: String, index: Int) {
+                val chatMsg = displayedMessages.firstOrNull { it.id == messageId }
+                if (chatMsg != null) {
+                    fullMediaViewerMessage = chatMsg
+                }
+            }
+
+            override fun onAudioCall() {
+                onStartCall(CallType.AUDIO)
+            }
+
+            override fun onVideoCall() {
+                onStartCall(CallType.VIDEO)
+            }
+
+            override fun onOpenProfile() {
+                showContactProfile = true
+            }
+
+            override fun onToggleMute() {
+                isMuted = !isMuted
+                Toast.makeText(context, if (isMuted) "Chat muted" else "Chat unmuted", Toast.LENGTH_SHORT).show()
+            }
+
+            override fun onClearChat() {
+                showClearChatConfirmDialog = true
+            }
+
+            override fun onToggleBlock() {
+                showBlockConfirmDialog = true
+            }
+
+            override fun onPickGallery() {
+                showAttachmentDialog = true
+            }
+
+            override fun onPickCamera() {
+                showAttachmentDialog = true
+            }
+
+            override fun onPickDocument() {
+                showAttachmentDialog = true
+            }
+
+            override fun onPickAudio() {
+                showAttachmentDialog = true
+            }
+
+            override fun onPickLocation() {
+                Toast.makeText(context, "Location sharing coming soon", Toast.LENGTH_SHORT).show()
+            }
+
+            override fun onPickContact() {
+                Toast.makeText(context, "Contact sharing coming soon", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    TalklyTheme {
+        ChatScreen(
+            contactName = member.name.ifBlank { "User" },
+            subtitle = subtitleText,
+            messages = uiMessages,
+            ui = chatUiState,
+            composer = composerState,
+            callbacks = callbacks,
+            typing = member.isTyping,
+            muted = isMuted,
+            blocked = isBlocked,
+            imageContent = { item, modifier ->
+                if (item.url != null) {
+                    AsyncImage(
+                        model = item.url,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = modifier
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = { cancelVoicePreview() },
-                            colors = ButtonDefaults.buttonColors(containerColor = GlassColors.Muted)
-                        ) {
-                            Text("Cancel")
-                        }
-                        Button(
-                            onClick = { stopAndPreparePreview() },
-                            colors = ButtonDefaults.buttonColors(containerColor = GlassColors.SkyDeep)
-                        ) {
-                            Text("Stop")
-                        }
-                    }
+                } else {
+                    ArtBox(item.art, modifier)
                 }
             }
-        } else null
-    )
+        )
+    }
 }
 
 

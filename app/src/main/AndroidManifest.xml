@@ -118,6 +118,11 @@
             android:exported="false"
             android:process=":crash_reporter"
             android:theme="@style/Theme.MyApplication" />
+
+        <activity
+            android:name="com.talkly.designui.demo.TalklyDemoActivity"
+            android:exported="true"
+            android:theme="@style/Theme.MyApplication" />
     </application>
 
 </manifest>

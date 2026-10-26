@@ -142,6 +142,7 @@ dependencies {
   implementation(libs.androidx.lifecycle.viewmodel.compose)
   implementation("androidx.lifecycle:lifecycle-process:2.8.7")
   implementation(libs.androidx.navigation.compose)
+  implementation("androidx.palette:palette-ktx:1.0.0")
   implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
   implementation(libs.androidx.work.runtime.ktx)

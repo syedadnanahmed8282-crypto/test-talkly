@@ -1,0 +1,21 @@
+// ===== app/build.gradle.kts : add / merge these =====
+android {
+    buildFeatures { compose = true }
+    // If your Kotlin is 1.9.x add this (match the version to your Kotlin):
+    // composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
+}
+// If your Kotlin is 2.0+ add this plugin instead (same version as your Kotlin plugin):
+// plugins { id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" }
+
+dependencies {
+    implementation(platform("androidx.compose:compose-bom:2024.09.00"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.activity:activity-compose:1.9.2")
+
+    // optional but recommended
+    implementation("io.coil-kt:coil-compose:2.7.0")      // real photos instead of the gradient placeholders
+    implementation("androidx.palette:palette-ktx:1.0.0")  // cover-colour theme on the profile screen
+}
