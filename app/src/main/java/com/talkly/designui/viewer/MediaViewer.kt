@@ -151,6 +151,7 @@ fun MediaViewer(
     onSeekBy: (seconds: Int) -> Unit = {},
     onSpeed: () -> Unit = {},
     onPageChanged: (Int) -> Unit = {},
+    onDelete: ((MediaItem) -> Unit)? = null,
 ) {
     val pager = rememberPagerState(initialPage = startIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))) { items.size }
     val scope = rememberCoroutineScope()
@@ -195,6 +196,11 @@ fun MediaViewer(
                 if (items.size > 1) {
                     Box(Modifier.height(48.dp).glass(RoundedCornerShape(50), dark = true).padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
                         Text("${pager.currentPage + 1} / ${items.size}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    }
+                }
+                if (onDelete != null) {
+                    GlassCircleButton(Icons.Rounded.DeleteOutline, "Delete", dark = true, tint = Color(0xFFFF8A80)) {
+                        current?.let { onDelete(it) }
                     }
                 }
             }

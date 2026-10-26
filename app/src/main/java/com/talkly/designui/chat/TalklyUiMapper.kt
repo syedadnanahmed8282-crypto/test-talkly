@@ -106,13 +106,26 @@ object TalklyUiMapper {
             }
 
             val mediaItems = when (msg.messageType) {
-                MessageType.IMAGE -> listOf(
-                    MediaItem(
-                        url = msg.mediaUrl,
-                        isVideo = false,
-                        sizeBytes = msg.fileSizeBytes ?: 0L
-                    )
-                )
+                MessageType.IMAGE -> {
+                    val splitUrls = (msg.mediaUrl ?: "").split(",", "\n").map { it.trim() }.filter { it.isNotBlank() }
+                    if (splitUrls.size > 1) {
+                        splitUrls.map { url ->
+                            MediaItem(
+                                url = url,
+                                isVideo = false,
+                                sizeBytes = msg.fileSizeBytes ?: 0L
+                            )
+                        }
+                    } else {
+                        listOf(
+                            MediaItem(
+                                url = msg.mediaUrl,
+                                isVideo = false,
+                                sizeBytes = msg.fileSizeBytes ?: 0L
+                            )
+                        )
+                    }
+                }
                 MessageType.VIDEO -> listOf(
                     MediaItem(
                         url = msg.mediaUrl,
@@ -177,7 +190,45 @@ object TalklyUiMapper {
             )
         }
 
-        return items
+        return groupMediaAlbums(items)
+    }
+
+    private fun groupMediaAlbums(messages: List<UiMessage>): List<UiMessage> {
+        if (messages.size <= 1) return messages
+        val result = mutableListOf<UiMessage>()
+        var i = 0
+        while (i < messages.size) {
+            val current = messages[i]
+            if (!current.deleted && (current.kind == MsgKind.Media || current.kind == MsgKind.Video) && current.caption.isBlank()) {
+                val albumItems = current.items.toMutableList()
+                var j = i + 1
+                while (j < messages.size) {
+                    val next = messages[j]
+                    if (!next.deleted && (next.kind == MsgKind.Media || next.kind == MsgKind.Video) &&
+                        next.mine == current.mine && next.caption.isBlank() && next.time == current.time
+                    ) {
+                        albumItems.addAll(next.items)
+                        j++
+                    } else {
+                        break
+                    }
+                }
+                if (albumItems.size > 1) {
+                    result.add(
+                        current.copy(
+                            kind = MsgKind.Media,
+                            items = albumItems,
+                            sizeBytes = albumItems.sumOf { it.sizeBytes }
+                        )
+                    )
+                    i = j
+                    continue
+                }
+            }
+            result.add(current)
+            i++
+        }
+        return result
     }
 
     private fun isSameDay(cal1: Calendar, cal2: Calendar): Boolean {

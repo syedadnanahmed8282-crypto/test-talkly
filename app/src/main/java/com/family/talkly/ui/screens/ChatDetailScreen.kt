@@ -335,6 +335,8 @@ fun ChatDetailScreen(
     var replyingToMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var editingMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var showContactProfile by remember { mutableStateOf(false) }
+    var showThemePicker by remember { mutableStateOf(false) }
+    var showMediaLinksDocs by remember { mutableStateOf(false) }
 
     var isSearchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -376,6 +378,8 @@ fun ChatDetailScreen(
         when {
             viewerMedia != null -> viewerMedia = null
             showGalleryPicker -> showGalleryPicker = false
+            showThemePicker -> showThemePicker = false
+            showMediaLinksDocs -> showMediaLinksDocs = false
             showForwardDialog -> if (!isForwardingMessages) showForwardDialog = false
             showBulkDeleteDialog -> showBulkDeleteDialog = false
             selectedMessageIds.isNotEmpty() -> selectedMessageIds = emptySet()
@@ -1777,22 +1781,6 @@ fun ChatDetailScreen(
         }
     }
 
-    if (showContactProfile) {
-        ContactProfileDetailsDialog(
-            member = member,
-            onDismiss = { showContactProfile = false },
-            onStartChat = { showContactProfile = false },
-            onStartCall = { _, callType ->
-                showContactProfile = false
-                if (!isMutualContact) {
-                    Toast.makeText(context, "Cannot call: Message request must be accepted first", Toast.LENGTH_SHORT).show()
-                } else {
-                    onStartCall(callType)
-                }
-            },
-            isMutualContact = isMutualContact
-        )
-    }
 
     if (showStarredMessagesDialog) {
         AlertDialog(
@@ -2352,9 +2340,11 @@ fun ChatDetailScreen(
             }
 
             override fun onOpenTheme() {
-                paletteIdx = (paletteIdx + 1) % ChatPalettes.size
-                prefs.edit().putInt("chat_theme_idx", paletteIdx).apply()
-                chatUiState.toast = "Theme: ${ChatPalettes[paletteIdx].name}"
+                showThemePicker = true
+            }
+
+            override fun onOpenMediaList() {
+                showMediaLinksDocs = true
             }
 
             override fun onClearChat() {
@@ -2475,7 +2465,11 @@ fun ChatDetailScreen(
                     onSpeed = { toggleAudioSpeed() }
                 )
             } else {
-                val mediaItems = listOf(
+            val targetUiMsg = uiMessages.firstOrNull { it.id == msgId }
+            val mediaItems = if (targetUiMsg != null && targetUiMsg.items.isNotEmpty()) {
+                targetUiMsg.items
+            } else {
+                listOf(
                     MediaItem(
                         url = chatMsg.mediaUrl,
                         isVideo = chatMsg.messageType == MessageType.VIDEO,
@@ -2483,6 +2477,7 @@ fun ChatDetailScreen(
                         sizeBytes = chatMsg.fileSizeBytes ?: 0L
                     )
                 )
+            }
                 MediaViewer(
                     items = mediaItems,
                     startIndex = startIndex,
@@ -2506,7 +2501,21 @@ fun ChatDetailScreen(
                         seekAudioFraction(f, chatMsg.callDurationSec.coerceAtLeast(1))
                     },
                     onSeekBy = { deltaSec -> seekAudioBySeconds(deltaSec) },
-                    onSpeed = { toggleAudioSpeed() }
+                    onSpeed = { toggleAudioSpeed() },
+                    onDelete = { mItem ->
+                        val target = displayedMessages.firstOrNull { it.mediaUrl == mItem.url || it.id == msgId }
+                        if (target != null) {
+                            val isOwn = target.senderId == "self" || target.senderId == (currentUid ?: "")
+                            if (isOwn) {
+                                val del = onDeleteForEveryone(target.id)
+                                if (!del) onDeleteForYou(target.id)
+                            } else {
+                                onDeleteForYou(target.id)
+                            }
+                            viewerMedia = null
+                            Toast.makeText(context, "Media deleted", Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 )
             }
         }
@@ -2542,7 +2551,11 @@ fun ChatDetailScreen(
                         callbacks.onToggleMute()
                     },
                     onTheme = {
-                        callbacks.onOpenTheme()
+                        showThemePicker = true
+                    },
+                    onMedia = {
+                        showContactProfile = false
+                        showMediaLinksDocs = true
                     },
                     onClear = {
                         showContactProfile = false
@@ -2570,6 +2583,44 @@ fun ChatDetailScreen(
                         ArtBox(member.id.hashCode().mod(8), modifier)
                     }
                 }
+            )
+        }
+
+        // --- CHAT THEME SELECTION SHEET ---
+        if (showThemePicker) {
+            com.talkly.designui.chat.ThemeSelectionSheet(
+                currentIdx = paletteIdx,
+                onSelectTheme = { newIdx ->
+                    paletteIdx = newIdx
+                    prefs.edit().putInt("chat_theme_idx", newIdx).apply()
+                    chatUiState.toast = "Theme: ${ChatPalettes[newIdx].name}"
+                },
+                onDismiss = { showThemePicker = false }
+            )
+        }
+
+        // --- SHARED MEDIA, LINKS & DOCS SCREEN ---
+        if (showMediaLinksDocs) {
+            com.talkly.designui.chat.MediaLinksDocsScreen(
+                messages = displayedMessages,
+                onOpenMedia = { msg ->
+                    showMediaLinksDocs = false
+                    viewerMedia = msg.id to 0
+                },
+                onClose = { showMediaLinksDocs = false }
+            )
+        }
+
+        // --- IN-APP MINIMIZED CALL PILL (if call active & minimized) ---
+        if (activeCallInfo != null) {
+            TalklyMinimizedCallPill(
+                callInfo = activeCallInfo,
+                onRestoreCall = { onRestoreCall?.invoke() },
+                onEndCall = { onEndCall?.invoke() },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .zIndex(999f)
             )
         }
     }

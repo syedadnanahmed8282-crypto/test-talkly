@@ -49,6 +49,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import com.family.talkly.data.firebase.FirebaseChatRepository
 import com.family.talkly.data.models.CallDirection
@@ -558,6 +559,19 @@ fun MainScreen(
                 activeCallInfo = if (isCallActive && isCallMinimized && !isInPipMode) callInfo else null,
                 onRestoreCall = { isCallMinimized = false },
                 onEndCall = { zegoManager.endCall() }
+            )
+        }
+
+        // Global in-app Minimized Call Pill floating on top of any screen
+        if (isCallActive && isCallMinimized && !isInPipMode) {
+            TalklyMinimizedCallPill(
+                callInfo = callInfo,
+                onRestoreCall = { isCallMinimized = false },
+                onEndCall = { zegoManager.endCall() },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .zIndex(999f)
             )
         }
     }
