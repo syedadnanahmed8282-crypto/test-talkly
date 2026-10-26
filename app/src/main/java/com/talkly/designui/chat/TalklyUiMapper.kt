@@ -184,4 +184,92 @@ object TalklyUiMapper {
         return cal1.get(Calendar.YEAR) == cal2.get(Calendar.YEAR) &&
                 cal1.get(Calendar.DAY_OF_YEAR) == cal2.get(Calendar.DAY_OF_YEAR)
     }
+
+    fun loadDeviceGallery(context: android.content.Context): List<com.talkly.designui.gallery.GalleryItem> {
+        val items = mutableListOf<com.talkly.designui.gallery.GalleryItem>()
+        try {
+            val projection = arrayOf(
+                android.provider.MediaStore.MediaColumns._ID,
+                android.provider.MediaStore.MediaColumns.DATA,
+                android.provider.MediaStore.MediaColumns.SIZE,
+                android.provider.MediaStore.MediaColumns.DATE_ADDED
+            )
+            val sortOrder = "${android.provider.MediaStore.MediaColumns.DATE_ADDED} DESC"
+
+            val imageUri = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            context.contentResolver.query(imageUri, projection, null, null, sortOrder)?.use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns._ID)
+                val dataCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATA)
+                val sizeCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.SIZE)
+                var count = 0
+                while (cursor.moveToNext() && count < 80) {
+                    val id = cursor.getLong(idCol)
+                    val path = cursor.getString(dataCol)
+                    val size = cursor.getLong(sizeCol)
+                    val contentUri = android.content.ContentUris.withAppendedId(imageUri, id).toString()
+                    items.add(
+                        com.talkly.designui.gallery.GalleryItem(
+                            id = "img_$id",
+                            uri = if (!path.isNullOrBlank()) path else contentUri,
+                            isVideo = false,
+                            sizeBytes = size,
+                            album = "Camera"
+                        )
+                    )
+                    count++
+                }
+            }
+
+            val videoUri = android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            val videoProj = arrayOf(
+                android.provider.MediaStore.Video.VideoColumns._ID,
+                android.provider.MediaStore.Video.VideoColumns.DATA,
+                android.provider.MediaStore.Video.VideoColumns.SIZE,
+                android.provider.MediaStore.Video.VideoColumns.DURATION,
+                android.provider.MediaStore.Video.VideoColumns.DATE_ADDED
+            )
+            context.contentResolver.query(videoUri, videoProj, null, null, sortOrder)?.use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.VideoColumns._ID)
+                val dataCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.VideoColumns.DATA)
+                val sizeCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.VideoColumns.SIZE)
+                val durCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Video.VideoColumns.DURATION)
+                var count = 0
+                while (cursor.moveToNext() && count < 40) {
+                    val id = cursor.getLong(idCol)
+                    val path = cursor.getString(dataCol)
+                    val size = cursor.getLong(sizeCol)
+                    val durationMs = cursor.getLong(durCol)
+                    val contentUri = android.content.ContentUris.withAppendedId(videoUri, id).toString()
+                    items.add(
+                        com.talkly.designui.gallery.GalleryItem(
+                            id = "vid_$id",
+                            uri = if (!path.isNullOrBlank()) path else contentUri,
+                            isVideo = true,
+                            durationSec = (durationMs / 1000).toInt(),
+                            sizeBytes = size,
+                            album = "Videos"
+                        )
+                    )
+                    count++
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("TalklyUiMapper", "Error loading MediaStore", e)
+        }
+
+        if (items.isEmpty()) {
+            return List(16) { i ->
+                val isVid = i % 4 == 1
+                com.talkly.designui.gallery.GalleryItem(
+                    id = "sample_$i",
+                    art = i % 8,
+                    isVideo = isVid,
+                    durationSec = if (isVid) 15 + i else 0,
+                    sizeBytes = 1024L * 1024L * (i + 1),
+                    album = if (i % 2 == 0) "Camera" else "Screenshots"
+                )
+            }
+        }
+        return items
+    }
 }

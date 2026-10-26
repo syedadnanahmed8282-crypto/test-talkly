@@ -10,8 +10,19 @@ import com.talkly.designui.chat.ChatCallbacks
 import com.talkly.designui.chat.TalklyUiMapper
 import com.talkly.designui.chat.rememberChatUiState
 import com.talkly.designui.chat.rememberComposerState
+import com.talkly.designui.chat.PlaybackState
+import com.talkly.designui.chat.MediaItem
+import com.talkly.designui.chat.MsgKind
 import com.talkly.designui.components.ArtBox
 import com.talkly.designui.theme.TalklyTheme
+import com.talkly.designui.theme.ChatPalettes
+import com.talkly.designui.gallery.GalleryItem
+import com.talkly.designui.gallery.GalleryPicker
+import com.talkly.designui.viewer.MediaViewer
+import com.talkly.designui.viewer.AudioPlayerScreen
+import com.talkly.designui.profile.ProfileScreen
+import com.talkly.designui.profile.ProfileActions
+import com.talkly.designui.profile.presetPalette
 
 import android.content.Context
 import android.media.MediaPlayer
@@ -139,6 +150,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -356,9 +368,14 @@ fun ChatDetailScreen(
     val isSelectionMode = selectedMessageIds.isNotEmpty()
     val dissolveManager = rememberDisintegrateManager()
 
+    var viewerMedia by remember { mutableStateOf<Pair<String, Int>?>(null) }
+    var showGalleryPicker by remember { mutableStateOf(false) }
+
     // Intercept back presses to close overlays or go back to chat list
     BackHandler(enabled = true) {
         when {
+            viewerMedia != null -> viewerMedia = null
+            showGalleryPicker -> showGalleryPicker = false
             showForwardDialog -> if (!isForwardingMessages) showForwardDialog = false
             showBulkDeleteDialog -> showBulkDeleteDialog = false
             selectedMessageIds.isNotEmpty() -> selectedMessageIds = emptySet()
@@ -2060,8 +2077,127 @@ fun ChatDetailScreen(
         else -> "offline"
     }
 
+    var paletteIdx by rememberSaveable(member.id) {
+        mutableIntStateOf(prefs.getInt("chat_theme_idx", 0).coerceIn(0, ChatPalettes.size - 1))
+    }
+
     val chatUiState = rememberChatUiState()
     val composerState = rememberComposerState()
+    var galleryItems by remember { mutableStateOf<List<GalleryItem>>(emptyList()) }
+    var pb by remember { mutableStateOf<PlaybackState?>(null) }
+    val chatMediaPlayer = remember { MediaPlayer() }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            try {
+                if (chatMediaPlayer.isPlaying) chatMediaPlayer.stop()
+                chatMediaPlayer.release()
+            } catch (_: Exception) {}
+        }
+    }
+
+    // Audio Playback progress tracking loop
+    LaunchedEffect(pb?.playing, pb?.messageId) {
+        while (pb?.playing == true) {
+            delay(250)
+            try {
+                if (chatMediaPlayer.isPlaying) {
+                    val curSec = chatMediaPlayer.currentPosition / 1000
+                    pb = pb?.copy(seconds = curSec)
+                } else {
+                    pb = pb?.copy(playing = false)
+                    break
+                }
+            } catch (_: Exception) {
+                pb = pb?.copy(playing = false)
+                break
+            }
+        }
+    }
+
+    fun toggleAudioPlayback(chatMsg: ChatMessage) {
+        val url = chatMsg.mediaUrl
+        if (url.isNullOrBlank()) {
+            Toast.makeText(context, "Audio file not available", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val msgId = chatMsg.id
+        if (pb?.messageId == msgId && pb?.playing == true) {
+            try {
+                chatMediaPlayer.pause()
+                pb = pb?.copy(playing = false)
+            } catch (_: Exception) {}
+        } else if (pb?.messageId == msgId && pb?.playing == false) {
+            try {
+                chatMediaPlayer.start()
+                pb = pb?.copy(playing = true)
+            } catch (_: Exception) {}
+        } else {
+            try {
+                chatMediaPlayer.reset()
+                chatMediaPlayer.setDataSource(context, Uri.parse(url))
+                chatMediaPlayer.prepare()
+                chatMediaPlayer.start()
+                chatMediaPlayer.setOnCompletionListener {
+                    pb = pb?.copy(playing = false, seconds = 0)
+                }
+                val durSec = if (chatMediaPlayer.duration > 0) {
+                    chatMediaPlayer.duration / 1000
+                } else chatMsg.callDurationSec.coerceAtLeast(1)
+
+                pb = PlaybackState(
+                    messageId = msgId,
+                    seconds = 0,
+                    durationSec = durSec,
+                    playing = true,
+                    speed = 1f
+                )
+            } catch (e: Exception) {
+                Log.e("ChatDetailScreen", "Failed to start audio playback", e)
+                Toast.makeText(context, "Could not play audio", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun toggleAudioSpeed() {
+        pb?.let { cur ->
+            val nextSpeed = when (cur.speed) {
+                1f -> 1.5f
+                1.5f -> 2f
+                else -> 1f
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                try {
+                    chatMediaPlayer.playbackParams = chatMediaPlayer.playbackParams.setSpeed(nextSpeed)
+                } catch (_: Exception) {}
+            }
+            pb = cur.copy(speed = nextSpeed)
+        }
+    }
+
+    fun seekAudioFraction(fraction: Float, durationSec: Int) {
+        try {
+            val targetMs = (fraction * durationSec * 1000).toInt()
+            chatMediaPlayer.seekTo(targetMs)
+            pb = pb?.copy(seconds = targetMs / 1000)
+        } catch (_: Exception) {}
+    }
+
+    fun seekAudioBySeconds(deltaSec: Int) {
+        try {
+            val currentMs = chatMediaPlayer.currentPosition
+            val totalMs = chatMediaPlayer.duration
+            val targetMs = (currentMs + deltaSec * 1000).coerceIn(0, if (totalMs > 0) totalMs else 3600000)
+            chatMediaPlayer.seekTo(targetMs)
+            pb = pb?.copy(seconds = targetMs / 1000)
+        } catch (_: Exception) {}
+    }
+
+    LaunchedEffect(showGalleryPicker) {
+        if (showGalleryPicker) {
+            galleryItems = TalklyUiMapper.loadDeviceGallery(context)
+        }
+    }
 
     LaunchedEffect(composerState.text) {
         onTypingStateChanged(composerState.text.isNotBlank())
@@ -2184,10 +2320,18 @@ fun ChatDetailScreen(
             }
 
             override fun onOpenMedia(messageId: String, index: Int) {
+                viewerMedia = messageId to index
+            }
+
+            override fun onTogglePlay(messageId: String) {
                 val chatMsg = displayedMessages.firstOrNull { it.id == messageId }
                 if (chatMsg != null) {
-                    fullMediaViewerMessage = chatMsg
+                    toggleAudioPlayback(chatMsg)
                 }
+            }
+
+            override fun onSpeed(messageId: String) {
+                toggleAudioSpeed()
             }
 
             override fun onAudioCall() {
@@ -2204,7 +2348,13 @@ fun ChatDetailScreen(
 
             override fun onToggleMute() {
                 isMuted = !isMuted
-                Toast.makeText(context, if (isMuted) "Chat muted" else "Chat unmuted", Toast.LENGTH_SHORT).show()
+                chatUiState.toast = if (isMuted) "Notifications muted" else "Notifications unmuted"
+            }
+
+            override fun onOpenTheme() {
+                paletteIdx = (paletteIdx + 1) % ChatPalettes.size
+                prefs.edit().putInt("chat_theme_idx", paletteIdx).apply()
+                chatUiState.toast = "Theme: ${ChatPalettes[paletteIdx].name}"
             }
 
             override fun onClearChat() {
@@ -2216,7 +2366,7 @@ fun ChatDetailScreen(
             }
 
             override fun onPickGallery() {
-                showAttachmentDialog = true
+                showGalleryPicker = true
             }
 
             override fun onPickCamera() {
@@ -2241,30 +2391,187 @@ fun ChatDetailScreen(
         }
     }
 
-    TalklyTheme {
-        ChatScreen(
-            contactName = member.name.ifBlank { "User" },
-            subtitle = subtitleText,
-            messages = uiMessages,
-            ui = chatUiState,
-            composer = composerState,
-            callbacks = callbacks,
-            typing = member.isTyping,
-            muted = isMuted,
-            blocked = isBlocked,
-            imageContent = { item, modifier ->
-                if (item.url != null) {
-                    AsyncImage(
-                        model = item.url,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = modifier
-                    )
-                } else {
-                    ArtBox(item.art, modifier)
+    Box(modifier = Modifier.fillMaxSize()) {
+        TalklyTheme(ChatPalettes[paletteIdx]) {
+            ChatScreen(
+                contactName = member.name.ifBlank { "User" },
+                subtitle = subtitleText,
+                messages = uiMessages,
+                ui = chatUiState,
+                composer = composerState,
+                callbacks = callbacks,
+                playback = pb?.let { mapOf(it.messageId to it) } ?: emptyMap(),
+                typing = member.isTyping,
+                muted = isMuted,
+                blocked = isBlocked,
+                imageContent = { item, modifier ->
+                    if (item.url != null) {
+                        AsyncImage(
+                            model = item.url,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = modifier
+                        )
+                    } else {
+                        ArtBox(item.art, modifier)
+                    }
                 }
+            )
+        }
+
+        // --- GALLERY PICKER (Multi-select, Zoom preview, Album chips, Caption & Send) ---
+        if (showGalleryPicker) {
+            GalleryPicker(
+                items = galleryItems,
+                onDismiss = { showGalleryPicker = false },
+                onSend = { selected, caption ->
+                    showGalleryPicker = false
+                    selected.forEach { gItem ->
+                        sendPendingMediaMessage(
+                            textContent = caption.ifBlank { if (gItem.isVideo) "Video" else "Photo" },
+                            messageType = if (gItem.isVideo) MessageType.VIDEO else MessageType.IMAGE,
+                            localMediaUrl = gItem.uri
+                        )
+                    }
+                },
+                onCamera = {
+                    showGalleryPicker = false
+                    showAttachmentDialog = true
+                },
+                imageContent = { item, modifier ->
+                    if (item.uri != null) {
+                        AsyncImage(
+                            model = item.uri,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = modifier
+                        )
+                    } else {
+                        ArtBox(item.art, modifier)
+                    }
+                }
+            )
+        }
+
+        // --- FULL-SCREEN MEDIA VIEWER & AUDIO PLAYER (Pinch zoom, double-tap 2.6x zoom, pan, seek, speed) ---
+        viewerMedia?.let { (msgId, startIndex) ->
+            val chatMsg = displayedMessages.firstOrNull { it.id == msgId }
+            if (chatMsg == null) {
+                viewerMedia = null
+            } else if (chatMsg.messageType == MessageType.VOICE_NOTE) {
+                AudioPlayerScreen(
+                    title = "Voice Message",
+                    subtitle = "Shared by ${chatMsg.senderName}",
+                    art = chatMsg.id.hashCode().mod(8),
+                    durationSec = if (chatMsg.callDurationSec > 0) chatMsg.callDurationSec else 15,
+                    playback = pb?.takeIf { it.messageId == msgId },
+                    onClose = { viewerMedia = null },
+                    onTogglePlay = { toggleAudioPlayback(chatMsg) },
+                    onSeek = { f ->
+                        val dur = if (chatMsg.callDurationSec > 0) chatMsg.callDurationSec else 15
+                        seekAudioFraction(f, dur)
+                    },
+                    onSeekBy = { deltaSec -> seekAudioBySeconds(deltaSec) },
+                    onSpeed = { toggleAudioSpeed() }
+                )
+            } else {
+                val mediaItems = listOf(
+                    MediaItem(
+                        url = chatMsg.mediaUrl,
+                        isVideo = chatMsg.messageType == MessageType.VIDEO,
+                        durationSec = chatMsg.callDurationSec,
+                        sizeBytes = chatMsg.fileSizeBytes ?: 0L
+                    )
+                )
+                MediaViewer(
+                    items = mediaItems,
+                    startIndex = startIndex,
+                    title = if (chatMsg.messageType == MessageType.VIDEO) "Video" else "Photos",
+                    onClose = { viewerMedia = null },
+                    imageContent = { item, modifier ->
+                        if (item.url != null) {
+                            AsyncImage(
+                                model = item.url,
+                                contentDescription = null,
+                                contentScale = ContentScale.Fit,
+                                modifier = modifier
+                            )
+                        } else {
+                            ArtBox(item.art, modifier)
+                        }
+                    },
+                    playback = pb?.takeIf { it.messageId == msgId },
+                    onTogglePlay = { toggleAudioPlayback(chatMsg) },
+                    onSeek = { f ->
+                        seekAudioFraction(f, chatMsg.callDurationSec.coerceAtLeast(1))
+                    },
+                    onSeekBy = { deltaSec -> seekAudioBySeconds(deltaSec) },
+                    onSpeed = { toggleAudioSpeed() }
+                )
             }
-        )
+        }
+
+        // --- SPOTIFY-GRADE COVER-PALETTE PROFILE SCREEN ---
+        if (showContactProfile) {
+            val mediaCount = remember(displayedMessages) {
+                displayedMessages.count { it.mediaUrl != null && !it.isDeletedForEveryone }
+            }
+            ProfileScreen(
+                name = member.name.ifBlank { "User" },
+                lastSeen = if (member.isOnline) "Active now" else member.displayLastSeen.ifBlank { "offline" },
+                about = member.phone.ifBlank { "Talkly Family Contact" },
+                muted = isMuted,
+                blocked = isBlocked,
+                mediaCount = mediaCount,
+                palette = presetPalette(member.id.hashCode().mod(8)),
+                actions = ProfileActions(
+                    onBack = { showContactProfile = false },
+                    onAudio = {
+                        showContactProfile = false
+                        onStartCall(CallType.AUDIO)
+                    },
+                    onVideo = {
+                        showContactProfile = false
+                        onStartCall(CallType.VIDEO)
+                    },
+                    onSearch = {
+                        showContactProfile = false
+                        chatUiState.searching = true
+                    },
+                    onToggleMute = {
+                        callbacks.onToggleMute()
+                    },
+                    onTheme = {
+                        callbacks.onOpenTheme()
+                    },
+                    onClear = {
+                        showContactProfile = false
+                        showClearChatConfirmDialog = true
+                    },
+                    onBlock = {
+                        showContactProfile = false
+                        showBlockConfirmDialog = true
+                    },
+                    onChangeCover = {
+                        paletteIdx = (paletteIdx + 1) % ChatPalettes.size
+                        prefs.edit().putInt("chat_theme_idx", paletteIdx).apply()
+                        chatUiState.toast = "Theme: ${ChatPalettes[paletteIdx].name}"
+                    }
+                ),
+                cover = { modifier ->
+                    if (!member.avatarUrl.isNullOrBlank()) {
+                        AsyncImage(
+                            model = member.avatarUrl,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = modifier
+                        )
+                    } else {
+                        ArtBox(member.id.hashCode().mod(8), modifier)
+                    }
+                }
+            )
+        }
     }
 }
 
