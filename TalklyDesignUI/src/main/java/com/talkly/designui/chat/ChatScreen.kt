@@ -40,6 +40,7 @@ import com.talkly.designui.components.ArtBox
 import com.talkly.designui.components.ChatBackground
 import com.talkly.designui.components.GlassCircleButton
 import com.talkly.designui.components.bounceClick
+import com.talkly.designui.components.fadeEdges
 import com.talkly.designui.components.glass
 import com.talkly.designui.theme.ChatPalette
 import com.talkly.designui.theme.Ink
@@ -170,7 +171,7 @@ fun ChatScreen(
             state = listState, reverseLayout = true,
             contentPadding = PaddingValues(top = topH + 12.dp, bottom = bottomH + 12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
-            modifier = Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { ui.closePanels() } },
+            modifier = Modifier.fillMaxSize().fadeEdges(top = topH, bottom = bottomH).pointerInput(Unit) { detectTapGestures { ui.closePanels() } },
         ) {
             if (typing) item(key = "typing") { TypingBubble(Modifier.animateItem()) }
             items(shown, key = { it.id }) { msg ->

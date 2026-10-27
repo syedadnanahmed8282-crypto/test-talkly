@@ -35,8 +35,12 @@ object Ink {
 val LocalChatPalette = compositionLocalOf { ChatPalettes[0] }
 
 @Composable
-fun TalklyTheme(palette: ChatPalette = ChatPalettes[0], content: @Composable () -> Unit) {
-    CompositionLocalProvider(LocalChatPalette provides palette) {
+fun TalklyTheme(
+    palette: ChatPalette = ChatPalettes[0],
+    glassMode: com.talkly.designui.components.GlassMode = com.talkly.designui.components.GlassMode.Frosted,
+    content: @Composable () -> Unit,
+) {
+    CompositionLocalProvider(LocalChatPalette provides palette, com.talkly.designui.components.LocalGlassMode provides glassMode) {
         MaterialTheme(colorScheme = lightColorScheme(primary = palette.bubble1), content = content)
     }
 }

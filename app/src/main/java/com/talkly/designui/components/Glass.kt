@@ -18,11 +18,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
@@ -30,25 +34,67 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.talkly.designui.theme.ChatPalette
+import com.talkly.designui.theme.LocalChatPalette
 import com.talkly.designui.theme.Ink
 
 /**
- * "Liquid glass" surface. Android has no cheap backdrop-blur, so this is a translucent gradient + hairline
- * border + soft shadow (looks very close). For a real blur behind it, wrap the chat background with the
- * Haze library (see README) - it is optional.
+ * Glass looks.
+ *  - Frosted (default, works on EVERY Android version): fairly opaque, tinted with the theme colour, with a top
+ *    sheen and a gradient edge. Looks good even with no blur at all.
+ *  - Clear: very translucent. Use ONLY if you add a real backdrop blur behind it (e.g. Haze on Android 12+),
+ *    otherwise text under it shows through unblurred.
  */
-fun Modifier.glass(shape: Shape, strong: Boolean = false, dark: Boolean = false): Modifier {
-    val brush = when {
+enum class GlassMode { Frosted, Clear }
+
+val LocalGlassMode = compositionLocalOf { GlassMode.Frosted }
+
+fun Modifier.glass(shape: Shape, strong: Boolean = false, dark: Boolean = false): Modifier = composed {
+    val frosted = LocalGlassMode.current == GlassMode.Frosted
+    val tint = LocalChatPalette.current.bgMid
+    val light1 = lerp(Color.White, tint, 0.22f)
+    val light2 = lerp(Color.White, tint, 0.34f)
+    val base = when {
+        dark && frosted -> Brush.linearGradient(listOf(Color(0xCC101828), Color(0xB3101828)))
         dark -> Brush.linearGradient(listOf(Color(0x6610182A), Color(0x5510182A)))
+        frosted && strong -> Brush.linearGradient(listOf(light1.copy(alpha = 0.96f), light2.copy(alpha = 0.88f)))
+        frosted -> Brush.linearGradient(listOf(light1.copy(alpha = 0.90f), light2.copy(alpha = 0.78f)))
         strong -> Brush.linearGradient(listOf(Color(0xE0FFFFFF), Color(0xA6FFFFFF)))
         else -> Brush.linearGradient(listOf(Color(0xA6FFFFFF), Color(0x4DFFFFFF)))
     }
-    return this
+    val sheen = Brush.verticalGradient(listOf(Color.White.copy(alpha = if (dark) 0.14f else 0.55f), Color.Transparent), endY = 150f)
+    val edge = Brush.linearGradient(
+        listOf(Color.White.copy(alpha = if (dark) 0.42f else 1f), Color.White.copy(alpha = if (dark) 0.12f else 0.35f), Color.White.copy(alpha = if (dark) 0.30f else 0.9f))
+    )
+    this
         .shadow(if (strong) 14.dp else 8.dp, shape, clip = false, ambientColor = Color(0x330369A1), spotColor = Color(0x660369A1))
         .clip(shape)
-        .background(brush)
-        .border(1.dp, Color.White.copy(alpha = if (dark) 0.25f else 0.85f), shape)
+        .background(base)
+        .background(sheen)
+        .border(1.dp, edge, shape)
 }
+
+/**
+ * Fades the content out before it reaches the floating glass bars (top and bottom), so nothing messy shows
+ * through them. This is what makes the glass look clean on phones without backdrop blur.
+ * Use on the scrolling list: Modifier.fadeEdges(top = headerHeight, bottom = composerHeight)
+ */
+fun Modifier.fadeEdges(top: Dp, bottom: Dp, fade: Dp = 24.dp): Modifier = this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val h = size.height
+        if (h > 0f) {
+            val t = top.toPx(); val b = bottom.toPx(); val f = fade.toPx()
+            val s1 = ((t - f) / h).coerceIn(0f, 1f)
+            val s2 = ((t + f / 2f) / h).coerceIn(s1, 1f)
+            val s4 = ((h - b + f) / h).coerceIn(s2, 1f)
+            val s3 = ((h - b - f / 2f) / h).coerceIn(s2, s4)
+            drawRect(
+                Brush.verticalGradient(0f to Color.Transparent, s1 to Color.Transparent, s2 to Color.Black, s3 to Color.Black, s4 to Color.Transparent, 1f to Color.Transparent),
+                blendMode = BlendMode.DstIn,
+            )
+        }
+    }
 
 /** Spring "press" feedback like the prototype buttons. */
 fun Modifier.bounceClick(enabled: Boolean = true, onClick: () -> Unit): Modifier = composed {
